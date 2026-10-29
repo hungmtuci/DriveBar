@@ -39,7 +39,7 @@ struct LauncherRootView: View {
                 )
             }
         }
-        .frame(width: 760)
+        .frame(width: 760, height: 500)
         .background(
             VisualEffectFrostView(material: .popover, blendingMode: .behindWindow)
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -79,20 +79,47 @@ struct LauncherRootView: View {
 private struct SearchModeContentView: View {
     @ObservedObject var viewModel: LauncherViewModel
     @ObservedObject var driveService: GoogleDriveIndexService
-    @FocusState private var isSearchFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
-            // Search Input Bar
+            // Search Input Bar (Native AppKit NSTextField for 0ms Vietnamese IME & Arrow Reliability)
             HStack(spacing: 12) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(Color.purple)
 
-                TextField("Tìm nhanh thư mục Google Drive (gõ không dấu / viết tắt, 'fs ' chia sẻ, 'ai ' convert)...", text: $viewModel.searchText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 18, weight: .regular))
-                    .focused($isSearchFocused)
+                NativeSearchInputField(
+                    text: $viewModel.searchText,
+                    placeholder: "Tìm nhanh thư mục Google Drive (gõ không dấu / viết tắt, 'fs ' chia sẻ, 'ai ' convert)...",
+                    fontSize: 18,
+                    focusTrigger: viewModel.focusTrigger,
+                    selectAllOnFocus: viewModel.selectAllOnFocus,
+                    onMoveSelection: { viewModel.moveSelection(delta: $0) },
+                    onSubmit: { viewModel.executeCurrentSelection(modifiers: $0) },
+                    onTab: { viewModel.handleTabKey() },
+                    onEscape: { viewModel.handleEscapeKey() },
+                    onBackspaceAtBoundary: { viewModel.popParentFolderIfAtSlashBoundary() }
+                )
+                .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 26)
+
+                if viewModel.isLoadingBrowseFiles {
+                    ProgressView()
+                        .controlSize(.small)
+                        .help("Đang đọc danh sách tệp trong thư mục ở nền...")
+                }
+
+                if !viewModel.searchText.isEmpty {
+                    Button {
+                        viewModel.searchText = ""
+                        viewModel.triggerInputFocus(selectAll: false)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Xóa nội dung tìm kiếm (Esc)")
+                }
 
                 if driveService.isRebuildingFolders || driveService.isRebuildingShared {
                     HStack(spacing: 5) {
@@ -115,43 +142,38 @@ private struct SearchModeContentView: View {
                     .background(badge.color.opacity(0.14), in: Capsule())
             }
             .padding(.horizontal, 18)
-            .padding(.vertical, 15)
-            .onAppear {
-                isSearchFocused = true
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .driveBarFocusInput)) { _ in
-                isSearchFocused = true
-            }
+            .padding(.vertical, 14)
 
             Divider().opacity(0.45)
 
-            // Results List
+            // Results List (Eager VStack + single integer ID for instant 120fps selection & scroll)
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 3) {
-                        ForEach(Array(viewModel.searchResults.enumerated()), id: \.element.id) { idx, item in
+                    VStack(spacing: 3) {
+                        ForEach(Array(viewModel.searchResults.enumerated()), id: \.offset) { idx, item in
                             SearchResultRowView(
                                 item: item,
                                 index: idx,
                                 isSelected: idx == viewModel.selectedIndex,
-                                activeModifiers: viewModel.activeModifiers
+                                activeModifiers: viewModel.activeModifiers,
+                                onPrimaryActivate: {
+                                    let mods = NSEvent.modifierFlags.cleanShortcutModifiers
+                                    viewModel.executeAtIndex(idx, modifiers: mods)
+                                },
+                                onOpenActions: {
+                                    viewModel.selectedIndex = idx
+                                    viewModel.openUniversalActionsForSelectedSearchItem()
+                                }
                             )
                             .id(idx)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                viewModel.selectedIndex = idx
-                                viewModel.executeCurrentSelection(modifiers: NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask))
-                            }
                         }
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
                 }
-                .frame(maxHeight: 378)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .onChange(of: viewModel.selectedIndex) { _, newIdx in
-                    withAnimation(.easeOut(duration: 0.1)) {
-                        proxy.scrollTo(newIdx, anchor: .center)
-                    }
+                    proxy.scrollTo(newIdx)
                 }
             }
 
@@ -168,52 +190,75 @@ private struct SearchResultRowView: View {
     let index: Int
     let isSelected: Bool
     let activeModifiers: NSEvent.ModifierFlags
+    var onPrimaryActivate: (() -> Void)? = nil
+    var onOpenActions: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 12) {
-            FileOrSymbolIconView(path: item.path, fallbackSymbol: item.sfSymbolFallback ?? "folder.fill")
-                .frame(width: 32, height: 32)
+            Button {
+                onPrimaryActivate?()
+            } label: {
+                HStack(spacing: 12) {
+                    FileOrSymbolIconView(path: item.path, fallbackSymbol: item.sfSymbolFallback ?? "folder.fill")
+                        .frame(width: 32, height: 32)
 
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(item.title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(isSelected ? Color.white : Color.primary)
-                        .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(item.title)
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(isSelected ? Color.white : Color.primary)
+                                .lineLimit(1)
 
-                    if let badge = item.badge {
-                        Text(badge)
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(isSelected ? Color.white : Color.purple)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 1.5)
-                            .background(
-                                (isSelected ? Color.white.opacity(0.22) : Color.purple.opacity(0.13)),
-                                in: Capsule()
-                            )
+                            if let badge = item.badge {
+                                Text(badge)
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(isSelected ? Color.white : Color.purple)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 1.5)
+                                    .background(
+                                        (isSelected ? Color.white.opacity(0.22) : Color.purple.opacity(0.13)),
+                                        in: Capsule()
+                                    )
+                            }
+                        }
+
+                        Text(dynamicSubtitle)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(isSelected ? Color.white.opacity(0.86) : Color.secondary)
+                            .lineLimit(1)
                     }
+
+                    Spacer(minLength: 8)
                 }
-
-                Text(dynamicSubtitle)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(isSelected ? Color.white.opacity(0.86) : Color.secondary)
-                    .lineLimit(1)
+                .contentShape(Rectangle())
             }
-
-            Spacer(minLength: 8)
+            .buttonStyle(.plain)
 
             if isSelected {
                 HStack(spacing: 6) {
-                    Text("⇥ Actions")
-                        .font(.system(size: 10.5, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.85))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.white.opacity(0.16), in: RoundedRectangle(cornerRadius: 5))
+                    if item.path != nil, let onOpenActions {
+                        Button {
+                            onOpenActions()
+                        } label: {
+                            Text("⇥ Actions")
+                                .font(.system(size: 10.5, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.92))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.white.opacity(0.18), in: RoundedRectangle(cornerRadius: 5))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Mở Universal Actions & Convert sang Markdown (Tab)")
+                    }
 
-                    Text("↩")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(.white)
+                    Button {
+                        onPrimaryActivate?()
+                    } label: {
+                        Text("↩")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(.white)
+                    }
+                    .buttonStyle(.plain)
                 }
             } else if index < 9 {
                 Text("⌘\(index + 1)")
@@ -423,38 +468,46 @@ private struct OpenWithPickerView: View {
 
             Divider()
 
-            ScrollView {
-                LazyVStack(spacing: 3) {
-                    ForEach(Array(viewModel.openWithApps.enumerated()), id: \.element.url.path) { idx, app in
-                        HStack(spacing: 10) {
-                            Image(nsImage: NSWorkspace.shared.icon(forFile: app.url.path))
-                                .resizable()
-                                .frame(width: 26, height: 26)
-                            Text(app.name)
-                                .font(.system(size: 13.5, weight: .medium))
-                                .foregroundStyle(idx == viewModel.selectedIndex ? .white : .primary)
-                            Spacer()
-                            if idx < 9 {
-                                Text("⌘\(idx + 1)")
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(idx == viewModel.selectedIndex ? .white.opacity(0.8) : .secondary)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 3) {
+                        ForEach(Array(viewModel.openWithApps.enumerated()), id: \.offset) { idx, app in
+                            Button {
+                                viewModel.executeAtIndex(idx, modifiers: [])
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(nsImage: NSWorkspace.shared.icon(forFile: app.url.path))
+                                        .resizable()
+                                        .frame(width: 26, height: 26)
+                                    Text(app.name)
+                                        .font(.system(size: 13.5, weight: .medium))
+                                        .foregroundStyle(idx == viewModel.selectedIndex ? .white : .primary)
+                                    Spacer()
+                                    if idx < 9 {
+                                        Text("⌘\(idx + 1)")
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .foregroundStyle(idx == viewModel.selectedIndex ? .white.opacity(0.8) : .secondary)
+                                    }
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(idx == viewModel.selectedIndex ? Color(red: 0.36, green: 0.16, blue: 0.62) : Color.clear)
+                                )
+                                .contentShape(Rectangle())
                             }
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(idx == viewModel.selectedIndex ? Color(red: 0.36, green: 0.16, blue: 0.62) : Color.clear)
-                        )
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            viewModel.executeAtIndex(idx, modifiers: [])
+                            .buttonStyle(.plain)
+                            .id(idx)
                         }
                     }
+                    .padding(10)
                 }
-                .padding(10)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .onChange(of: viewModel.selectedIndex) { _, newIdx in
+                    proxy.scrollTo(newIdx)
+                }
             }
-            .frame(maxHeight: 360)
         }
     }
 }
@@ -463,7 +516,6 @@ private struct DestinationFolderPickerView: View {
     @ObservedObject var viewModel: LauncherViewModel
     let operation: FileTransferOperation
     let sources: [URL]
-    @FocusState private var isFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -471,10 +523,20 @@ private struct DestinationFolderPickerView: View {
                 Image(systemName: "folder.badge.gearshape")
                     .font(.system(size: 18))
                     .foregroundStyle(.purple)
-                TextField("\(operation.rawValue) Gõ tên thư mục Google Drive đích...", text: $viewModel.destinationSearchText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 16))
-                    .focused($isFocused)
+
+                NativeSearchInputField(
+                    text: $viewModel.destinationSearchText,
+                    placeholder: "\(operation.rawValue) Gõ tên thư mục Google Drive đích...",
+                    fontSize: 16,
+                    focusTrigger: viewModel.focusTrigger,
+                    selectAllOnFocus: false,
+                    onMoveSelection: { viewModel.moveSelection(delta: $0) },
+                    onSubmit: { viewModel.executeCurrentSelection(modifiers: $0) },
+                    onTab: {},
+                    onEscape: { viewModel.handleEscapeKey() }
+                )
+                .frame(maxWidth: .infinity, minHeight: 22, maxHeight: 24)
+
                 Text("\(sources.count) mục")
                     .font(.system(size: 11, weight: .semibold))
                     .padding(.horizontal, 8)
@@ -482,28 +544,32 @@ private struct DestinationFolderPickerView: View {
                     .background(Color.purple.opacity(0.14), in: Capsule())
             }
             .padding(14)
-            .onAppear { isFocused = true }
 
             Divider()
 
-            ScrollView {
-                LazyVStack(spacing: 3) {
-                    ForEach(Array(viewModel.destinationFolders.enumerated()), id: \.element.id) { idx, folder in
-                        SearchResultRowView(
-                            item: folder,
-                            index: idx,
-                            isSelected: idx == viewModel.selectedIndex,
-                            activeModifiers: []
-                        )
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            viewModel.executeAtIndex(idx, modifiers: [])
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 3) {
+                        ForEach(Array(viewModel.destinationFolders.enumerated()), id: \.offset) { idx, folder in
+                            SearchResultRowView(
+                                item: folder,
+                                index: idx,
+                                isSelected: idx == viewModel.selectedIndex,
+                                activeModifiers: [],
+                                onPrimaryActivate: {
+                                    viewModel.executeAtIndex(idx, modifiers: [])
+                                }
+                            )
+                            .id(idx)
                         }
                     }
+                    .padding(10)
                 }
-                .padding(10)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .onChange(of: viewModel.selectedIndex) { _, newIdx in
+                    proxy.scrollTo(newIdx)
+                }
             }
-            .frame(maxHeight: 360)
         }
     }
 }
@@ -536,12 +602,12 @@ struct FileOrSymbolIconView: View {
         }
     }
 
-    private static func fastCloudIcon(for path: String, fallbackSymbol: String) -> NSImage {
+    static func fastCloudIcon(for path: String, fallbackSymbol: String) -> NSImage {
         if fallbackSymbol.contains("folder") || fallbackSymbol.contains("externaldrive") {
             return NSWorkspace.shared.icon(for: .folder)
         }
         let ext = (path as NSString).pathExtension.lowercased()
-        if !ext.isEmpty, let utType = UTType(filenameExtension: ext) {
+        if !ext.isEmpty, !ext.contains(" "), let utType = UTType(filenameExtension: ext) {
             return NSWorkspace.shared.icon(for: utType)
         }
         return NSWorkspace.shared.icon(for: .data)

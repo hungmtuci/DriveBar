@@ -76,7 +76,7 @@ struct MarkdownPreviewView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(16)
             }
-            .frame(height: 360)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.primary.opacity(0.03))
 
             Divider()

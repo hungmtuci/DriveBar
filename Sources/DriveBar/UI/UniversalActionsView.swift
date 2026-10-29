@@ -6,7 +6,6 @@ import AppKit
 struct UniversalActionsView: View {
     @ObservedObject var viewModel: LauncherViewModel
     let target: ActionTarget
-    @FocusState private var isFilterFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -50,14 +49,23 @@ struct UniversalActionsView: View {
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Color(red: 0.42, green: 0.18, blue: 0.72))
 
-                TextField("Gõ lọc nhanh hành động (vd: 'md', 'con', 'ai', 'pdf', 'hide', 'open')...", text: $viewModel.actionFilterText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 16))
-                    .focused($isFilterFocused)
+                NativeSearchInputField(
+                    text: $viewModel.actionFilterText,
+                    placeholder: "Gõ lọc nhanh hành động (vd: 'md', 'con', 'ai', 'pdf', 'hide', 'open')...",
+                    fontSize: 16,
+                    focusTrigger: viewModel.focusTrigger,
+                    selectAllOnFocus: false,
+                    onMoveSelection: { viewModel.moveSelection(delta: $0) },
+                    onSubmit: { viewModel.executeCurrentSelection(modifiers: $0) },
+                    onTab: { viewModel.handleTabKey() },
+                    onEscape: { viewModel.handleEscapeKey() }
+                )
+                .frame(maxWidth: .infinity, minHeight: 22, maxHeight: 24)
 
                 if !viewModel.actionFilterText.isEmpty {
                     Button {
                         viewModel.actionFilterText = ""
+                        viewModel.triggerInputFocus(selectAll: false)
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(.secondary)
@@ -66,19 +74,13 @@ struct UniversalActionsView: View {
                 }
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 9)
+            .padding(.vertical, 8)
             .background(
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
                     .fill(Color.primary.opacity(0.07))
             )
             .padding(.horizontal, 18)
             .padding(.bottom, 10)
-            .onAppear {
-                isFilterFocused = true
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .driveBarFocusInput)) { _ in
-                isFilterFocused = true
-            }
 
             Divider().opacity(0.45)
 
@@ -87,7 +89,7 @@ struct UniversalActionsView: View {
                 // Left Column: Action List
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(spacing: 3) {
+                        VStack(spacing: 3) {
                             if viewModel.filteredActions.isEmpty {
                                 VStack(spacing: 8) {
                                     Image(systemName: "magnifyingglass")
@@ -100,33 +102,33 @@ struct UniversalActionsView: View {
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 40)
                             } else {
-                                ForEach(Array(viewModel.filteredActions.enumerated()), id: \.element.id) { idx, action in
-                                    UniversalActionRowView(
-                                        action: action,
-                                        index: idx,
-                                        isSelected: idx == viewModel.selectedIndex,
-                                        isLatchedFavorite: SyncAndLatchingService.shared.isFrequentlyUsed(actionID: action.id, target: target)
-                                    )
-                                    .id(idx)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
+                                ForEach(Array(viewModel.filteredActions.enumerated()), id: \.offset) { idx, action in
+                                    Button {
                                         viewModel.executeAtIndex(
                                             idx,
-                                            modifiers: NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                                            modifiers: NSEvent.modifierFlags.cleanShortcutModifiers
                                         )
+                                    } label: {
+                                        UniversalActionRowView(
+                                            action: action,
+                                            index: idx,
+                                            isSelected: idx == viewModel.selectedIndex,
+                                            isLatchedFavorite: SyncAndLatchingService.shared.isFrequentlyUsed(actionID: action.id, target: target)
+                                        )
+                                        .contentShape(Rectangle())
                                     }
+                                    .buttonStyle(.plain)
+                                    .id(idx)
                                 }
                             }
                         }
                         .padding(10)
                     }
                     .onChange(of: viewModel.selectedIndex) { _, newIdx in
-                        withAnimation(.easeOut(duration: 0.1)) {
-                            proxy.scrollTo(newIdx, anchor: .center)
-                        }
+                        proxy.scrollTo(newIdx)
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: 340)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 Divider().opacity(0.45)
 
@@ -134,6 +136,7 @@ struct UniversalActionsView: View {
                 UniversalActionRightPreviewPane(viewModel: viewModel, target: target)
                     .frame(width: 265)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             Divider().opacity(0.45)
 
@@ -159,9 +162,8 @@ struct UniversalActionsView: View {
         switch target {
         case .files(let urls, _):
             if let first = urls.first {
-                Image(nsImage: NSWorkspace.shared.icon(forFile: first.path))
-                    .resizable()
-                    .interpolation(.high)
+                let isDir = GoogleDriveIndexService.shared.isKnownDirectory(first.path, hasDirectoryHint: first.hasDirectoryPath)
+                FileOrSymbolIconView(path: first.path, fallbackSymbol: isDir ? "folder.fill" : "doc.fill")
             } else {
                 Image(systemName: "doc.fill")
                     .font(.system(size: 28))

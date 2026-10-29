@@ -5,6 +5,7 @@ import Carbon
 final class SpotlightPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+    override var acceptsFirstResponder: Bool { true }
 }
 
 @MainActor
@@ -53,7 +54,7 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
                 return
             }
             LauncherViewModel.shared.openUniversalActions(for: target, directExternalTrigger: true)
-            showAndFocus()
+            showAndFocus(selectExistingQuery: false)
         }
     }
 
@@ -64,19 +65,26 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
         positionPanelCenteredOnActiveScreen(panel)
         installKeyboardMonitorsIfNeeded()
 
-        NSApp.activate(ignoringOtherApps: true)
+        if #available(macOS 14.0, *) {
+            NSApp.activate()
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
         panel.makeKeyAndOrderFront(nil)
+        panel.orderFrontRegardless()
+
+        LauncherViewModel.shared.triggerInputFocus(selectAll: selectExistingQuery)
         NotificationCenter.default.post(name: .driveBarFocusInput, object: nil)
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.035) { [weak panel] in
+        if let tf = Self.findEditableTextField(in: panel.contentView) {
+            NativeSearchInputField.focusTextField(tf, selectAll: selectExistingQuery)
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.025) { [weak panel] in
             guard let panel, panel.isVisible else { return }
             if let tf = Self.findEditableTextField(in: panel.contentView) {
-                if !(panel.firstResponder is NSTextView) {
-                    panel.makeFirstResponder(tf)
-                }
-                if selectExistingQuery {
-                    tf.currentEditor()?.selectAll(nil)
-                }
+                NativeSearchInputField.focusTextField(tf, selectAll: selectExistingQuery)
             }
         }
     }
@@ -117,22 +125,24 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
         let rect = NSRect(x: 0, y: 0, width: 760, height: 500)
         let p = SpotlightPanel(
             contentRect: rect,
-            styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
+            styleMask: [.borderless, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         p.isFloatingPanel = true
+        p.becomesKeyOnlyIfNeeded = false
         p.level = .floating
         p.backgroundColor = .clear
         p.isOpaque = false
         p.hasShadow = true
-        p.isMovableByWindowBackground = true
+        p.isMovableByWindowBackground = false
         p.hidesOnDeactivate = false
+        p.acceptsMouseMovedEvents = true
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         p.delegate = self
 
         let hosting = NSHostingView(rootView: LauncherRootView(viewModel: LauncherViewModel.shared))
-        hosting.sizingOptions = [.intrinsicContentSize]
+        hosting.frame = rect
         p.contentView = hosting
         self.panel = p
     }
@@ -147,12 +157,12 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
         let visible = screen.visibleFrame
         let width: CGFloat = 760
         let height: CGFloat = 500
-        let x = visible.midX - width / 2
-        let y = visible.minY + visible.height * 0.56 - height / 2
-        panel.setFrame(NSRect(x: x, y: max(visible.minY + 40, y), width: width, height: height), display: true)
+        let x = round(visible.midX - width / 2)
+        let y = round(max(visible.minY + 40, visible.minY + visible.height * 0.56 - height / 2))
+        panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
     }
 
-    // MARK: - Rich Keyboard Navigation (Alfred-grade)
+    // MARK: - Rich Keyboard Navigation (Alfred-grade, Vietnamese IME Safe)
 
     private func installKeyboardMonitorsIfNeeded() {
         if localKeyMonitor == nil {
@@ -167,7 +177,7 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
 
         if flagsMonitor == nil {
             flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
-                LauncherViewModel.shared.activeModifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                LauncherViewModel.shared.activeModifiers = event.modifierFlags.cleanShortcutModifiers
                 return event
             }
         }
@@ -184,35 +194,28 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
         }
     }
 
+    private func commitActiveIMEIfNeeded(syncBeforeSubmit: Bool) {
+        guard let editor = panel?.firstResponder as? NSTextView else { return }
+        if syncBeforeSubmit {
+            let live = editor.string
+            if editor.hasMarkedText() {
+                editor.unmarkText()
+            }
+            LauncherViewModel.shared.syncImmediateTextBeforeSubmit(live)
+        } else if editor.hasMarkedText() {
+            editor.unmarkText()
+        }
+    }
+
     private func handleKeyDown(_ event: NSEvent) -> Bool {
         let vm = LauncherViewModel.shared
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let flags = event.modifierFlags.cleanShortcutModifiers
         let code = Int(event.keyCode)
 
         // 1. Escape handling
         if code == kVK_Escape {
-            switch vm.screenMode {
-            case .search:
-                if !vm.searchText.isEmpty {
-                    vm.searchText = ""
-                } else {
-                    hide()
-                }
-            case .universalActions:
-                if !vm.actionFilterText.isEmpty {
-                    vm.actionFilterText = ""
-                } else if vm.openedDirectlyInUniversalActions {
-                    hide()
-                } else {
-                    vm.returnToSearchMode()
-                }
-            case .openWithPicker(_, let prevTarget):
-                vm.openUniversalActions(for: prevTarget, directExternalTrigger: vm.openedDirectlyInUniversalActions)
-            case .destinationPicker(_, let sources):
-                vm.openUniversalActions(for: .files(sources), directExternalTrigger: vm.openedDirectlyInUniversalActions)
-            case .markdownPreview(_, let src, _, _, _, _):
-                vm.openUniversalActions(for: .files([src]), directExternalTrigger: vm.openedDirectlyInUniversalActions)
-            }
+            commitActiveIMEIfNeeded(syncBeforeSubmit: false)
+            vm.handleEscapeKey()
             return true
         }
 
@@ -241,6 +244,7 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
 
         // 4. Instant row hotkeys: ⌘1 ... ⌘9
         if flags == .command, let numIndex = Self.numberIndex(for: code) {
+            commitActiveIMEIfNeeded(syncBeforeSubmit: false)
             vm.executeAtIndex(numIndex, modifiers: [])
             return true
         }
@@ -281,44 +285,35 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
         }
 
         // 6. Up / Down navigation (or ⌃P / ⌃N)
-        if code == kVK_UpArrow || (flags == .control && code == kVK_ANSI_P) {
+        if (code == kVK_UpArrow && flags.isEmpty) || (flags == .control && code == kVK_ANSI_P) {
+            commitActiveIMEIfNeeded(syncBeforeSubmit: false)
             vm.moveSelection(delta: -1)
             return true
         }
-        if code == kVK_DownArrow || (flags == .control && code == kVK_ANSI_N) {
+        if (code == kVK_DownArrow && flags.isEmpty) || (flags == .control && code == kVK_ANSI_N) {
+            commitActiveIMEIfNeeded(syncBeforeSubmit: false)
             vm.moveSelection(delta: 1)
             return true
         }
 
-        // 7. Tab or ⌘K -> Open Universal Actions on selected item (or go back with Shift+Tab)
+        // 7. Tab or ⌘K -> Open Universal Actions on selected item (or go back)
         if code == kVK_Tab || (flags == .command && code == kVK_ANSI_K) {
-            if case .search = vm.screenMode {
-                vm.openUniversalActionsForSelectedSearchItem()
-                return true
-            } else if case .universalActions = vm.screenMode, !vm.openedDirectlyInUniversalActions {
-                vm.returnToSearchMode()
-                return true
-            }
+            commitActiveIMEIfNeeded(syncBeforeSubmit: false)
+            vm.handleTabKey()
+            return true
         }
 
         // 8. Backspace at trailing `/` in Browse Mode pops up one parent folder
-        if code == kVK_Delete && flags.isEmpty, case .search = vm.screenMode {
-            let s = vm.searchText
-            if s.hasPrefix("/"), s.hasSuffix("/"), s.count > 1 {
-                let trimmedSlash = String(s.dropLast())
-                let parent = (trimmedSlash as NSString).deletingLastPathComponent
-                let myDrive = GoogleDriveIndexService.shared.myDrivePath
-                if parent == "/" || (myDrive != nil && trimmedSlash == myDrive) {
-                    vm.searchText = ""
-                } else {
-                    vm.searchText = parent.hasSuffix("/") ? parent : parent + "/"
-                }
+        if code == kVK_Delete && flags.isEmpty {
+            let hasMarked = (panel?.firstResponder as? NSTextView)?.hasMarkedText() ?? false
+            if !hasMarked && vm.popParentFolderIfAtSlashBoundary() {
                 return true
             }
         }
 
         // 9. Enter / Return -> Execute with active modifiers (↩, ⌘↩, ⌥↩, ⌃↩, ⇧↩)
         if code == kVK_Return || code == kVK_ANSI_KeypadEnter {
+            commitActiveIMEIfNeeded(syncBeforeSubmit: true)
             vm.executeCurrentSelection(modifiers: flags)
             return true
         }

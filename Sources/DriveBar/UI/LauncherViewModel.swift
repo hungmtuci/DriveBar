@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import AppKit
 import QuickLookThumbnailing
+import UniformTypeIdentifiers
 import Darwin
 
 @MainActor
@@ -42,14 +43,115 @@ final class LauncherViewModel: ObservableObject {
     @Published var activeModifiers: NSEvent.ModifierFlags = []
     @Published private(set) var openedDirectlyInUniversalActions: Bool = false
 
+    // Focus coordination for NativeSearchInputField
+    @Published var focusTrigger: Int = 0
+    @Published var selectAllOnFocus: Bool = false
+    @Published private(set) var isLoadingBrowseFiles: Bool = false
+
     // Preview card state for Universal Actions right pane (Screenshot 2 style!)
     @Published private(set) var previewImage: NSImage?
     @Published private(set) var previewFileSizeText: String = ""
     @Published private(set) var previewModifiedText: String = ""
     @Published private(set) var previewRouteHint: String = ""
 
+    private var searchGeneration: UInt64 = 0
+    private var destinationGeneration: UInt64 = 0
+    private var previewGeneration: UInt64 = 0
+    private static let searchQueue = DispatchQueue(label: "com.hunglx.DriveBar.fastSearch", qos: .userInteractive)
+
     private init() {
         refreshSearchResults()
+    }
+
+    // MARK: - Focus & Keyboard Helpers
+
+    func triggerInputFocus(selectAll: Bool) {
+        selectAllOnFocus = selectAll
+        focusTrigger &+= 1
+    }
+
+    func syncImmediateTextBeforeSubmit(_ live: String) {
+        switch screenMode {
+        case .search:
+            guard searchText != live else { return }
+            searchText = live
+            let trimmed = live.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty && !live.hasPrefix("/") && !live.hasPrefix("~/") {
+                let tokens = trimmed.split(separator: " ").map(String.init)
+                if !tokens.isEmpty {
+                    searchGeneration &+= 1
+                    searchResults = GoogleDriveIndexService.shared.searchMyDriveFolders(
+                        tokens: tokens,
+                        includeApps: AppSettings.shared.includeMacAppsInSearch
+                    )
+                    selectedIndex = 0
+                }
+            }
+        case .universalActions:
+            if actionFilterText != live { actionFilterText = live }
+        case .destinationPicker:
+            if destinationSearchText != live { destinationSearchText = live }
+        default:
+            break
+        }
+    }
+
+    func handleEscapeKey() {
+        switch screenMode {
+        case .search:
+            if !searchText.isEmpty {
+                searchText = ""
+                triggerInputFocus(selectAll: false)
+            } else {
+                LauncherPanelController.shared.hide()
+            }
+        case .universalActions:
+            if !actionFilterText.isEmpty {
+                actionFilterText = ""
+                triggerInputFocus(selectAll: false)
+            } else if openedDirectlyInUniversalActions {
+                LauncherPanelController.shared.hide()
+            } else {
+                returnToSearchMode()
+            }
+        case .openWithPicker(_, let prevTarget):
+            openUniversalActions(for: prevTarget, directExternalTrigger: openedDirectlyInUniversalActions)
+        case .destinationPicker(_, let sources):
+            if !destinationSearchText.isEmpty {
+                destinationSearchText = ""
+                triggerInputFocus(selectAll: false)
+            } else {
+                openUniversalActions(for: .files(sources), directExternalTrigger: openedDirectlyInUniversalActions)
+            }
+        case .markdownPreview(_, let src, _, _, _, _):
+            openUniversalActions(for: .files([src]), directExternalTrigger: openedDirectlyInUniversalActions)
+        }
+    }
+
+    func handleTabKey() {
+        if case .search = screenMode {
+            openUniversalActionsForSelectedSearchItem()
+        } else if case .universalActions = screenMode, !openedDirectlyInUniversalActions {
+            returnToSearchMode()
+        }
+    }
+
+    func popParentFolderIfAtSlashBoundary() -> Bool {
+        guard case .search = screenMode else { return false }
+        let s = searchText
+        if s.hasPrefix("/"), s.hasSuffix("/"), s.count > 1 {
+            let trimmedSlash = String(s.dropLast())
+            let parent = (trimmedSlash as NSString).deletingLastPathComponent
+            let myDrive = GoogleDriveIndexService.shared.myDrivePath
+            if parent == "/" || (myDrive != nil && trimmedSlash == myDrive) {
+                searchText = ""
+            } else {
+                searchText = parent.hasSuffix("/") ? parent : parent + "/"
+            }
+            triggerInputFocus(selectAll: false)
+            return true
+        }
+        return false
     }
 
     // MARK: - Mode Transitions
@@ -68,6 +170,7 @@ final class LauncherViewModel: ObservableObject {
         screenMode = .universalActions(target: target)
         refreshFilteredActions()
         updatePreviewThumbnailIfNeeded()
+        triggerInputFocus(selectAll: false)
     }
 
     func enterBrowseMode(at folderPath: String) {
@@ -76,12 +179,14 @@ final class LauncherViewModel: ObservableObject {
         let clean = folderPath.hasSuffix("/") ? folderPath : folderPath + "/"
         GoogleDriveIndexService.shared.recordUsed(folderPath)
         searchText = clean
+        triggerInputFocus(selectAll: false)
     }
 
     func returnToSearchMode() {
         screenMode = .search
         actionFilterText = ""
         refreshSearchResults()
+        triggerInputFocus(selectAll: false)
     }
 
     func enterOpenWithPicker(for fileURL: URL, previousTarget: ActionTarget) {
@@ -96,6 +201,7 @@ final class LauncherViewModel: ObservableObject {
         destinationSearchText = ""
         screenMode = .destinationPicker(operation: operation, sources: sources)
         refreshDestinationFolders()
+        triggerInputFocus(selectAll: false)
     }
 
     // MARK: - Active Search Mode Pill Label
@@ -120,9 +226,13 @@ final class LauncherViewModel: ObservableObject {
         return ("Google Drive", .indigo)
     }
 
-    // MARK: - Search Engine Evaluation
+    // MARK: - Search Engine Evaluation (Zero Main-Thread Blocking!)
 
     func refreshSearchResults() {
+        searchGeneration &+= 1
+        let gen = searchGeneration
+        isLoadingBrowseFiles = false
+
         let drive = GoogleDriveIndexService.shared
         let raw = searchText
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -157,11 +267,12 @@ final class LauncherViewModel: ObservableObject {
             return
         }
 
-        // 1. Check `gda <path>`
+        // 1. Check `gda <path>` (avoid blocking syscall on CloudStorage paths)
         if raw.lowercased().hasPrefix("gda ") {
             let p = String(raw.dropFirst(4)).trimmingCharacters(in: .whitespaces)
-            if FileManager.default.fileExists(atPath: p) {
-                openUniversalActions(for: .files([URL(fileURLWithPath: p)]), directExternalTrigger: false)
+            if !p.isEmpty && (p.contains("/Library/CloudStorage/") || FileManager.default.fileExists(atPath: p)) {
+                let isDir = drive.isKnownDirectory(p)
+                openUniversalActions(for: .files([URL(fileURLWithPath: p, isDirectory: isDir)]), directExternalTrigger: false)
                 return
             }
         }
@@ -218,7 +329,7 @@ final class LauncherViewModel: ObservableObject {
             return
         }
 
-        // 3. Browse Mode (`/path/...` or `~/...`)
+        // 3. Browse Mode (`/path/...` or `~/...`) — 0ms RAM folders + async background POSIX readdir!
         if raw.hasPrefix("/") || raw.hasPrefix("~/") {
             let expanded = raw.hasPrefix("~/")
                 ? FileManager.default.homeDirectoryForCurrentUser.path + String(raw.dropFirst(1))
@@ -235,53 +346,60 @@ final class LauncherViewModel: ObservableObject {
                 filterPart = ""
             }
 
-            var isDir: ObjCBool = false
-            if FileManager.default.fileExists(atPath: currentDir, isDirectory: &isDir), isDir.boolValue {
-                let words = filterPart.split(separator: " ").map(String.init)
-                let children = drive.listChildren(parentPath: currentDir, queryWords: words)
-                var items: [SearchResultItem] = children.prefix(80).map { child in
-                    SearchResultItem(
-                        id: "browse:\(child.path)",
-                        title: (child.path as NSString).lastPathComponent,
-                        subtitle: drive.formatHierarchicalSubtitle(child.path, maxLevels: 3),
-                        path: child.path,
-                        isDirectory: child.isDir,
-                        kind: child.isDir ? .driveFolder(path: child.path) : .driveFile(path: child.path),
-                        badge: child.isDir ? nil : URL(fileURLWithPath: child.path).pathExtension.uppercased(),
-                        sfSymbolFallback: child.isDir ? "folder.fill" : "doc.fill"
+            let words = filterPart.split(separator: " ").map(String.init)
+            let ramChildren = drive.cachedChildrenInMemory(parentPath: currentDir, queryWords: words)
+            searchResults = buildBrowseResultItems(
+                currentDir: currentDir,
+                words: words,
+                filterPart: filterPart,
+                children: ramChildren,
+                isInitialRAMOnly: true
+            )
+            selectedIndex = 0
+            isLoadingBrowseFiles = true
+
+            Task.detached(priority: .userInitiated) {
+                let diskChildren = GoogleDriveIndexService.listDirectoryFastPOSIX(
+                    parentPath: currentDir,
+                    queryWords: words
+                )
+                await MainActor.run {
+                    let vm = LauncherViewModel.shared
+                    guard vm.searchGeneration == gen else { return }
+                    vm.isLoadingBrowseFiles = false
+
+                    var merged: [(path: String, isDir: Bool)] = []
+                    var seen = Set<String>()
+                    for item in diskChildren where seen.insert(item.path).inserted {
+                        merged.append(item)
+                    }
+                    for item in ramChildren where seen.insert(item.path).inserted {
+                        merged.append(item)
+                    }
+                    merged.sort { a, b in
+                        if a.isDir != b.isDir { return a.isDir && !b.isDir }
+                        return (a.path as NSString).lastPathComponent.localizedStandardCompare((b.path as NSString).lastPathComponent) == .orderedAscending
+                    }
+
+                    let prevSelectedID: String? = (vm.selectedIndex >= 0 && vm.selectedIndex < vm.searchResults.count)
+                        ? vm.searchResults[vm.selectedIndex].id
+                        : nil
+                    let finalItems = vm.buildBrowseResultItems(
+                        currentDir: currentDir,
+                        words: words,
+                        filterPart: filterPart,
+                        children: merged,
+                        isInitialRAMOnly: false
                     )
+                    vm.searchResults = finalItems
+                    if let prevSelectedID, let matchIdx = finalItems.firstIndex(where: { $0.id == prevSelectedID }) {
+                        vm.selectedIndex = matchIdx
+                    } else {
+                        vm.selectedIndex = min(vm.selectedIndex, max(0, finalItems.count - 1))
+                    }
                 }
-
-                if words.isEmpty && currentDir != "/" && currentDir != drive.myDrivePath {
-                    let parent = (currentDir as NSString).deletingLastPathComponent
-                    items.append(SearchResultItem(
-                        id: "parent:\(parent)",
-                        title: ".. (Quay lại thư mục cha)",
-                        subtitle: parent,
-                        path: parent,
-                        isDirectory: true,
-                        kind: .parentFolder(path: parent),
-                        badge: "⌫",
-                        sfSymbolFallback: "arrow.turn.left.up"
-                    ))
-                }
-
-                if items.isEmpty {
-                    items.append(SearchResultItem(
-                        id: "empty-browse",
-                        title: "Thư mục trống hoặc không khớp từ khóa",
-                        subtitle: currentDir,
-                        path: nil,
-                        isDirectory: false,
-                        kind: .infoBanner,
-                        badge: nil,
-                        sfSymbolFallback: "folder"
-                    ))
-                }
-                searchResults = items
-                selectedIndex = 0
-                return
             }
+            return
         }
 
         // 4. Parse optional prefixes `f ` or `fs `
@@ -300,7 +418,7 @@ final class LauncherViewModel: ObservableObject {
             effectiveQuery = String(raw.dropFirst(2)).trimmingCharacters(in: .whitespaces)
         }
 
-        // 5. System slash commands (`//rebuild`, `//clean`)
+        // 5. System slash commands (`//rebuild`, `//clean`, `//hotkey`)
         if effectiveQuery == "//rebuild" {
             searchResults = [
                 SearchResultItem(
@@ -360,23 +478,145 @@ final class LauncherViewModel: ObservableObject {
         }
 
         let tokens = effectiveQuery.split(separator: " ").map(String.init)
-        var results: [SearchResultItem]
-
-        if isSharedMode {
-            results = tokens.isEmpty
-                ? drive.recentSharedItems(limit: 9)
-                : drive.searchSharedItems(tokens: tokens)
-        } else {
-            results = tokens.isEmpty
-                ? drive.recentMyDriveFolders(limit: 9)
-                : drive.searchMyDriveFolders(tokens: tokens, includeApps: AppSettings.shared.includeMacAppsInSearch)
+        if tokens.isEmpty {
+            searchResults = isSharedMode ? drive.recentSharedItems(limit: 9) : drive.recentMyDriveFolders(limit: 9)
+            selectedIndex = 0
+            return
         }
 
+        let cleanTokens = tokens.map(GoogleDriveIndexService.cleanString).filter { !$0.isEmpty }
+        if cleanTokens.isEmpty {
+            searchResults = isSharedMode ? drive.recentSharedItems(limit: 9) : drive.recentMyDriveFolders(limit: 9)
+            selectedIndex = 0
+            return
+        }
+
+        let fastFolders = drive.fastFolderIndex
+        let fastShared = drive.fastSharedIndex
+        let histSnap = drive.history
+        let includeApps = AppSettings.shared.includeMacAppsInSearch
+        let querySnap = effectiveQuery
+        let sharedSnap = isSharedMode
+
+        Self.searchQueue.async {
+            if sharedSnap {
+                let hits = GoogleDriveIndexService.evaluateSharedSearchHits(
+                    tokens: tokens,
+                    fastIndex: fastShared,
+                    historySnapshot: histSnap,
+                    maxResults: 45
+                )
+                Task { @MainActor in
+                    let vm = LauncherViewModel.shared
+                    guard vm.searchGeneration == gen else { return }
+                    var built = GoogleDriveIndexService.shared.buildSharedSearchResultItems(from: hits, maxResults: 45)
+                    vm.applyInlineCommandsAndEmptyFallback(to: &built, effectiveQuery: querySnap, isSharedMode: true)
+                    vm.searchResults = built
+                    vm.selectedIndex = 0
+                }
+            } else {
+                let hits = GoogleDriveIndexService.evaluateMyDriveSearchHits(
+                    tokens: tokens,
+                    fastIndex: fastFolders,
+                    historySnapshot: histSnap,
+                    maxResults: 45
+                )
+                Task { @MainActor in
+                    let vm = LauncherViewModel.shared
+                    guard vm.searchGeneration == gen else { return }
+                    var built = GoogleDriveIndexService.shared.buildMyDriveSearchResultItems(
+                        from: hits,
+                        cleanTokens: cleanTokens,
+                        includeApps: includeApps,
+                        maxResults: 45
+                    )
+                    vm.applyInlineCommandsAndEmptyFallback(to: &built, effectiveQuery: querySnap, isSharedMode: false)
+                    vm.searchResults = built
+                    vm.selectedIndex = 0
+                }
+            }
+        }
+    }
+
+    private func buildBrowseResultItems(
+        currentDir: String,
+        words: [String],
+        filterPart: String,
+        children: [(path: String, isDir: Bool)],
+        isInitialRAMOnly: Bool
+    ) -> [SearchResultItem] {
+        let drive = GoogleDriveIndexService.shared
+        var items: [SearchResultItem] = []
+        items.reserveCapacity(min(children.count + 2, 84))
+
+        if words.isEmpty {
+            let folderName = currentDir == "/" ? "/" : (currentDir as NSString).lastPathComponent
+            items.append(SearchResultItem(
+                id: "open-finder:\(currentDir)",
+                title: "📂 Mở thư mục '\(folderName)' trong Finder",
+                subtitle: "Nhấn Enter (hoặc click chuột) để mở trong Finder • Phím ↓ chọn mục con bên dưới • ⇥ Actions",
+                path: currentDir,
+                isDirectory: true,
+                kind: .openInFinder(path: currentDir),
+                badge: "Finder",
+                sfSymbolFallback: "folder.badge.gearshape"
+            ))
+        }
+
+        for child in children.prefix(80) {
+            let ext = URL(fileURLWithPath: child.path).pathExtension.uppercased()
+            items.append(SearchResultItem(
+                id: "browse:\(child.path)",
+                title: (child.path as NSString).lastPathComponent,
+                subtitle: drive.formatHierarchicalSubtitle(child.path, maxLevels: 3),
+                path: child.path,
+                isDirectory: child.isDir,
+                kind: child.isDir ? .driveFolder(path: child.path) : .driveFile(path: child.path),
+                badge: child.isDir ? nil : (ext.isEmpty ? nil : ext),
+                sfSymbolFallback: child.isDir ? "folder.fill" : "doc.fill"
+            ))
+        }
+
+        if words.isEmpty && currentDir != "/" && currentDir != drive.myDrivePath {
+            let parent = (currentDir as NSString).deletingLastPathComponent
+            items.append(SearchResultItem(
+                id: "parent:\(parent)",
+                title: ".. (Quay lại thư mục cha)",
+                subtitle: parent,
+                path: parent,
+                isDirectory: true,
+                kind: .parentFolder(path: parent),
+                badge: "⌫",
+                sfSymbolFallback: "arrow.turn.left.up"
+            ))
+        }
+
+        if items.isEmpty {
+            items.append(SearchResultItem(
+                id: "empty-browse",
+                title: isInitialRAMOnly ? "⏳ Đang đọc danh sách tệp trong thư mục..." : "Không có tệp hoặc thư mục con khớp '\(filterPart)'",
+                subtitle: currentDir,
+                path: nil,
+                isDirectory: false,
+                kind: .infoBanner,
+                badge: nil,
+                sfSymbolFallback: "folder"
+            ))
+        }
+
+        return items
+    }
+
+    private func applyInlineCommandsAndEmptyFallback(
+        to results: inout [SearchResultItem],
+        effectiveQuery: String,
+        isSharedMode: Bool
+    ) {
         let normQ = GoogleDriveIndexService.removeAccents(effectiveQuery).lowercased()
-        if !tokens.isEmpty && (normQ.contains("phim tat") || normQ == "hotkey" || normQ == "shortcut") {
+        if normQ.contains("phim tat") || normQ == "hotkey" || normQ == "shortcut" {
             results.insert(contentsOf: Self.hotkeyQuickItems(), at: 0)
         }
-        if !tokens.isEmpty && (normQ.contains("clean") || normQ.contains("clear")) {
+        if normQ.contains("clean") || normQ.contains("clear") {
             results.insert(
                 SearchResultItem(
                     id: "cmd:clean-inline",
@@ -406,9 +646,6 @@ final class LauncherViewModel: ObservableObject {
                 )
             ]
         }
-
-        searchResults = results
-        selectedIndex = 0
     }
 
     // MARK: - Universal Actions Filtering
@@ -466,6 +703,9 @@ final class LauncherViewModel: ObservableObject {
     }
 
     func refreshDestinationFolders() {
+        destinationGeneration &+= 1
+        let gen = destinationGeneration
+
         let drive = GoogleDriveIndexService.shared
         let q = destinationSearchText.trimmingCharacters(in: .whitespaces)
         if q.isEmpty {
@@ -493,16 +733,42 @@ final class LauncherViewModel: ObservableObject {
                 sfSymbolFallback: "arrow.down.circle"
             ), at: 1)
             destinationFolders = list
+            selectedIndex = 0
         } else {
             let tokens = q.split(separator: " ").map(String.init)
-            destinationFolders = drive.searchMyDriveFolders(tokens: tokens, includeApps: false, maxResults: 30)
+            let cleanTokens = tokens.map(GoogleDriveIndexService.cleanString).filter { !$0.isEmpty }
+            guard !cleanTokens.isEmpty else { return }
+            let fastFolders = drive.fastFolderIndex
+            let histSnap = drive.history
+
+            Self.searchQueue.async {
+                let hits = GoogleDriveIndexService.evaluateMyDriveSearchHits(
+                    tokens: tokens,
+                    fastIndex: fastFolders,
+                    historySnapshot: histSnap,
+                    maxResults: 30
+                )
+                Task { @MainActor in
+                    let vm = LauncherViewModel.shared
+                    guard vm.destinationGeneration == gen else { return }
+                    vm.destinationFolders = GoogleDriveIndexService.shared.buildMyDriveSearchResultItems(
+                        from: hits,
+                        cleanTokens: cleanTokens,
+                        includeApps: false,
+                        maxResults: 30
+                    )
+                    vm.selectedIndex = 0
+                }
+            }
         }
-        selectedIndex = 0
     }
 
-    // MARK: - Thumbnail & File Metadata Preview (Screenshot 2 Right Pane!)
+    // MARK: - Thumbnail & File Metadata Preview (Screenshot 2 Right Pane — Non-Blocking!)
 
     func updatePreviewThumbnailIfNeeded() {
+        previewGeneration &+= 1
+        let gen = previewGeneration
+
         previewImage = nil
         previewFileSizeText = ""
         previewModifiedText = ""
@@ -513,28 +779,49 @@ final class LauncherViewModel: ObservableObject {
             return
         }
 
-        let fm = FileManager.default
-        var stBuf = Darwin.stat()
-        if Darwin.lstat(firstURL.path, &stBuf) == 0 {
-            if (stBuf.st_mode & S_IFMT) != S_IFDIR {
-                previewFileSizeText = ByteCountFormatter.string(fromByteCount: Int64(stBuf.st_size), countStyle: .file)
+        let path = firstURL.path
+        let isDir = GoogleDriveIndexService.shared.isKnownDirectory(path, hasDirectoryHint: firstURL.hasDirectoryPath)
+        previewRouteHint = isDir
+            ? "Thư mục • Hỗ trợ gộp sang 1 file AI .md"
+            : MarkdownConverterService.routeDescription(for: firstURL)
+
+        // Instant zero-blocking fallback icon
+        if isDir {
+            previewImage = NSWorkspace.shared.icon(for: .folder)
+        } else if path.contains("/Library/CloudStorage/") {
+            let ext = firstURL.pathExtension.lowercased()
+            if !ext.isEmpty, let ut = UTType(filenameExtension: ext) {
+                previewImage = NSWorkspace.shared.icon(for: ut)
+            } else {
+                previewImage = NSWorkspace.shared.icon(for: .data)
             }
-            let mod = Date(timeIntervalSince1970: TimeInterval(stBuf.st_mtimespec.tv_sec))
-            let df = DateFormatter()
-            df.dateFormat = "dd/MM/yyyy HH:mm"
-            previewModifiedText = df.string(from: mod)
-        }
-
-        var isDir: ObjCBool = false
-        fm.fileExists(atPath: firstURL.path, isDirectory: &isDir)
-        if !isDir.boolValue {
-            previewRouteHint = MarkdownConverterService.routeDescription(for: firstURL)
         } else {
-            previewRouteHint = "Thư mục • Hỗ trợ gộp sang 1 file AI .md"
+            previewImage = NSWorkspace.shared.icon(forFile: path)
         }
 
-        // Fallback immediate icon while QuickLook renders high-DPI preview
-        previewImage = NSWorkspace.shared.icon(forFile: firstURL.path)
+        // Read stat metadata on background thread so CloudStorage never blocks UI
+        Task.detached(priority: .utility) {
+            var sizeStr = ""
+            var modStr = ""
+            var stBuf = Darwin.stat()
+            if Darwin.lstat(path, &stBuf) == 0 {
+                if (stBuf.st_mode & S_IFMT) != S_IFDIR {
+                    sizeStr = ByteCountFormatter.string(fromByteCount: Int64(stBuf.st_size), countStyle: .file)
+                }
+                let mod = Date(timeIntervalSince1970: TimeInterval(stBuf.st_mtimespec.tv_sec))
+                let df = DateFormatter()
+                df.dateFormat = "dd/MM/yyyy HH:mm"
+                modStr = df.string(from: mod)
+            }
+            let finalSize = sizeStr
+            let finalMod = modStr
+            await MainActor.run {
+                let vm = LauncherViewModel.shared
+                guard vm.previewGeneration == gen else { return }
+                vm.previewFileSizeText = finalSize
+                vm.previewModifiedText = finalMod
+            }
+        }
 
         let req = QLThumbnailGenerator.Request(
             fileAt: firstURL,
@@ -545,7 +832,8 @@ final class LauncherViewModel: ObservableObject {
         QLThumbnailGenerator.shared.generateBestRepresentation(for: req) { [weak self] rep, _ in
             guard let nsImg = rep?.nsImage else { return }
             Task { @MainActor in
-                self?.previewImage = nsImg
+                guard let self, self.previewGeneration == gen else { return }
+                self.previewImage = nsImg
             }
         }
     }
@@ -571,15 +859,16 @@ final class LauncherViewModel: ObservableObject {
     func executeAtIndex(_ index: Int, modifiers: NSEvent.ModifierFlags) {
         guard index >= 0 && index < activeListCount else { return }
         selectedIndex = index
-        executeCurrentSelection(modifiers: modifiers)
+        executeCurrentSelection(modifiers: modifiers.cleanShortcutModifiers)
     }
 
     func executeCurrentSelection(modifiers: NSEvent.ModifierFlags) {
+        let cleanMods = modifiers.cleanShortcutModifiers
         switch screenMode {
         case .search:
             guard selectedIndex >= 0 && selectedIndex < searchResults.count else { return }
             let item = searchResults[selectedIndex]
-            handleSearchItemExecution(item, modifiers: modifiers)
+            handleSearchItemExecution(item, modifiers: cleanMods)
 
         case .universalActions(let target):
             guard selectedIndex >= 0 && selectedIndex < filteredActions.count else { return }
@@ -587,7 +876,7 @@ final class LauncherViewModel: ObservableObject {
             UniversalActionExecutor.shared.execute(
                 action: action,
                 target: target,
-                modifierFlags: modifiers,
+                modifierFlags: cleanMods,
                 viewModel: self
             )
 
@@ -603,7 +892,7 @@ final class LauncherViewModel: ObservableObject {
             UniversalActionExecutor.shared.performFileTransfer(
                 operation: op,
                 sources: sources,
-                destinationFolder: URL(fileURLWithPath: folderPath)
+                destinationFolder: URL(fileURLWithPath: folderPath, isDirectory: true)
             )
 
         case .markdownPreview(_, _, _, let markdown, _, _):
@@ -620,9 +909,13 @@ final class LauncherViewModel: ObservableObject {
 
     func openUniversalActionsForSelectedSearchItem() {
         guard case .search = screenMode,
-              selectedIndex >= 0 && selectedIndex < searchResults.count,
-              let path = searchResults[selectedIndex].path else { return }
-        openUniversalActions(for: .files([URL(fileURLWithPath: path)]), directExternalTrigger: false)
+              selectedIndex >= 0 && selectedIndex < searchResults.count else { return }
+        let item = searchResults[selectedIndex]
+        guard let path = item.path else { return }
+        openUniversalActions(
+            for: .files([URL(fileURLWithPath: path, isDirectory: item.isDirectory)]),
+            directExternalTrigger: false
+        )
     }
 
     private func handleSearchItemExecution(_ item: SearchResultItem, modifiers: NSEvent.ModifierFlags) {
@@ -688,6 +981,24 @@ final class LauncherViewModel: ObservableObject {
         case .parentFolder(let parentPath):
             enterBrowseMode(at: parentPath)
 
+        case .openInFinder(let folderPath):
+            let folderURL = URL(fileURLWithPath: folderPath, isDirectory: true)
+            GoogleDriveIndexService.shared.recordUsed(folderPath)
+            if modifiers.contains(.shift) {
+                openUniversalActions(for: .files([folderURL]), directExternalTrigger: false)
+                return
+            }
+            if modifiers.contains(.option) {
+                copyDriveOrLocalLinkAsync(path: folderPath, isDirectory: true)
+                return
+            }
+            if modifiers.contains(.control) {
+                openDriveWebOrLocalAsync(path: folderPath, isDirectory: true)
+                return
+            }
+            LauncherPanelController.shared.hide()
+            NSWorkspace.shared.open(folderURL)
+
         case .localApp(let appPath):
             LauncherPanelController.shared.hide()
             if modifiers.contains(.command) {
@@ -697,7 +1008,7 @@ final class LauncherViewModel: ObservableObject {
             }
 
         case .driveFolder(let path), .driveFile(let path):
-            let fileURL = URL(fileURLWithPath: path)
+            let fileURL = URL(fileURLWithPath: path, isDirectory: item.isDirectory)
             GoogleDriveIndexService.shared.recordUsed(path)
 
             if modifiers.contains(.shift) {
@@ -710,19 +1021,40 @@ final class LauncherViewModel: ObservableObject {
                 return
             }
             if modifiers.contains(.option) {
+                copyDriveOrLocalLinkAsync(path: path, isDirectory: item.isDirectory)
+                return
+            }
+            if modifiers.contains(.control) {
+                openDriveWebOrLocalAsync(path: path, isDirectory: item.isDirectory)
+                return
+            }
+
+            // Default Enter / Click (no modifier):
+            if item.isDirectory {
+                enterBrowseMode(at: path)
+            } else {
                 LauncherPanelController.shared.hide()
-                if let gd = GoogleDriveIndexService.googleDriveURLs(for: path) {
-                    let pb = NSPasteboard.general
-                    pb.clearContents()
+                NSWorkspace.shared.open(fileURL)
+            }
+        }
+    }
+
+    private func copyDriveOrLocalLinkAsync(path: String, isDirectory: Bool) {
+        LauncherPanelController.shared.hide()
+        let lastComponent = (path as NSString).lastPathComponent
+        Task.detached(priority: .userInitiated) {
+            let gd = GoogleDriveIndexService.googleDriveURLs(for: path, isDirectoryHint: isDirectory)
+            await MainActor.run {
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                if let gd {
                     pb.setString(gd.shareURL.absoluteString, forType: .string)
                     FloatingToastController.shared.showSuccess(
                         title: "Đã sao chép liên kết chia sẻ Google Drive",
-                        subtitle: fileURL.lastPathComponent,
+                        subtitle: lastComponent,
                         symbol: "link"
                     )
                 } else {
-                    let pb = NSPasteboard.general
-                    pb.clearContents()
                     pb.setString(path, forType: .string)
                     FloatingToastController.shared.showSuccess(
                         title: "Đã sao chép đường dẫn cục bộ",
@@ -730,24 +1062,20 @@ final class LauncherViewModel: ObservableObject {
                         symbol: "link"
                     )
                 }
-                return
             }
-            if modifiers.contains(.control) {
-                LauncherPanelController.shared.hide()
-                if let gd = GoogleDriveIndexService.googleDriveURLs(for: path) {
+        }
+    }
+
+    private func openDriveWebOrLocalAsync(path: String, isDirectory: Bool) {
+        LauncherPanelController.shared.hide()
+        Task.detached(priority: .userInitiated) {
+            let gd = GoogleDriveIndexService.googleDriveURLs(for: path, isDirectoryHint: isDirectory)
+            await MainActor.run {
+                if let gd {
                     NSWorkspace.shared.open(gd.webURL)
                 } else {
-                    NSWorkspace.shared.open(fileURL)
+                    NSWorkspace.shared.open(URL(fileURLWithPath: path, isDirectory: isDirectory))
                 }
-                return
-            }
-
-            // Default Enter (no modifier):
-            if item.isDirectory {
-                enterBrowseMode(at: path)
-            } else {
-                LauncherPanelController.shared.hide()
-                NSWorkspace.shared.open(fileURL)
             }
         }
     }

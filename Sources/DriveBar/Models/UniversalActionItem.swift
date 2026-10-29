@@ -85,6 +85,7 @@ struct UniversalActionDefinition: Identifiable, Equatable, Sendable {
     let requiresBundle: Bool
     let priority: Int
 
+    @MainActor
     func matches(target: ActionTarget, isInsideGoogleDrive: Bool) -> Bool {
         switch target {
         case .files(let urls, _):
@@ -97,12 +98,23 @@ struct UniversalActionDefinition: Identifiable, Equatable, Sendable {
             var hasBundle = false
 
             for url in urls {
-                var isDir: ObjCBool = false
-                if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) {
+                let path = url.path
+                let isDirVal: Bool
+                let exists: Bool
+                if path.contains("/Library/CloudStorage/") {
+                    exists = true
+                    isDirVal = GoogleDriveIndexService.shared.isKnownDirectory(path, hasDirectoryHint: url.hasDirectoryPath)
+                } else {
+                    var isDirObj: ObjCBool = false
+                    exists = FileManager.default.fileExists(atPath: path, isDirectory: &isDirObj)
+                    isDirVal = isDirObj.boolValue
+                }
+
+                if exists {
                     let ext = url.pathExtension.lowercased()
                     let isPkg = ["app", "bundle", "framework", "xcodeproj", "xcworkspace", "alfredworkflow", "prefpane"].contains(ext)
                     if isPkg { hasBundle = true }
-                    if isDir.boolValue && !isPkg {
+                    if isDirVal && !isPkg {
                         hasFolder = true
                     } else {
                         hasFile = true

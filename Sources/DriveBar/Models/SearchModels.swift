@@ -88,12 +88,20 @@ struct HistoryRecord: Codable, Sendable {
 enum ResultItemKind: Equatable {
     case driveFolder(path: String)
     case driveFile(path: String)
+    case openInFinder(path: String)
     case localApp(path: String)
     case parentFolder(path: String)
     case systemCommand(id: String)
     case aiQuickCommand(action: String)
     case webURLQuickConvert(url: URL, preview: Bool)
     case infoBanner
+}
+
+extension NSEvent.ModifierFlags {
+    /// Intentional shortcut modifiers only (Command, Option, Control, Shift), ignoring CapsLock, Fn, and NumericPad.
+    var cleanShortcutModifiers: NSEvent.ModifierFlags {
+        intersection([.command, .option, .control, .shift])
+    }
 }
 
 struct SearchResultItem: Identifiable, Equatable {

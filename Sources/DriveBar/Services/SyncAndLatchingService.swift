@@ -59,9 +59,9 @@ final class SyncAndLatchingService: ObservableObject {
         case .files(let urls, _):
             guard let first = urls.first else { return "file:any" }
             if urls.count > 1 { return "files:multi" }
-            var isDir: ObjCBool = false
-            FileManager.default.fileExists(atPath: first.path, isDirectory: &isDir)
-            if isDir.boolValue { return "folder" }
+            if GoogleDriveIndexService.shared.isKnownDirectory(first.path, hasDirectoryHint: first.hasDirectoryPath) {
+                return "folder"
+            }
             let ext = first.pathExtension.lowercased()
             return ext.isEmpty ? "file:noext" : "ext:\(ext)"
         case .url:

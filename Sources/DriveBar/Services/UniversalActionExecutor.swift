@@ -241,42 +241,63 @@ final class UniversalActionExecutor {
         case "gdrive.open_web":
             LauncherPanelController.shared.hide()
             guard let first = urls.first else { return }
-            if let gd = GoogleDriveIndexService.googleDriveURLs(for: first.path) {
-                NSWorkspace.shared.open(gd.webURL)
-            } else {
-                FloatingToastController.shared.showError(
-                    title: "Không lấy được liên kết Google Drive",
-                    subtitle: first.lastPathComponent
-                )
+            let path = first.path
+            let name = first.lastPathComponent
+            Task.detached(priority: .userInitiated) {
+                let gd = GoogleDriveIndexService.googleDriveURLs(for: path)
+                await MainActor.run {
+                    if let gd {
+                        NSWorkspace.shared.open(gd.webURL)
+                    } else {
+                        FloatingToastController.shared.showError(
+                            title: "Không lấy được liên kết Google Drive",
+                            subtitle: name
+                        )
+                    }
+                }
             }
 
         case "gdrive.copy_link":
             LauncherPanelController.shared.hide()
             guard let first = urls.first else { return }
-            if let gd = GoogleDriveIndexService.googleDriveURLs(for: first.path) {
-                copyString(gd.shareURL.absoluteString)
-                FloatingToastController.shared.showSuccess(
-                    title: "Đã chép liên kết chia sẻ Google Drive",
-                    subtitle: first.lastPathComponent,
-                    symbol: "link"
-                )
-            } else {
-                FloatingToastController.shared.showError(
-                    title: "Không tìm thấy ID Google Drive",
-                    subtitle: "Tệp có thể chưa được đồng bộ lên đám mây"
-                )
+            let path = first.path
+            let name = first.lastPathComponent
+            Task.detached(priority: .userInitiated) {
+                let gd = GoogleDriveIndexService.googleDriveURLs(for: path)
+                await MainActor.run {
+                    if let gd {
+                        self.copyString(gd.shareURL.absoluteString)
+                        FloatingToastController.shared.showSuccess(
+                            title: "Đã chép liên kết chia sẻ Google Drive",
+                            subtitle: name,
+                            symbol: "link"
+                        )
+                    } else {
+                        FloatingToastController.shared.showError(
+                            title: "Không tìm thấy ID Google Drive",
+                            subtitle: "Tệp có thể chưa được đồng bộ lên đám mây"
+                        )
+                    }
+                }
             }
 
         case "gdrive.share":
             LauncherPanelController.shared.hide()
             guard let first = urls.first else { return }
-            if let gd = GoogleDriveIndexService.googleDriveURLs(for: first.path) {
-                NSWorkspace.shared.open(gd.shareURL)
-            } else {
-                FloatingToastController.shared.showError(
-                    title: "Không mở được trang chia sẻ",
-                    subtitle: first.lastPathComponent
-                )
+            let path = first.path
+            let name = first.lastPathComponent
+            Task.detached(priority: .userInitiated) {
+                let gd = GoogleDriveIndexService.googleDriveURLs(for: path)
+                await MainActor.run {
+                    if let gd {
+                        NSWorkspace.shared.open(gd.shareURL)
+                    } else {
+                        FloatingToastController.shared.showError(
+                            title: "Không mở được trang chia sẻ",
+                            subtitle: name
+                        )
+                    }
+                }
             }
 
         case "gdrive.offline":
@@ -313,9 +334,8 @@ final class UniversalActionExecutor {
 
         case "file.browse":
             guard let first = urls.first else { return }
-            var isDir: ObjCBool = false
-            FileManager.default.fileExists(atPath: first.path, isDirectory: &isDir)
-            let browseDir = isDir.boolValue ? first.path : first.deletingLastPathComponent().path
+            let isDir = GoogleDriveIndexService.shared.isKnownDirectory(first.path, hasDirectoryHint: first.hasDirectoryPath)
+            let browseDir = isDir ? first.path : first.deletingLastPathComponent().path
             viewModel.enterBrowseMode(at: browseDir)
 
         case "file.quicklook":
@@ -340,9 +360,8 @@ final class UniversalActionExecutor {
         case "file.open_terminal":
             LauncherPanelController.shared.hide()
             guard let first = urls.first else { return }
-            var isDir: ObjCBool = false
-            FileManager.default.fileExists(atPath: first.path, isDirectory: &isDir)
-            let dirURL = isDir.boolValue ? first : first.deletingLastPathComponent()
+            let isDir = GoogleDriveIndexService.shared.isKnownDirectory(first.path, hasDirectoryHint: first.hasDirectoryPath)
+            let dirURL = isDir ? first : first.deletingLastPathComponent()
             let iTermURL = URL(fileURLWithPath: "/Applications/iTerm.app")
             let termApp = FileManager.default.fileExists(atPath: iTermURL.path)
                 ? iTermURL
