@@ -382,8 +382,11 @@ final class WindowSwitcherService: ObservableObject {
                 return 5_000 + Int(pid % 1_000)
             }()
 
-            var matchedWIDs = Set<CGWindowID>()
+            var handledWIDs = Set<CGWindowID>()
             var appProducedWindow = false
+            var axQuerySucceeded = false
+            var axRawCount = 0
+            let isSafariFamily = Self.isSafariBundleIdentifier(bundleID)
 
             // 2A. Rich Accessibility Window Discovery (exact window titles, minimized windows, individual AX handles)
             if axTrusted && pid != ownPID {
@@ -393,41 +396,70 @@ final class WindowSwitcherService: ObservableObject {
                 var winsRef: CFTypeRef?
                 if AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &winsRef) == .success,
                    let axWins = winsRef as? [AXUIElement] {
+                    axQuerySucceeded = true
+                    axRawCount = axWins.count
+
                     for (axIdx, axWin) in axWins.enumerated() {
-                        let subrole = Self.axString(axWin, kAXSubroleAttribute) ?? ""
-                        let role = Self.axString(axWin, kAXRoleAttribute) ?? ""
-                        if role == "AXScrollArea" || subrole == "AXDesktop" || subrole == "AXUnknown" {
-                            continue
-                        }
-                        if !subrole.isEmpty && subrole != "AXStandardWindow" && subrole != "AXDialog" && subrole != "AXFloatingWindow" {
-                            continue
-                        }
-
-                        let isMin = Self.axBool(axWin, kAXMinimizedAttribute) ?? false
-                        if isMin && !settings.windowSwitcherShowMinimized {
-                            var skipWid: CGWindowID = 0
-                            if _AXUIElementGetWindow(axWin, &skipWid) == .success && skipWid != 0 {
-                                matchedWIDs.insert(skipWid)
-                            }
-                            continue
-                        }
-
+                        // Record WID immediately BEFORE any filter `continue` so Step 2B can NEVER
+                        // resurrect an AX element that Accessibility explicitly classified as non-standard!
                         var wid: CGWindowID = 0
                         let hasWID = (_AXUIElementGetWindow(axWin, &wid) == .success && wid != 0)
                         if hasWID {
-                            if matchedWIDs.contains(wid) { continue }
-                            matchedWIDs.insert(wid)
+                            if handledWIDs.contains(wid) { continue }
+                            handledWIDs.insert(wid)
                         }
 
-                        let axTitle = Self.axString(axWin, kAXTitleAttribute) ?? ""
+                        let role = Self.axString(axWin, kAXRoleAttribute) ?? ""
+                        let subrole = Self.axString(axWin, kAXSubroleAttribute) ?? ""
+                        guard role == "AXWindow" else { continue }
+                        guard subrole == "AXStandardWindow" || subrole == "AXDialog" else { continue }
+
+                        let isMin = Self.axBool(axWin, kAXMinimizedAttribute) ?? false
+                        if isMin && !settings.windowSwitcherShowMinimized {
+                            continue
+                        }
+
+                        let rawAXTitle = Self.axString(axWin, kAXTitleAttribute) ?? ""
+                        let axTitle = rawAXTitle.trimmingCharacters(in: .whitespacesAndNewlines)
                         let isFull = Self.axBool(axWin, "AXFullScreen") ?? false
+
+                        let hasCloseBtn = Self.axHasElement(axWin, kAXCloseButtonAttribute)
+                        let hasMinBtn = Self.axHasElement(axWin, kAXMinimizeButtonAttribute)
+                        let hasZoomBtn = Self.axHasElement(axWin, kAXZoomButtonAttribute)
+                            || Self.axHasElement(axWin, "AXFullScreenButton")
+
+                        // Exclude borderless/auxiliary internal AXWindows (popovers, completion lists, backdrops)
+                        if !hasCloseBtn && !hasMinBtn && !hasZoomBtn && !isFull {
+                            if isSafariFamily || subrole != "AXStandardWindow" || axTitle.isEmpty {
+                                continue
+                            }
+                        }
+
+                        // Every real Safari browser/settings window has a non-empty AXTitle (e.g. "Start Page",
+                        // "Trang bắt đầu", "Untitled", webpage title, or Settings tab title); empty-title Safari
+                        // AXWindows are internal StartPage / TabOverview / AutoFill / Fullscreen helper windows.
+                        if isSafariFamily && axTitle.isEmpty {
+                            continue
+                        }
+
                         let cgEntry = hasWID ? cgByWID[wid] : nil
+
+                        // For non-minimized, non-hidden windows with a CGWindowID, WindowServer must actually own
+                        // a visible layer-0 backing surface on >= 1 Space (eliminates alpha-0 / ordered-out / off-Space ghosts!).
+                        if !isMin && !appHidden && hasWID {
+                            guard let cgEntry else {
+                                continue
+                            }
+                            if cid != 0 && cgEntry.spaceIDs.isEmpty && !cgEntry.isOnScreen {
+                                continue
+                            }
+                        }
 
                         var winBounds = cgEntry?.bounds ?? Self.axBounds(axWin) ?? .zero
                         if bundleID == "com.apple.finder" && axTitle.isEmpty && winBounds.width >= mainDisplayBounds.width {
                             continue
                         }
-                        if winBounds.width < 80 && winBounds.height < 60 && !isMin {
+                        if (winBounds.width < 110 || winBounds.height < 80) && !isMin {
                             continue
                         }
                         if winBounds == .zero {
@@ -437,7 +469,7 @@ final class WindowSwitcherService: ObservableObject {
                         let resolvedLoc = Self.resolveWindowLocation(
                             bounds: winBounds,
                             spaceIDs: cgEntry?.spaceIDs ?? [],
-                            cgIsOnScreen: cgEntry?.isOnScreen ?? true,
+                            cgIsOnScreen: cgEntry?.isOnScreen ?? false,
                             isMinimized: isMin,
                             isAppHidden: appHidden,
                             isFullscreen: isFull,
@@ -508,13 +540,27 @@ final class WindowSwitcherService: ObservableObject {
 
             // 2B. Windows on OTHER Desktops / Full-Screen Spaces (verified via CGS Space membership!)
             if let cgWins = cgByPID[pid] {
-                for cgEntry in cgWins where !matchedWIDs.contains(cgEntry.wid) {
-                    // Eliminate phantom offscreen backing windows (e.g. Electron/Singlebox/Office 500x500 or titlebar proxies):
+                for cgEntry in cgWins where !handledWIDs.contains(cgEntry.wid) {
+                    // Eliminate phantom offscreen backing windows (e.g. Electron/Singlebox/Safari 500x500 or titlebar proxies):
                     // Every real user window on any Desktop or Full-Screen Space belongs to >= 1 CGS Space!
-                    if cid != 0 && cgEntry.spaceIDs.isEmpty && !cgEntry.isOnScreen {
+                    if cid != 0 && cgEntry.spaceIDs.isEmpty {
                         continue
                     }
-                    if cid != 0 && cgEntry.spaceIDs.isEmpty {
+
+                    // CRITICAL: kAXWindowsAttribute (Step 2A) ALREADY returned 100% of real user windows on
+                    // currently active Spaces across all displays! Any remaining on-screen / active-Space CGWindow
+                    // not in kAXWindowsAttribute is an internal child/backdrop/popover/toolbar surface (e.g. Safari).
+                    let isOnAnyActiveSpace = cgEntry.isOnScreen || cgEntry.spaceIDs.contains(where: {
+                        spaceCatalog.activeSpaceIDsAllDisplays.contains($0)
+                    })
+                    if axQuerySucceeded && isOnAnyActiveSpace {
+                        if appProducedWindow || axRawCount > 0 || isSafariFamily || bundleID.hasPrefix("com.apple.") {
+                            continue
+                        }
+                    }
+
+                    // If ScreenCaptureKit has already cataloged shareable windows, exclude non-shareable helper CGWindows
+                    if !scWindowsByID.isEmpty && scWindowsByID[cgEntry.wid] == nil {
                         continue
                     }
 
@@ -526,7 +572,13 @@ final class WindowSwitcherService: ObservableObject {
                         continue
                     }
 
-                    let scTitle = scWindowTitlesByID[cgEntry.wid] ?? cgEntry.cgTitle ?? ""
+                    let scTitle = (scWindowTitlesByID[cgEntry.wid] ?? cgEntry.cgTitle ?? "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                    if isSafariFamily && !scWindowsByID.isEmpty && scTitle.isEmpty {
+                        continue
+                    }
+
                     let resolvedLoc = Self.resolveWindowLocation(
                         bounds: cgEntry.bounds,
                         spaceIDs: cgEntry.spaceIDs,
@@ -537,6 +589,18 @@ final class WindowSwitcherService: ObservableObject {
                         displays: displays,
                         spaceCatalog: spaceCatalog
                     )
+
+                    // Filter NSToolbarFullScreenWindow & shallow blank toolbar/tabbar companion CGWindows on other Spaces
+                    if scTitle.isEmpty && cgEntry.bounds.height < 165 {
+                        let hasLargerSiblingOnSameSpace = cgWins.contains { other in
+                            other.wid != cgEntry.wid &&
+                            other.bounds.height >= max(220, cgEntry.bounds.height * 1.8) &&
+                            !Set(other.spaceIDs).isDisjoint(with: cgEntry.spaceIDs)
+                        }
+                        if hasLargerSiblingOnSameSpace || resolvedLoc.isFullScreenSpace {
+                            continue
+                        }
+                    }
 
                     let isFull = resolvedLoc.isFullScreenSpace || (
                         abs(cgEntry.bounds.width - resolvedLoc.display.cgBounds.width) <= 4 &&
@@ -781,16 +845,43 @@ final class WindowSwitcherService: ObservableObject {
             var titleUpdated = false
             for scWin in content.windows {
                 winMap[scWin.windowID] = scWin
-                if let t = scWin.title, !t.isEmpty, scWindowTitlesByID[scWin.windowID] != t {
+                if let t = scWin.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !t.isEmpty,
+                   scWindowTitlesByID[scWin.windowID] != t {
                     scWindowTitlesByID[scWin.windowID] = t
                     titleUpdated = true
                 }
             }
             self.scWindowsByID = winMap
 
-            // Backfill titles for windows on other Spaces without disturbing selection or IDs
+            // Prune any cross-Space Step 2B ghost CGWindows that ScreenCaptureKit confirms are non-shareable
+            // or empty Safari auxiliary surfaces, AND backfill cross-Space window titles cleanly
+            var didMutateSessionItems = false
+            let beforeCount = self.allSessionItems.count
+            self.allSessionItems.removeAll { item in
+                guard item.axWindow == nil,
+                      !item.isMinimized,
+                      !item.isAppHidden,
+                      !item.isWindowlessApp,
+                      let wid = item.windowID else {
+                    return false
+                }
+                guard let scWin = winMap[wid] else {
+                    return true
+                }
+                if Self.isSafariBundleIdentifier(item.bundleIdentifier) {
+                    let liveTitle = (scWin.title ?? item.windowTitle).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if liveTitle.isEmpty {
+                        return true
+                    }
+                }
+                return false
+            }
+            if self.allSessionItems.count != beforeCount {
+                didMutateSessionItems = true
+            }
+
             if titleUpdated {
-                var didChangeAny = false
                 for idx in self.allSessionItems.indices {
                     if self.allSessionItems[idx].windowTitle.isEmpty,
                        let wid = self.allSessionItems[idx].windowID,
@@ -818,23 +909,36 @@ final class WindowSwitcherService: ObservableObject {
                             isWindowlessApp: old.isWindowlessApp,
                             axWindow: old.axWindow
                         )
-                        didChangeAny = true
+                        didMutateSessionItems = true
                     }
                 }
-                if didChangeAny {
-                    applySearchFilterFromSessionCache(resetSelectionToFirst: false)
-                }
+            }
+
+            if didMutateSessionItems {
+                applySearchFilterFromSessionCache(resetSelectionToFirst: false)
             }
 
             // Capture High-Res Zoom Preview for currently selected item FIRST
             requestHighResZoomPreviewForSelection(debounced: false)
 
-            // Capture strip thumbnails in batches to avoid flooding SwiftUI layout during rapid Tab navigation
+            // Capture strip thumbnails in batches, pruning any 100% transparent empty ghost windows
+            let activeSnapshot = self.allSessionItems
             var pendingBatch: [CGWindowID: NSImage] = [:]
-            for item in targetItems {
+            var transparentGhostWIDs = Set<CGWindowID>()
+
+            for item in activeSnapshot {
                 if Task.isCancelled { break }
                 guard let wid = item.windowID, let scWin = winMap[wid] else { continue }
                 if let cgImg = await Self.captureSCWindowImage(scWin: scWin, maxDimension: 520) {
+                    let shouldVerifyOpacity = !item.isMinimized && !item.isAppHidden && !item.isWindowlessApp && (
+                        item.windowTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                        Self.isSafariBundleIdentifier(item.bundleIdentifier)
+                    )
+                    if shouldVerifyOpacity && Self.isImageCompletelyTransparent(cgImg) {
+                        transparentGhostWIDs.insert(wid)
+                        continue
+                    }
+
                     let nsImg = NSImage(cgImage: cgImg, size: NSSize(width: cgImg.width, height: cgImg.height))
                     pendingBatch[wid] = nsImg
                     if self.selectedItem?.windowID == wid && self.zoomedPreviewImage == nil {
@@ -852,6 +956,17 @@ final class WindowSwitcherService: ObservableObject {
             if !pendingBatch.isEmpty && !Task.isCancelled {
                 for (k, v) in pendingBatch {
                     self.thumbnails[k] = v
+                }
+            }
+            if !transparentGhostWIDs.isEmpty && !Task.isCancelled {
+                let prevCount = self.allSessionItems.count
+                self.allSessionItems.removeAll { item in
+                    guard let wid = item.windowID else { return false }
+                    return transparentGhostWIDs.contains(wid)
+                }
+                if self.allSessionItems.count != prevCount {
+                    applySearchFilterFromSessionCache(resetSelectionToFirst: false)
+                    requestHighResZoomPreviewForSelection(debounced: false)
                 }
             }
         }
@@ -1199,6 +1314,46 @@ final class WindowSwitcherService: ObservableObject {
             }
         }
         return best
+    }
+
+    private nonisolated static func isSafariBundleIdentifier(_ bundleID: String) -> Bool {
+        switch bundleID {
+        case "com.apple.Safari", "com.apple.SafariTechnologyPreview":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private nonisolated static func isImageCompletelyTransparent(_ cgImage: CGImage) -> Bool {
+        let sampleSize = 8
+        var rgba = [UInt8](repeating: 0, count: sampleSize * sampleSize * 4)
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+        guard let ctx = CGContext(
+            data: &rgba,
+            width: sampleSize,
+            height: sampleSize,
+            bitsPerComponent: 8,
+            bytesPerRow: sampleSize * 4,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ) else {
+            return false
+        }
+        ctx.interpolationQuality = .low
+        ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: sampleSize, height: sampleSize))
+        for idx in stride(from: 3, to: rgba.count, by: 4) {
+            if rgba[idx] > 2 {
+                return false
+            }
+        }
+        return true
+    }
+
+    private static func axHasElement(_ elem: AXUIElement, _ attr: String) -> Bool {
+        var ref: CFTypeRef?
+        return AXUIElementCopyAttributeValue(elem, attr as CFString, &ref) == .success && ref != nil
     }
 
     private static func axString(_ elem: AXUIElement, _ attr: String) -> String? {

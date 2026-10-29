@@ -28,6 +28,11 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
     private var shiftInvalidatedByOtherInput: Bool = false
 
     var isSuppressingAutoHide: Bool = false
+    private var screenshotGraceUntil: TimeInterval = 0
+
+    var shouldSuppressAutoHide: Bool {
+        isSuppressingAutoHide || ProcessInfo.processInfo.systemUptime < screenshotGraceUntil
+    }
 
     var isVisible: Bool {
         panel?.isVisible ?? false
@@ -149,6 +154,7 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
         shiftTapStartTime = nil
         shiftInvalidatedByOtherInput = false
         isSuppressingAutoHide = false
+        screenshotGraceUntil = 0
         if QuickLookCoordinator.shared.isQuickLookVisible {
             QuickLookCoordinator.shared.closeQuickLook(restoreLauncherFocus: false)
         }
@@ -162,7 +168,7 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        if isSuppressingAutoHide {
+        if shouldSuppressAutoHide {
             return
         }
         if QuickLookCoordinator.shared.isQuickLookVisible {
@@ -312,6 +318,15 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
         let vm = LauncherViewModel.shared
         let flags = event.modifierFlags.cleanShortcutModifiers
         let code = Int(event.keyCode)
+
+        // 0. Pass screenshot shortcuts (⌘⇧1..6, ⌘⌃⇧1..6, ⌘⌥⇧1..6) straight through without auto-hiding
+        if flags.contains([.command, .shift]),
+           (code == kVK_ANSI_1 || code == kVK_ANSI_2 || code == kVK_ANSI_3 ||
+            code == kVK_ANSI_4 || code == kVK_ANSI_5 || code == kVK_ANSI_6) {
+            screenshotGraceUntil = ProcessInfo.processInfo.systemUptime + 10.0
+            return false
+        }
+        screenshotGraceUntil = 0
 
         // 1. Escape handling (close Quick Look first if open!)
         if code == kVK_Escape {

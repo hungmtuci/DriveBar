@@ -20,6 +20,8 @@ private struct SharedTapConfig: Sendable {
     var isPinnedOpen: Bool = true
     var activeHoldModifierMaskRaw: UInt64 = 0
     var recordingTarget: HotKeyService.RecordingTarget? = nil
+    var screenshotGraceUntil: TimeInterval = 0
+    var didResignDuringScreenshotGrace: Bool = false
 }
 
 @MainActor
@@ -31,6 +33,11 @@ final class WindowSwitcherController: NSObject, ObservableObject {
     @Published var isPinnedOpen: Bool = true
 
     var isSuppressingResignDismiss: Bool = false
+    private var screenshotGraceUntil: TimeInterval = 0
+
+    var shouldSuppressAutoDismiss: Bool {
+        isSuppressingResignDismiss || ProcessInfo.processInfo.systemUptime < screenshotGraceUntil
+    }
 
     private var stagePanel: WindowSwitcherStagePanel?
     private var permissionPollTimer: Timer?
@@ -65,6 +72,7 @@ final class WindowSwitcherController: NSObject, ObservableObject {
         let visible = self.isVisible
         let pinned = self.isPinnedOpen
         let holdRaw = self.activeHoldModifierMask.rawValue
+        let graceUntil = self.screenshotGraceUntil
 
         tapStateLock.lock()
         sharedTapConfig.enableWindowSwitcher = settings.enableWindowSwitcher
@@ -76,6 +84,10 @@ final class WindowSwitcherController: NSObject, ObservableObject {
         sharedTapConfig.isPinnedOpen = pinned
         sharedTapConfig.activeHoldModifierMaskRaw = holdRaw
         sharedTapConfig.recordingTarget = recTarget
+        sharedTapConfig.screenshotGraceUntil = graceUntil
+        if !visible {
+            sharedTapConfig.didResignDuringScreenshotGrace = false
+        }
         tapStateLock.unlock()
     }
 
@@ -352,43 +364,93 @@ final class WindowSwitcherController: NSObject, ObservableObject {
         let hasCtrl = cleanFlags.contains(.maskControl)
         let hasOpt = cleanFlags.contains(.maskAlternate)
 
-        switch code {
-        case kVK_Escape:
+        let isExactCmd = (cleanFlags == .maskCommand)
+        let isExactCtrl = (cleanFlags == .maskControl)
+        let isExactCmdOrCtrl = isExactCmd || isExactCtrl
+
+        // Pass system & third-party screenshot shortcuts (⌘⇧1..6, ⌘⌃⇧1..6, ⌘⌥⇧1..6) straight through untouched,
+        // and temporarily suppress auto-dismiss so users can even drag-capture Windows Preview itself!
+        if hasCmd && hasShift && Self.isScreenshotShortcutKeyCode(code) {
+            let deadline = ProcessInfo.processInfo.systemUptime + 10.0
+            controller.tapStateLock.lock()
+            controller.sharedTapConfig.screenshotGraceUntil = deadline
+            controller.sharedTapConfig.didResignDuringScreenshotGrace = false
+            controller.tapStateLock.unlock()
             DispatchQueue.main.async {
-                WindowSwitcherController.shared.handleEscapeInSwitcher()
+                WindowSwitcherController.shared.activateScreenshotCaptureGrace(until: deadline)
+            }
+            return false
+        }
+
+        switch code {
+        case kVK_Escape where (cleanFlags.isEmpty || isExactCmd):
+            let now = ProcessInfo.processInfo.systemUptime
+            controller.tapStateLock.lock()
+            let passToScreenshotUI = (now < controller.sharedTapConfig.screenshotGraceUntil)
+                && controller.sharedTapConfig.didResignDuringScreenshotGrace
+            controller.sharedTapConfig.screenshotGraceUntil = 0
+            controller.sharedTapConfig.didResignDuringScreenshotGrace = false
+            controller.tapStateLock.unlock()
+
+            if passToScreenshotUI {
+                DispatchQueue.main.async {
+                    WindowSwitcherController.shared.clearScreenshotCaptureGrace()
+                }
+                return false
+            }
+
+            DispatchQueue.main.async {
+                let ctrl = WindowSwitcherController.shared
+                ctrl.clearScreenshotCaptureGrace()
+                ctrl.handleEscapeInSwitcher()
             }
             return true
 
         case kVK_Return, kVK_ANSI_KeypadEnter:
+            guard cleanFlags.isEmpty || cleanFlags == .maskShift else { break }
             controller.tapStateLock.lock()
             controller.sharedTapConfig.isSwitcherVisible = false
+            controller.sharedTapConfig.screenshotGraceUntil = 0
+            controller.sharedTapConfig.didResignDuringScreenshotGrace = false
             controller.tapStateLock.unlock()
             DispatchQueue.main.async {
-                WindowSwitcherController.shared.commitSelectionAndDismiss()
+                let ctrl = WindowSwitcherController.shared
+                ctrl.clearScreenshotCaptureGrace()
+                ctrl.commitSelectionAndDismiss()
             }
             return true
 
-        case kVK_Tab:
+        case kVK_Tab where !hasOpt:
             DispatchQueue.main.async {
-                WindowSwitcherController.shared.stepFromKeyboard(delta: hasShift ? -1 : 1)
+                let ctrl = WindowSwitcherController.shared
+                ctrl.clearScreenshotCaptureGrace()
+                ctrl.stepFromKeyboard(delta: hasShift ? -1 : 1)
             }
             return true
 
-        case kVK_ANSI_Grave where (hasCmd || hasOpt || hasCtrl):
+        case kVK_ANSI_Grave where (hasCmd || hasOpt || hasCtrl) && !(hasCmd && hasOpt):
             DispatchQueue.main.async {
-                WindowSwitcherController.shared.stepFromKeyboard(delta: hasShift ? 1 : -1)
+                let ctrl = WindowSwitcherController.shared
+                ctrl.clearScreenshotCaptureGrace()
+                ctrl.stepFromKeyboard(delta: hasShift ? 1 : -1)
             }
             return true
 
         case kVK_RightArrow, kVK_DownArrow:
+            guard !hasShift && !hasOpt else { break }
             DispatchQueue.main.async {
-                WindowSwitcherController.shared.stepFromKeyboard(delta: 1)
+                let ctrl = WindowSwitcherController.shared
+                ctrl.clearScreenshotCaptureGrace()
+                ctrl.stepFromKeyboard(delta: 1)
             }
             return true
 
         case kVK_LeftArrow, kVK_UpArrow:
+            guard !hasShift && !hasOpt else { break }
             DispatchQueue.main.async {
-                WindowSwitcherController.shared.stepFromKeyboard(delta: -1)
+                let ctrl = WindowSwitcherController.shared
+                ctrl.clearScreenshotCaptureGrace()
+                ctrl.stepFromKeyboard(delta: -1)
             }
             return true
 
@@ -396,12 +458,13 @@ final class WindowSwitcherController: NSObject, ObservableObject {
             break
         }
 
-        // Modifier-based Quick Window Actions (never conflict with typing search keywords!)
-        if hasCmd || hasCtrl {
+        // Strict single-modifier Quick Window Actions (NEVER swallow ⌘⇧1..4 screenshot chords or ⌘⌥ / ⌘⌃ system shortcuts!)
+        if isExactCmdOrCtrl {
             switch code {
             case kVK_ANSI_W:
                 DispatchQueue.main.async {
                     let ctrl = WindowSwitcherController.shared
+                    ctrl.clearScreenshotCaptureGrace()
                     ctrl.pinOpenFromInteraction()
                     WindowSwitcherService.shared.closeSelectedWindow()
                 }
@@ -410,6 +473,7 @@ final class WindowSwitcherController: NSObject, ObservableObject {
             case kVK_ANSI_M:
                 DispatchQueue.main.async {
                     let ctrl = WindowSwitcherController.shared
+                    ctrl.clearScreenshotCaptureGrace()
                     ctrl.pinOpenFromInteraction()
                     WindowSwitcherService.shared.toggleMinimizeSelectedWindow()
                 }
@@ -418,14 +482,16 @@ final class WindowSwitcherController: NSObject, ObservableObject {
             case kVK_ANSI_H:
                 DispatchQueue.main.async {
                     let ctrl = WindowSwitcherController.shared
+                    ctrl.clearScreenshotCaptureGrace()
                     ctrl.pinOpenFromInteraction()
                     WindowSwitcherService.shared.toggleHideSelectedApp()
                 }
                 return true
 
-            case kVK_ANSI_Q where hasCmd:
+            case kVK_ANSI_Q where isExactCmd:
                 DispatchQueue.main.async {
                     let ctrl = WindowSwitcherController.shared
+                    ctrl.clearScreenshotCaptureGrace()
                     ctrl.pinOpenFromInteraction()
                     WindowSwitcherService.shared.quitSelectedApp()
                 }
@@ -434,14 +500,16 @@ final class WindowSwitcherController: NSObject, ObservableObject {
             case kVK_ANSI_Y:
                 DispatchQueue.main.async {
                     let ctrl = WindowSwitcherController.shared
+                    ctrl.clearScreenshotCaptureGrace()
                     ctrl.pinOpenFromInteraction()
                     AppSettings.shared.windowSwitcherShowZoomPreview.toggle()
                 }
                 return true
 
-            case kVK_Space where hasCtrl:
+            case kVK_Space where isExactCtrl:
                 DispatchQueue.main.async {
                     let ctrl = WindowSwitcherController.shared
+                    ctrl.clearScreenshotCaptureGrace()
                     ctrl.pinOpenFromInteraction()
                     AppSettings.shared.windowSwitcherShowZoomPreview.toggle()
                 }
@@ -450,6 +518,7 @@ final class WindowSwitcherController: NSObject, ObservableObject {
             case kVK_ANSI_1:
                 DispatchQueue.main.async {
                     let ctrl = WindowSwitcherController.shared
+                    ctrl.clearScreenshotCaptureGrace()
                     ctrl.pinOpenFromInteraction()
                     AppSettings.shared.windowSwitcherScope = AppSettings.shared.windowSwitcherScope.nextCycle()
                     WindowSwitcherService.shared.rebuildFilteredItemsPreservingSelection()
@@ -459,6 +528,7 @@ final class WindowSwitcherController: NSObject, ObservableObject {
             case kVK_ANSI_2:
                 DispatchQueue.main.async {
                     let ctrl = WindowSwitcherController.shared
+                    ctrl.clearScreenshotCaptureGrace()
                     ctrl.pinOpenFromInteraction()
                     AppSettings.shared.windowSwitcherShowMinimized.toggle()
                     WindowSwitcherService.shared.rebuildFilteredItemsPreservingSelection()
@@ -468,6 +538,7 @@ final class WindowSwitcherController: NSObject, ObservableObject {
             case kVK_ANSI_3:
                 DispatchQueue.main.async {
                     let ctrl = WindowSwitcherController.shared
+                    ctrl.clearScreenshotCaptureGrace()
                     ctrl.pinOpenFromInteraction()
                     AppSettings.shared.windowSwitcherShowHiddenApps.toggle()
                     WindowSwitcherService.shared.rebuildFilteredItemsPreservingSelection()
@@ -477,22 +548,25 @@ final class WindowSwitcherController: NSObject, ObservableObject {
             case kVK_ANSI_4:
                 DispatchQueue.main.async {
                     let ctrl = WindowSwitcherController.shared
+                    ctrl.clearScreenshotCaptureGrace()
                     ctrl.pinOpenFromInteraction()
                     ctrl.toggleSameAppFilterLive()
                 }
                 return true
 
-            case kVK_Delete where hasCmd:
+            case kVK_Delete where isExactCmd:
                 DispatchQueue.main.async {
                     let ctrl = WindowSwitcherController.shared
+                    ctrl.clearScreenshotCaptureGrace()
                     ctrl.pinOpenFromInteraction()
                     WindowSwitcherService.shared.filterQuery = ""
                 }
                 return true
 
-            case kVK_ANSI_F where hasCmd:
+            case kVK_ANSI_F where isExactCmd:
                 DispatchQueue.main.async {
                     let ctrl = WindowSwitcherController.shared
+                    ctrl.clearScreenshotCaptureGrace()
                     ctrl.pinOpenFromInteraction()
                     WindowSwitcherService.shared.triggerSearchInputFocus()
                 }
@@ -505,9 +579,10 @@ final class WindowSwitcherController: NSObject, ObservableObject {
 
         // Let normal printable characters, Backspace, Space, Vietnamese Telex IME, and ⌘A/⌘C/⌘V/⌘X
         // flow directly into the focused search NSTextField inside WindowSwitcherStagePanel!
-        if !hasCmd && !hasCtrl {
+        if !hasCmd && !hasCtrl && !hasOpt {
             DispatchQueue.main.async {
                 let ctrl = WindowSwitcherController.shared
+                ctrl.clearScreenshotCaptureGrace()
                 ctrl.pinOpenFromInteraction()
                 ctrl.lastAcceptedHoverMouseLocation = NSEvent.mouseLocation
             }
@@ -516,6 +591,28 @@ final class WindowSwitcherController: NSObject, ObservableObject {
     }
 
     // MARK: - Main-Thread Navigation & Focus Helpers
+
+    func activateScreenshotCaptureGrace(until deadline: TimeInterval) {
+        screenshotGraceUntil = deadline
+        pinOpenFromInteraction()
+        syncSharedTapConfiguration()
+    }
+
+    func clearScreenshotCaptureGrace() {
+        guard screenshotGraceUntil != 0 else { return }
+        screenshotGraceUntil = 0
+        tapStateLock.lock()
+        sharedTapConfig.screenshotGraceUntil = 0
+        sharedTapConfig.didResignDuringScreenshotGrace = false
+        tapStateLock.unlock()
+    }
+
+    func noteAppDidResignActiveDuringScreenshotGrace() {
+        guard ProcessInfo.processInfo.systemUptime < screenshotGraceUntil else { return }
+        tapStateLock.lock()
+        sharedTapConfig.didResignDuringScreenshotGrace = true
+        tapStateLock.unlock()
+    }
 
     func pinOpenFromInteraction() {
         if !isPinnedOpen {
@@ -591,6 +688,7 @@ final class WindowSwitcherController: NSObject, ObservableObject {
         self.isPinnedOpen = pinnedOpen
         self.lastAcceptedHoverMouseLocation = NSEvent.mouseLocation
         self.isSuppressingResignDismiss = true
+        self.screenshotGraceUntil = 0
 
         WindowSwitcherService.shared.reloadSessionWindows(
             sameAppPID: targetSamePID,
@@ -602,6 +700,7 @@ final class WindowSwitcherController: NSObject, ObservableObject {
         ensureStagePanelCreated()
         guard let panel = stagePanel else {
             self.isSuppressingResignDismiss = false
+            syncSharedTapConfiguration()
             return
         }
 
@@ -688,6 +787,7 @@ final class WindowSwitcherController: NSObject, ObservableObject {
         isVisible = false
         isPinnedOpen = true
         activeHoldModifierMask = []
+        screenshotGraceUntil = 0
         syncSharedTapConfiguration()
         removeAuxiliaryMonitors()
         stagePanel?.orderOut(nil)
@@ -732,9 +832,21 @@ final class WindowSwitcherController: NSObject, ObservableObject {
     private func installAuxiliaryMonitors(useLocalKeyboardFallback: Bool) {
         removeAuxiliaryMonitors()
 
-        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .leftMouseUp]) { [weak self] event in
             DispatchQueue.main.async {
-                self?.dismissWithoutActivating(restorePreviousApp: false)
+                guard let self else { return }
+                let now = ProcessInfo.processInfo.systemUptime
+                if now < self.screenshotGraceUntil {
+                    if event.type == .leftMouseUp {
+                        let shortened = min(self.screenshotGraceUntil, now + 0.35)
+                        self.screenshotGraceUntil = shortened
+                        self.syncSharedTapConfiguration()
+                    }
+                    return
+                }
+                if event.type == .leftMouseDown || event.type == .rightMouseDown {
+                    self.dismissWithoutActivating(restorePreviousApp: false)
+                }
             }
         }
 
@@ -841,6 +953,15 @@ final class WindowSwitcherController: NSObject, ObservableObject {
         if flags.contains(.maskShift) { mods |= UInt32(shiftKey) }
         if flags.contains(.maskCommand) { mods |= UInt32(cmdKey) }
         return mods
+    }
+
+    nonisolated private static func isScreenshotShortcutKeyCode(_ code: Int) -> Bool {
+        switch code {
+        case kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5, kVK_ANSI_6:
+            return true
+        default:
+            return false
+        }
     }
 
     nonisolated private static func isPureModifierKeyCode(_ code: Int) -> Bool {

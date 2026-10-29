@@ -137,11 +137,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidResignActive(_ notification: Notification) {
-        if LauncherPanelController.shared.isVisible && !LauncherPanelController.shared.isSuppressingAutoHide {
+        if LauncherPanelController.shared.isVisible && !LauncherPanelController.shared.shouldSuppressAutoHide {
             LauncherPanelController.shared.hide()
         }
-        if WindowSwitcherController.shared.isVisible && !WindowSwitcherController.shared.isSuppressingResignDismiss {
-            WindowSwitcherController.shared.dismissWithoutActivating(restorePreviousApp: false)
+        if WindowSwitcherController.shared.isVisible {
+            if WindowSwitcherController.shared.shouldSuppressAutoDismiss {
+                WindowSwitcherController.shared.noteAppDidResignActiveDuringScreenshotGrace()
+            } else {
+                WindowSwitcherController.shared.dismissWithoutActivating(restorePreviousApp: false)
+            }
         }
     }
 
