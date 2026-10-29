@@ -283,6 +283,20 @@ private struct SearchFooterBar: View {
             }
 
             Button {
+                LauncherPanelController.shared.hide()
+                HotKeyService.shared.openSettingsAndRecord(.search)
+            } label: {
+                Label(settings.searchHotKey.readableDisplay, systemImage: "keyboard")
+                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.indigo)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2.5)
+                    .background(Color.indigo.opacity(0.12), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("Bấm để tự thiết lập phím tắt mở DriveBar (Mặc định: ⌘Space)")
+
+            Button {
                 settings.showDockIcon.toggle()
             } label: {
                 Label(

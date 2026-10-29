@@ -1,13 +1,14 @@
 import SwiftUI
 import AppKit
 import ApplicationServices
+import Carbon
 
 @MainActor
 final class SettingsUIState: ObservableObject {
     static let shared = SettingsUIState()
 
     enum Tab: String, CaseIterable {
-        case general = "Chung & Google Drive"
+        case general = "Phím tắt & Google Drive"
         case aiMarkdown = "Convert sang Markdown (AI)"
         case actions = "Universal Actions"
     }
@@ -17,7 +18,41 @@ final class SettingsUIState: ObservableObject {
     @Published var axTrusted: Bool = AXIsProcessTrusted()
     @Published var actionFilter: String = ""
 
+    // Manual Custom Shortcut Builder State (avoids @State macro in CommandLineTools)
+    @Published var manualBuilderTarget: HotKeyService.RecordingTarget?
+    @Published var manualCmd: Bool = true
+    @Published var manualOpt: Bool = false
+    @Published var manualCtrl: Bool = false
+    @Published var manualShift: Bool = false
+    @Published var manualKeyCode: UInt32 = UInt32(kVK_Space)
+
     private init() {}
+
+    func toggleManualBuilder(for target: HotKeyService.RecordingTarget, current: HotKeyBinding) {
+        if manualBuilderTarget == target {
+            manualBuilderTarget = nil
+            return
+        }
+        HotKeyService.shared.stopRecording()
+        HotKeyService.shared.registerAll()
+        manualCmd = current.hasCommand
+        manualOpt = current.hasOption
+        manualCtrl = current.hasControl
+        manualShift = current.hasShift
+        manualKeyCode = current.keyCode
+        manualBuilderTarget = target
+    }
+
+    var constructedManualBinding: HotKeyBinding? {
+        var mods: UInt32 = 0
+        if manualCtrl { mods |= UInt32(controlKey) }
+        if manualOpt { mods |= UInt32(optionKey) }
+        if manualShift { mods |= UInt32(shiftKey) }
+        if manualCmd { mods |= UInt32(cmdKey) }
+        let isFKey = (Int(manualKeyCode) >= kVK_F1 && Int(manualKeyCode) <= kVK_F19)
+        guard mods != 0 || isFKey else { return nil }
+        return HotKeyBinding(keyCode: manualKeyCode, carbonModifiers: mods)
+    }
 }
 
 struct SettingsView: View {
@@ -64,6 +99,24 @@ struct SettingsView: View {
                     }
 
                     Spacer()
+
+                    // Quick Shortcut Recorder Badge in Header
+                    Button {
+                        uiState.selectedTab = .general
+                        hotKeyService.startRecording(for: .search)
+                    } label: {
+                        Label(
+                            hotKeyService.recordingTarget == .search
+                                ? (hotKeyService.liveModifiersPreview.isEmpty ? "Nhấn phím..." : hotKeyService.liveModifiersPreview)
+                                : "Phím tắt: \(settings.searchHotKey.readableDisplay)",
+                            systemImage: "command.square.fill"
+                        )
+                        .font(.system(size: 11.5, weight: .semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(hotKeyService.recordingTarget == .search ? .orange : .purple)
+                    .controlSize(.small)
+                    .help("Bấm để tự thiết lập phím tắt gọi nhanh DriveBar (Mặc định: ⌘Space)")
 
                     // Quick Toggle Show/Hide on Dock Button
                     Button {
@@ -130,6 +183,7 @@ struct SettingsView: View {
                         hotKeyService: hotKeyService,
                         updater: updater,
                         syncService: SyncAndLatchingService.shared,
+                        uiState: uiState,
                         axTrusted: $uiState.axTrusted
                     )
                 case .aiMarkdown:
@@ -207,12 +261,195 @@ private struct GeneralSettingsTab: View {
     @ObservedObject var hotKeyService: HotKeyService
     @ObservedObject var updater: UpdateCheckerService
     @ObservedObject var syncService: SyncAndLatchingService
+    @ObservedObject var uiState: SettingsUIState
     @Binding var axTrusted: Bool
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                // 1. Dock Visibility Cards ("Nút ẩn hiện trên Dock")
+                // 1. Global Custom Hotkeys Section (Default: Command + Space)
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 12) {
+                        // A. Search Launcher Hotkey Row
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(alignment: .center, spacing: 10) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 8) {
+                                        Text("Phím tắt Mở thanh Tìm kiếm Google Drive")
+                                            .font(.system(size: 13, weight: .semibold))
+                                        shortcutStatusPill(isActive: hotKeyService.isSearchHotKeyActive)
+                                    }
+                                    Text("Mặc định: Command + Space (⌘Space) • Bấm nút bên phải rồi nhấn tổ hợp phím bất kỳ bạn muốn")
+                                        .font(.system(size: 11.5))
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+
+                                Button {
+                                    uiState.manualBuilderTarget = nil
+                                    if hotKeyService.recordingTarget == .search {
+                                        hotKeyService.stopRecording()
+                                        hotKeyService.registerAll()
+                                    } else {
+                                        hotKeyService.startRecording(for: .search)
+                                    }
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: hotKeyService.recordingTarget == .search ? "record.circle.fill" : "keyboard")
+                                        Text(recorderButtonTitle(for: .search, current: settings.searchHotKey))
+                                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                    }
+                                    .frame(minWidth: 155)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(hotKeyService.recordingTarget == .search ? .orange : .purple)
+
+                                Button("Mặc định (⌘Space)") {
+                                    hotKeyService.applyRecordedBinding(.defaultSearch, for: .search)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(settings.searchHotKey == .defaultSearch && hotKeyService.recordingTarget == nil)
+                            }
+
+                            // Quick 1-Click Presets + Manual Builder Toggle for Search
+                            HStack(spacing: 6) {
+                                Text("Chọn nhanh:")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+
+                                presetChip(title: "⌘Space (Mặc định)", binding: .commandSpace, current: settings.searchHotKey, target: .search)
+                                presetChip(title: "⌥Space", binding: .optionSpace, current: settings.searchHotKey, target: .search)
+                                presetChip(title: "⌃Space", binding: .controlSpace, current: settings.searchHotKey, target: .search)
+                                presetChip(title: "⌘⇧Space", binding: .commandShiftSpace, current: settings.searchHotKey, target: .search)
+
+                                Spacer()
+
+                                Button {
+                                    uiState.toggleManualBuilder(for: .search, current: settings.searchHotKey)
+                                } label: {
+                                    Label(
+                                        uiState.manualBuilderTarget == .search ? "Ẩn ghép phím" : "Tự ghép phím thủ công",
+                                        systemImage: uiState.manualBuilderTarget == .search ? "chevron.up" : "slider.horizontal.3"
+                                    )
+                                    .font(.system(size: 11, weight: .medium))
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.mini)
+                            }
+
+                            if uiState.manualBuilderTarget == .search {
+                                manualShortcutBuilderRow(for: .search)
+                            }
+                        }
+
+                        Divider()
+
+                        // B. Universal Actions Hotkey Row
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(alignment: .center, spacing: 10) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 8) {
+                                        Text("Phím tắt Universal Actions & Convert sang Markdown")
+                                            .font(.system(size: 13, weight: .semibold))
+                                        shortcutStatusPill(isActive: hotKeyService.isUniversalHotKeyActive)
+                                    }
+                                    Text("Chọn file trong Finder, URL hoặc bôi đen văn bản bất kỳ rồi nhấn phím tắt (Mặc định: ⌘⇧A)")
+                                        .font(.system(size: 11.5))
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+
+                                Button {
+                                    uiState.manualBuilderTarget = nil
+                                    if hotKeyService.recordingTarget == .universalAction {
+                                        hotKeyService.stopRecording()
+                                        hotKeyService.registerAll()
+                                    } else {
+                                        hotKeyService.startRecording(for: .universalAction)
+                                    }
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: hotKeyService.recordingTarget == .universalAction ? "record.circle.fill" : "keyboard")
+                                        Text(recorderButtonTitle(for: .universalAction, current: settings.universalActionHotKey))
+                                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                    }
+                                    .frame(minWidth: 155)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(hotKeyService.recordingTarget == .universalAction ? .orange : .indigo)
+
+                                Button("Mặc định (⌘⇧A)") {
+                                    hotKeyService.applyRecordedBinding(.defaultUniversalAction, for: .universalAction)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(settings.universalActionHotKey == .defaultUniversalAction && hotKeyService.recordingTarget == nil)
+                            }
+
+                            HStack(spacing: 6) {
+                                Text("Chọn nhanh:")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+
+                                presetChip(title: "⌘⇧A (Mặc định)", binding: .defaultUniversalAction, current: settings.universalActionHotKey, target: .universalAction)
+                                presetChip(title: "⌥⌘A", binding: .optionCommandA, current: settings.universalActionHotKey, target: .universalAction)
+                                presetChip(title: "⌃⇧A", binding: .controlShiftA, current: settings.universalActionHotKey, target: .universalAction)
+                                presetChip(title: "⌘⇧M", binding: .commandShiftM, current: settings.universalActionHotKey, target: .universalAction)
+
+                                Spacer()
+
+                                Button {
+                                    uiState.toggleManualBuilder(for: .universalAction, current: settings.universalActionHotKey)
+                                } label: {
+                                    Label(
+                                        uiState.manualBuilderTarget == .universalAction ? "Ẩn ghép phím" : "Tự ghép phím thủ công",
+                                        systemImage: uiState.manualBuilderTarget == .universalAction ? "chevron.up" : "slider.horizontal.3"
+                                    )
+                                    .font(.system(size: 11, weight: .medium))
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.mini)
+                            }
+
+                            if uiState.manualBuilderTarget == .universalAction {
+                                manualShortcutBuilderRow(for: .universalAction)
+                            }
+                        }
+
+                        if let warn = hotKeyService.registrationWarning {
+                            HStack(spacing: 10) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.orange)
+                                Text(warn)
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(.orange)
+                                Spacer()
+                                Button("Mở Cài đặt Bàn phím macOS") {
+                                    hotKeyService.openMacOSKeyboardShortcutsSettings()
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.mini)
+                            }
+                            .padding(8)
+                            .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+                        }
+                    }
+                    .padding(8)
+                } label: {
+                    HStack {
+                        Label("Thiết lập Phím tắt Toàn cục (Tùy chỉnh tự do • Mặc định: ⌘Space)", systemImage: "command.square.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                        Spacer()
+                        Button("Khôi phục mặc định") {
+                            settings.resetShortcutsToDefault()
+                        }
+                        .buttonStyle(.link)
+                        .font(.system(size: 11.5))
+                    }
+                }
+
+                // 2. Dock Visibility Cards ("Nút ẩn hiện trên Dock")
                 GroupBox {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack(spacing: 12) {
@@ -252,85 +489,6 @@ private struct GeneralSettingsTab: View {
                     .padding(8)
                 } label: {
                     Label("Hiển thị trên Thanh Dock & Khởi động", systemImage: "dock.rectangle")
-                        .font(.system(size: 13, weight: .semibold))
-                }
-
-                // 2. Global Hotkeys Section
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Phím tắt Mở thanh Tìm kiếm Google Drive")
-                                    .font(.system(size: 13, weight: .semibold))
-                                Text("Gõ trực tiếp từ khóa không dấu / viết tắt ('sdh', 'bm thong ke'), 'fs ' cho Shared Drives")
-                                    .font(.system(size: 11.5))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Button {
-                                if hotKeyService.recordingTarget == .search {
-                                    hotKeyService.stopRecording()
-                                    hotKeyService.registerAll()
-                                } else {
-                                    hotKeyService.startRecording(for: .search)
-                                }
-                            } label: {
-                                Text(hotKeyService.recordingTarget == .search ? "Nhấn phím... (Esc hủy)" : settings.searchHotKey.readableDisplay)
-                                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                                    .frame(minWidth: 125)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(hotKeyService.recordingTarget == .search ? .orange : .purple)
-
-                            Button("Mặc định (⌥Space)") {
-                                settings.searchHotKey = .defaultSearch
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        }
-
-                        Divider()
-
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Phím tắt Universal Actions (Mọi nơi trên macOS)")
-                                    .font(.system(size: 13, weight: .semibold))
-                                Text("Chọn file trong Finder hoặc bôi đen văn bản bất kỳ rồi bấm phím tắt để Convert sang Markdown")
-                                    .font(.system(size: 11.5))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Button {
-                                if hotKeyService.recordingTarget == .universalAction {
-                                    hotKeyService.stopRecording()
-                                    hotKeyService.registerAll()
-                                } else {
-                                    hotKeyService.startRecording(for: .universalAction)
-                                }
-                            } label: {
-                                Text(hotKeyService.recordingTarget == .universalAction ? "Nhấn phím... (Esc hủy)" : settings.universalActionHotKey.readableDisplay)
-                                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                                    .frame(minWidth: 125)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(hotKeyService.recordingTarget == .universalAction ? .orange : .indigo)
-
-                            Button("Mặc định (⌘⇧A)") {
-                                settings.universalActionHotKey = .defaultUniversalAction
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        }
-
-                        if let warn = hotKeyService.registrationWarning {
-                            Text("⚠️ \(warn)")
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(.orange)
-                        }
-                    }
-                    .padding(8)
-                } label: {
-                    Label("Phím tắt Toàn cục (Chạy êm song song với Alfred 5)", systemImage: "command.square.fill")
                         .font(.system(size: 13, weight: .semibold))
                 }
 
@@ -555,6 +713,106 @@ private struct GeneralSettingsTab: View {
             }
             .padding(20)
         }
+    }
+
+    private func recorderButtonTitle(for target: HotKeyService.RecordingTarget, current: HotKeyBinding) -> String {
+        guard hotKeyService.recordingTarget == target else {
+            return "\(current.readableDisplay)  •  Đổi"
+        }
+        if !hotKeyService.liveModifiersPreview.isEmpty {
+            return hotKeyService.liveModifiersPreview
+        }
+        return "Nhấn phím... (Esc hủy)"
+    }
+
+    private func shortcutStatusPill(isActive: Bool) -> some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(isActive ? Color.green : Color.orange)
+                .frame(width: 6, height: 6)
+            Text(isActive ? "Đang hoạt động" : "Trùng phím")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(isActive ? Color.green : Color.orange)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background((isActive ? Color.green : Color.orange).opacity(0.13), in: Capsule())
+    }
+
+    private func presetChip(
+        title: String,
+        binding: HotKeyBinding,
+        current: HotKeyBinding,
+        target: HotKeyService.RecordingTarget
+    ) -> some View {
+        let isSelected = (current == binding)
+        return Button {
+            uiState.manualBuilderTarget = nil
+            hotKeyService.applyRecordedBinding(binding, for: target)
+        } label: {
+            Text(title)
+                .font(.system(size: 10.5, weight: isSelected ? .bold : .medium, design: .monospaced))
+                .foregroundStyle(isSelected ? Color.white : Color.primary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(
+                    isSelected ? Color.purple : Color.primary.opacity(0.07),
+                    in: Capsule()
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func manualShortcutBuilderRow(for target: HotKeyService.RecordingTarget) -> some View {
+        HStack(spacing: 10) {
+            Text("Giữ phím:")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            Toggle("⌘ Command", isOn: $uiState.manualCmd)
+                .toggleStyle(.checkbox)
+                .font(.system(size: 11.5, weight: .semibold))
+            Toggle("⌥ Option", isOn: $uiState.manualOpt)
+                .toggleStyle(.checkbox)
+                .font(.system(size: 11.5, weight: .semibold))
+            Toggle("⌃ Control", isOn: $uiState.manualCtrl)
+                .toggleStyle(.checkbox)
+                .font(.system(size: 11.5, weight: .semibold))
+            Toggle("⇧ Shift", isOn: $uiState.manualShift)
+                .toggleStyle(.checkbox)
+                .font(.system(size: 11.5, weight: .semibold))
+
+            Text("+")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.secondary)
+
+            Picker("", selection: $uiState.manualKeyCode) {
+                ForEach(HotKeyBinding.selectableKeys, id: \.keyCode) { item in
+                    Text(item.label).tag(item.keyCode)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 155)
+            .controlSize(.small)
+
+            Spacer()
+
+            Button("Áp dụng") {
+                if let built = uiState.constructedManualBinding {
+                    hotKeyService.applyRecordedBinding(built, for: target)
+                    uiState.manualBuilderTarget = nil
+                } else {
+                    NSSound.beep()
+                    settings.statusBannerMessage = "Vui lòng tick ít nhất 1 phím bổ trợ (⌘, ⌥, ⌃, ⇧) hoặc chọn phím chức năng F1–F12."
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.purple)
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(Color.purple.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private var updateStatusSubtitle: String {

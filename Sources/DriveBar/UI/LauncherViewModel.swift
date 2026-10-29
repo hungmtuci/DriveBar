@@ -335,6 +335,12 @@ final class LauncherViewModel: ObservableObject {
             return
         }
 
+        if ["//hotkey", "//shortcut", "//phimtat"].contains(effectiveQuery.lowercased()) {
+            searchResults = Self.hotkeyQuickItems()
+            selectedIndex = 0
+            return
+        }
+
         // 6. Check Google Drive availability
         if drive.accountRoot == nil {
             searchResults = [
@@ -367,6 +373,9 @@ final class LauncherViewModel: ObservableObject {
         }
 
         let normQ = GoogleDriveIndexService.removeAccents(effectiveQuery).lowercased()
+        if !tokens.isEmpty && (normQ.contains("phim tat") || normQ == "hotkey" || normQ == "shortcut") {
+            results.insert(contentsOf: Self.hotkeyQuickItems(), at: 0)
+        }
         if !tokens.isEmpty && (normQ.contains("clean") || normQ.contains("clear")) {
             results.insert(
                 SearchResultItem(
@@ -647,6 +656,15 @@ final class LauncherViewModel: ObservableObject {
                     title: "Đã làm sạch lịch sử gần đây",
                     subtitle: "Google Drive Search"
                 )
+            } else if cmd == "record-hotkey" {
+                LauncherPanelController.shared.hide()
+                HotKeyService.shared.openSettingsAndRecord(.search)
+            } else if cmd == "set-cmd-space" {
+                LauncherPanelController.shared.hide()
+                HotKeyService.shared.applyRecordedBinding(.commandSpace, for: .search)
+            } else if cmd == "set-opt-space" {
+                LauncherPanelController.shared.hide()
+                HotKeyService.shared.applyRecordedBinding(.optionSpace, for: .search)
             }
 
         case .aiQuickCommand(let actionID):
@@ -732,5 +750,41 @@ final class LauncherViewModel: ObservableObject {
                 NSWorkspace.shared.open(fileURL)
             }
         }
+    }
+
+    private static func hotkeyQuickItems() -> [SearchResultItem] {
+        let cur = AppSettings.shared.searchHotKey.readableDisplay
+        return [
+            SearchResultItem(
+                id: "cmd:record-hotkey",
+                title: "⌨️ Tự thiết lập Phím tắt mở DriveBar (Đang dùng: \(cur))",
+                subtitle: "Nhấn Enter để mở bộ thu phím tắt bất kỳ theo ý muốn của bạn",
+                path: nil,
+                isDirectory: false,
+                kind: .systemCommand(id: "record-hotkey"),
+                badge: "Tùy chỉnh",
+                sfSymbolFallback: "keyboard.fill"
+            ),
+            SearchResultItem(
+                id: "cmd:set-cmd-space",
+                title: "⚡ Đặt phím tắt mặc định Command + Space (⌘Space)",
+                subtitle: "Áp dụng ngay tổ hợp phím mặc định ⌘Space để mở DriveBar",
+                path: nil,
+                isDirectory: false,
+                kind: .systemCommand(id: "set-cmd-space"),
+                badge: "Mặc định",
+                sfSymbolFallback: "command.square.fill"
+            ),
+            SearchResultItem(
+                id: "cmd:set-opt-space",
+                title: "⚡ Đặt phím tắt Option + Space (⌥Space)",
+                subtitle: "Áp dụng ngay tổ hợp phím ⌥Space để mở DriveBar",
+                path: nil,
+                isDirectory: false,
+                kind: .systemCommand(id: "set-opt-space"),
+                badge: "Preset",
+                sfSymbolFallback: "option"
+            )
+        ]
     }
 }

@@ -171,8 +171,11 @@ final class SyncAndLatchingService: ObservableObject {
         let remoteSettingsFile = "\(dir)/portable_settings.json"
         if let data = try? Data(contentsOf: URL(fileURLWithPath: remoteSettingsFile)),
            let remote = try? JSONDecoder().decode(PortableSyncSettingsPayload.self, from: data) {
-            if remote.updatedAt > localSettingsTimestamp {
+            let currentLocalTS = max(localSettingsTimestamp, AppSettings.shared.localSettingsUpdatedAt)
+            if remote.updatedAt > currentLocalTS + 0.5 {
                 applyRemoteSettings(remote)
+            } else if currentLocalTS > remote.updatedAt + 0.5 {
+                pushPortableSettings()
             }
         } else {
             pushPortableSettings()
@@ -190,6 +193,7 @@ final class SyncAndLatchingService: ObservableObject {
         let s = AppSettings.shared
         let now = Date().timeIntervalSince1970
         localSettingsTimestamp = now
+        AppSettings.shared.localSettingsUpdatedAt = now
         let payload = PortableSyncSettingsPayload(
             updatedAt: now,
             searchHotKey: s.searchHotKey,
@@ -252,6 +256,7 @@ final class SyncAndLatchingService: ObservableObject {
         defer { s.isApplyingRemoteSync = false }
 
         localSettingsTimestamp = remote.updatedAt
+        s.localSettingsUpdatedAt = remote.updatedAt
         if s.searchHotKey != remote.searchHotKey { s.searchHotKey = remote.searchHotKey }
         if s.universalActionHotKey != remote.universalActionHotKey { s.universalActionHotKey = remote.universalActionHotKey }
         let newDisabled = Set(remote.disabledActionIDs)

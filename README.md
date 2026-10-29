@@ -23,11 +23,13 @@
 
 ---
 
-## ⌨️ Phím tắt Toàn cục (Mặc định không xung đột Alfred 5)
+## ⌨️ Phím tắt Toàn cục (Tự thiết lập tự do • Mặc định `⌘ Space`)
 
-| Phím tắt (Đổi tuỳ ý trong Cài đặt) | Chức năng |
+Bạn có thể tự thu bất kỳ tổ hợp phím nào ngay trong **Cài đặt**, bấm vào nút **`⌘Space`** ở góc dưới cửa sổ tìm kiếm, hoặc chọn nhanh từ **Menu Bar**:
+
+| Phím tắt (Tự thiết lập tùy ý) | Chức năng |
 | :--- | :--- |
-| **`⌥ Space`** | Mở / Ẩn thanh tìm kiếm Google Drive siêu tốc (hiện ngay 9 thư mục gần đây `⌘1–⌘9`) |
+| **`⌘ Space` (Mặc định)** | Mở / Ẩn thanh tìm kiếm Google Drive siêu tốc (hiện ngay 9 thư mục gần đây `⌘1–⌘9`) |
 | **`⌘ ⇧ A`** | Mở bảng **Universal Actions** trên file đang chọn trong Finder hoặc đoạn văn bản đang bôi đen |
 | **`⇥` (Tab)** hoặc **`⇧ ↩`** | Mở Universal Actions (Convert sang Markdown, PDF, Google Drive, Ẩn/Hiện...) ngay từ kết quả tìm kiếm |
 | **`↩` (Enter)** | Duyệt sâu vào bên trong thư mục (Browse Mode) hoặc thực thi hành động đang chọn |

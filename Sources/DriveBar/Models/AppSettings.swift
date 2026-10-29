@@ -30,6 +30,8 @@ final class AppSettings: ObservableObject {
         static let enableSyncthingSync = "drivebar.enableSyncthingSync"
         static let syncthingFolderPath = "drivebar.syncthingFolderPath"
         static let hasLaunchedBefore = "drivebar.hasLaunchedBefore"
+        static let didMigrateCmdSpaceV121 = "drivebar.didMigrateCmdSpaceV121"
+        static let localSettingsUpdatedAt = "drivebar.localSettingsUpdatedAt"
     }
 
     @Published var searchHotKey: HotKeyBinding {
@@ -171,11 +173,22 @@ final class AppSettings: ObservableObject {
     @Published var statusBannerMessage: String?
 
     private init() {
+        let didMigrateCmdSpace = defaults.bool(forKey: Keys.didMigrateCmdSpaceV121)
+        var migratedDefaultToCmdSpace = false
+
         if let data = defaults.data(forKey: Keys.searchHotKey),
            let decoded = try? JSONDecoder().decode(HotKeyBinding.self, from: data) {
-            self.searchHotKey = decoded
+            if !didMigrateCmdSpace && decoded == .optionSpace {
+                self.searchHotKey = .defaultSearch
+                migratedDefaultToCmdSpace = true
+            } else {
+                self.searchHotKey = decoded
+            }
         } else {
             self.searchHotKey = .defaultSearch
+            if !didMigrateCmdSpace {
+                migratedDefaultToCmdSpace = true
+            }
         }
 
         if let data = defaults.data(forKey: Keys.universalActionHotKey),
@@ -228,7 +241,29 @@ final class AppSettings: ObservableObject {
                 ?? "\(home)/Developer/AI/ai-document-toolkit"
         }
 
+        if !didMigrateCmdSpace {
+            defaults.set(true, forKey: Keys.didMigrateCmdSpaceV121)
+        }
+        if migratedDefaultToCmdSpace {
+            saveCodable(self.searchHotKey, forKey: Keys.searchHotKey)
+            defaults.set(Date().timeIntervalSince1970 + 2.0, forKey: Keys.localSettingsUpdatedAt)
+            DispatchQueue.main.async {
+                SyncAndLatchingService.shared.pushPortableSettings()
+            }
+        }
+
         refreshLaunchAtLoginStatus()
+    }
+
+    var localSettingsUpdatedAt: Double {
+        get { defaults.double(forKey: Keys.localSettingsUpdatedAt) }
+        set { defaults.set(newValue, forKey: Keys.localSettingsUpdatedAt) }
+    }
+
+    func resetShortcutsToDefault() {
+        searchHotKey = .defaultSearch
+        universalActionHotKey = .defaultUniversalAction
+        statusBannerMessage = "Đã khôi phục phím tắt mặc định: \(searchHotKey.readableDisplay) & \(universalActionHotKey.readableDisplay)"
     }
 
     var isFirstLaunch: Bool {
