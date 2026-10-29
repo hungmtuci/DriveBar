@@ -87,11 +87,20 @@ struct UniversalActionDefinition: Identifiable, Equatable, Sendable {
 
     @MainActor
     func matches(target: ActionTarget, isInsideGoogleDrive: Bool) -> Bool {
+        if id == "ai.ocr_clipboard" {
+            return ClipboardHistoryService.shared.hasClipboardImageAvailable
+        }
+
         switch target {
         case .files(let urls, _):
             guard !urls.isEmpty else { return false }
             if urls.count > 1 && !acceptsMulti { return false }
             if requiresGoogleDrive && !isInsideGoogleDrive { return false }
+
+            if id == "file.extract_archive" {
+                let archiveExts: Set<String> = ["zip", "tar", "gz", "tgz", "bz2", "tbz2", "xz", "7z", "rar"]
+                return urls.allSatisfy { archiveExts.contains($0.pathExtension.lowercased()) }
+            }
 
             var hasFolder = false
             var hasFile = false
@@ -243,6 +252,23 @@ enum UniversalActionCatalog {
             requiresGoogleDrive: false,
             requiresBundle: false,
             priority: 955
+        ),
+        UniversalActionDefinition(
+            id: "ai.ocr_clipboard",
+            title: "OCR Clipboard Image to Markdown",
+            subtitle: "Nhận diện chữ Tiếng Việt & Tiếng Anh từ ảnh chụp màn hình đang lưu trong Clipboard (⌥↩ xem trước)",
+            keywords: "ocr clipboard screenshot image anh chup man hinh vision markdown md",
+            category: .aiConvert,
+            sfSymbol: "camera.viewfinder",
+            tintHex: "#0284C7",
+            acceptsFiles: true,
+            acceptsFolders: true,
+            acceptsMulti: true,
+            acceptsText: true,
+            acceptsURL: true,
+            requiresGoogleDrive: false,
+            requiresBundle: false,
+            priority: 952
         ),
         UniversalActionDefinition(
             id: "ai.merge_folder_md",
@@ -402,6 +428,23 @@ enum UniversalActionCatalog {
 
         // MARK: - 3. Default macOS File & Folder Actions (Alfred Universal Actions parity)
         UniversalActionDefinition(
+            id: "file.extract_archive",
+            title: "Extract Archive Here",
+            subtitle: "Giải nén nhanh tệp .zip / .tar / .gz ra thư mục nằm ngay cạnh tệp gốc",
+            keywords: "extract unzip unarchive giai nen zip tar gz",
+            category: .fileSystem,
+            sfSymbol: "archivebox.fill",
+            tintHex: "#64748B",
+            acceptsFiles: true,
+            acceptsFolders: false,
+            acceptsMulti: true,
+            acceptsText: false,
+            acceptsURL: false,
+            requiresGoogleDrive: false,
+            requiresBundle: false,
+            priority: 854
+        ),
+        UniversalActionDefinition(
             id: "file.open",
             title: "Open",
             subtitle: "Mở bằng ứng dụng mặc định trên macOS",
@@ -417,6 +460,23 @@ enum UniversalActionCatalog {
             requiresGoogleDrive: false,
             requiresBundle: false,
             priority: 850
+        ),
+        UniversalActionDefinition(
+            id: "file.toggle_pin",
+            title: "Pin / Unpin Favorite in DriveBar (⌘D)",
+            subtitle: "Ghim hoặc bỏ ghim mục này lên đầu thanh tìm kiếm DriveBar (đồng bộ qua Syncthing)",
+            keywords: "pin unpin favorite ghim bo ghim dau danh sach star",
+            category: .fileSystem,
+            sfSymbol: "pin.fill",
+            tintHex: "#64748B",
+            acceptsFiles: true,
+            acceptsFolders: true,
+            acceptsMulti: true,
+            acceptsText: false,
+            acceptsURL: false,
+            requiresGoogleDrive: false,
+            requiresBundle: false,
+            priority: 848
         ),
         UniversalActionDefinition(
             id: "file.open_with",
@@ -502,6 +562,23 @@ enum UniversalActionCatalog {
             requiresGoogleDrive: false,
             requiresBundle: false,
             priority: 820
+        ),
+        UniversalActionDefinition(
+            id: "file.batch_rename",
+            title: "Rename / Batch Rename...",
+            subtitle: "Đổi tên nhanh hoặc đổi tên hàng loạt (Tìm & Thay thế, Tiền tố/Hậu tố, Đánh số 01, 02...)",
+            keywords: "rename batch doi ten hang loat replace prefix suffix number",
+            category: .fileSystem,
+            sfSymbol: "pencil.line",
+            tintHex: "#64748B",
+            acceptsFiles: true,
+            acceptsFolders: true,
+            acceptsMulti: true,
+            acceptsText: false,
+            acceptsURL: false,
+            requiresGoogleDrive: false,
+            requiresBundle: false,
+            priority: 815
         ),
         UniversalActionDefinition(
             id: "file.copy_to",
@@ -604,6 +681,23 @@ enum UniversalActionCatalog {
             requiresGoogleDrive: false,
             requiresBundle: true,
             priority: 775
+        ),
+        UniversalActionDefinition(
+            id: "file.compress_zip",
+            title: "Compress to .ZIP Archive",
+            subtitle: "Nén các tệp hoặc thư mục đã chọn thành 1 tệp .zip chuẩn macOS nằm ngay cạnh mục gốc",
+            keywords: "compress zip archive nen tep thu muc",
+            category: .fileSystem,
+            sfSymbol: "doc.zipper",
+            tintHex: "#64748B",
+            acceptsFiles: true,
+            acceptsFolders: true,
+            acceptsMulti: true,
+            acceptsText: false,
+            acceptsURL: false,
+            requiresGoogleDrive: false,
+            requiresBundle: false,
+            priority: 772
         ),
 
         // MARK: - 4. Clipboard & Buffer Actions

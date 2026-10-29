@@ -22,6 +22,8 @@ struct PortableSyncSettingsPayload: Codable, Sendable {
     var smartChunkMaxTokens: Int
     var includeMacAppsInSearch: Bool
     var enableActionLatching: Bool
+    var enableClipboardHistory: Bool?
+    var pinnedPaths: [String]?
 }
 
 @MainActor
@@ -208,7 +210,9 @@ final class SyncAndLatchingService: ObservableObject {
             enableSmartChunking: s.enableSmartChunking,
             smartChunkMaxTokens: s.smartChunkMaxTokens,
             includeMacAppsInSearch: s.includeMacAppsInSearch,
-            enableActionLatching: s.enableActionLatching
+            enableActionLatching: s.enableActionLatching,
+            enableClipboardHistory: s.enableClipboardHistory,
+            pinnedPaths: GoogleDriveIndexService.shared.exportPortablePathList(s.pinnedPaths)
         )
         let targetFile = "\(expandedSyncDir)/portable_settings.json"
         isWritingSyncFiles = true
@@ -271,6 +275,15 @@ final class SyncAndLatchingService: ObservableObject {
         s.smartChunkMaxTokens = remote.smartChunkMaxTokens
         s.includeMacAppsInSearch = remote.includeMacAppsInSearch
         s.enableActionLatching = remote.enableActionLatching
+        if let clip = remote.enableClipboardHistory {
+            s.enableClipboardHistory = clip
+        }
+        if let remotePinned = remote.pinnedPaths {
+            let resolved = GoogleDriveIndexService.shared.resolvePortablePathList(remotePinned)
+            if s.pinnedPaths != resolved {
+                s.pinnedPaths = resolved
+            }
+        }
     }
 
     // MARK: - Live FSEventStream Watcher for Incoming Syncthing Updates

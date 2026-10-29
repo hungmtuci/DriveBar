@@ -436,20 +436,66 @@ final class WindowSwitcherController: NSObject, ObservableObject {
             }
             return true
 
-        case kVK_RightArrow, kVK_DownArrow:
-            guard !hasShift && !hasOpt else { break }
+        case kVK_LeftArrow where isExactCtrl:
+            controller.tapStateLock.lock()
+            controller.sharedTapConfig.isSwitcherVisible = false
+            controller.tapStateLock.unlock()
             DispatchQueue.main.async {
                 let ctrl = WindowSwitcherController.shared
                 ctrl.clearScreenshotCaptureGrace()
+                ctrl.commitSnapSelectionAndDismiss(.leftHalf)
+            }
+            return true
+
+        case kVK_RightArrow where isExactCtrl:
+            controller.tapStateLock.lock()
+            controller.sharedTapConfig.isSwitcherVisible = false
+            controller.tapStateLock.unlock()
+            DispatchQueue.main.async {
+                let ctrl = WindowSwitcherController.shared
+                ctrl.clearScreenshotCaptureGrace()
+                ctrl.commitSnapSelectionAndDismiss(.rightHalf)
+            }
+            return true
+
+        case kVK_UpArrow where isExactCtrl:
+            controller.tapStateLock.lock()
+            controller.sharedTapConfig.isSwitcherVisible = false
+            controller.tapStateLock.unlock()
+            DispatchQueue.main.async {
+                let ctrl = WindowSwitcherController.shared
+                ctrl.clearScreenshotCaptureGrace()
+                ctrl.commitSnapSelectionAndDismiss(.maximize)
+            }
+            return true
+
+        case kVK_DownArrow where isExactCtrl:
+            controller.tapStateLock.lock()
+            controller.sharedTapConfig.isSwitcherVisible = false
+            controller.tapStateLock.unlock()
+            DispatchQueue.main.async {
+                let ctrl = WindowSwitcherController.shared
+                ctrl.clearScreenshotCaptureGrace()
+                ctrl.commitSnapSelectionAndDismiss(.centerRestore)
+            }
+            return true
+
+        case kVK_RightArrow, kVK_DownArrow:
+            guard !hasShift && !hasOpt && !hasCtrl else { break }
+            DispatchQueue.main.async {
+                let ctrl = WindowSwitcherController.shared
+                ctrl.clearScreenshotCaptureGrace()
+                ctrl.pinOpenFromInteraction()
                 ctrl.stepFromKeyboard(delta: 1)
             }
             return true
 
         case kVK_LeftArrow, kVK_UpArrow:
-            guard !hasShift && !hasOpt else { break }
+            guard !hasShift && !hasOpt && !hasCtrl else { break }
             DispatchQueue.main.async {
                 let ctrl = WindowSwitcherController.shared
                 ctrl.clearScreenshotCaptureGrace()
+                ctrl.pinOpenFromInteraction()
                 ctrl.stepFromKeyboard(delta: -1)
             }
             return true
@@ -776,6 +822,14 @@ final class WindowSwitcherController: NSObject, ObservableObject {
         dismissWithoutActivating(restorePreviousApp: false)
         if let chosen {
             WindowSwitcherService.shared.activateWindow(chosen)
+        }
+    }
+
+    func commitSnapSelectionAndDismiss(_ placement: WindowSnapPlacement) {
+        let chosen = WindowSwitcherService.shared.selectedItem
+        dismissWithoutActivating(restorePreviousApp: false)
+        if let chosen {
+            WindowSwitcherService.shared.snapAndActivateWindow(chosen, placement: placement)
         }
     }
 

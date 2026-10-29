@@ -29,6 +29,7 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
 
     var isSuppressingAutoHide: Bool = false
     private var screenshotGraceUntil: TimeInterval = 0
+    private(set) var previousFrontApp: NSRunningApplication?
 
     var shouldSuppressAutoHide: Bool {
         isSuppressingAutoHide || ProcessInfo.processInfo.systemUptime < screenshotGraceUntil
@@ -89,6 +90,11 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
     }
 
     func showAndFocus(selectExistingQuery: Bool = false) {
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        if let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != ownPID {
+            previousFrontApp = front
+        }
+
         if WindowSwitcherController.shared.isVisible {
             WindowSwitcherController.shared.dismissWithoutActivating(restorePreviousApp: false)
         }
@@ -107,8 +113,8 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
         LauncherViewModel.shared.triggerInputFocus(selectAll: selectExistingQuery)
         NotificationCenter.default.post(name: .driveBarFocusInput, object: nil)
 
-        DispatchQueue.main.async { [weak self, weak panel] in
-            guard let self, let panel, panel.isVisible else { return }
+        DispatchQueue.main.async { [weak panel] in
+            guard let panel, panel.isVisible else { return }
             if let tf = Self.findEditableTextField(in: panel.contentView) {
                 NativeSearchInputField.focusTextField(tf, selectAll: selectExistingQuery)
             }
@@ -339,10 +345,29 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
             return true
         }
 
+        // 1.5. In Batch Rename mode, allow Tab / Arrows / Typing to flow naturally to SwiftUI TextFields
+        if case .batchRename = vm.screenMode {
+            if code == kVK_Return || code == kVK_ANSI_KeypadEnter {
+                if let editor = panel?.firstResponder as? NSTextView, editor.hasMarkedText() {
+                    editor.unmarkText()
+                }
+                BatchRenameState.shared.executeCommit(revealInFinder: flags.contains(.command))
+                return true
+            }
+            return false
+        }
+
         // 2. Quick Look: ⌘Y (in addition to standalone Shift tap)
         if flags == .command && code == kVK_ANSI_Y {
             vm.toggleQuickLookForCurrentContext()
             return true
+        }
+
+        // 2.5. Pin / Unpin Favorite in Search Mode: ⌘D
+        if flags == .command && code == kVK_ANSI_D, case .search = vm.screenMode {
+            if vm.togglePinForSelectedItem() {
+                return true
+            }
         }
 
         // 3. Universal Action Hotkey (default ⌘/) or ⌘K while DriveBar is open

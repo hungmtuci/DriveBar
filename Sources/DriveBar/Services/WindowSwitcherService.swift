@@ -7,6 +7,25 @@ import ScreenCaptureKit
 @_silgen_name("_AXUIElementGetWindow")
 private func _AXUIElementGetWindow(_ element: AXUIElement, _ wid: UnsafeMutablePointer<CGWindowID>) -> AXError
 
+@_silgen_name("_AXUIElementCreateWithRemoteToken")
+private func _AXUIElementCreateWithRemoteToken(_ data: CFData) -> Unmanaged<AXUIElement>?
+
+enum WindowSnapPlacement: String, Sendable {
+    case leftHalf
+    case rightHalf
+    case maximize
+    case centerRestore
+
+    var toastLabel: String {
+        switch self {
+        case .leftHalf: return "Đã căn cửa sổ sang Nửa trái (⌃←)"
+        case .rightHalf: return "Đã căn cửa sổ sang Nửa phải (⌃→)"
+        case .maximize: return "Đã phóng tối đa cửa sổ (⌃↑)"
+        case .centerRestore: return "Đã đưa cửa sổ ra giữa màn hình (⌃↓)"
+        }
+    }
+}
+
 @_silgen_name("CGSMainConnectionID")
 private func _CGSMainConnectionID() -> UInt32
 
@@ -1056,40 +1075,127 @@ final class WindowSwitcherService: ObservableObject {
             return
         }
 
-        if let axWin = item.axWindow {
-            if item.isMinimized {
-                AXUIElementSetAttributeValue(axWin, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
-            }
-            _ = AXUIElementPerformAction(axWin, kAXRaiseAction as CFString)
-            AXUIElementSetAttributeValue(axWin, kAXMainAttribute as CFString, kCFBooleanTrue)
-            AXUIElementSetAttributeValue(axWin, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-
+        if let axWin = item.axWindow ?? item.windowID.flatMap({ Self.findAXWindow(pid: item.pid, targetWID: $0) }) {
+            Self.raiseAndFocusAXWindow(axWin, unminimize: item.isMinimized)
             runningApp.activate()
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) {
-                _ = AXUIElementPerformAction(axWin, kAXRaiseAction as CFString)
-                AXUIElementSetAttributeValue(axWin, kAXMainAttribute as CFString, kCFBooleanTrue)
-                AXUIElementSetAttributeValue(axWin, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.035) {
+                Self.raiseAndFocusAXWindow(axWin, unminimize: false)
             }
             return
         }
 
         // Cross-Space / Full-Screen Space window activation:
+        // 1. Try direct AX remote token resolution by exact CGWindowID (jumps accurately even when multiple windows share the same title!)
+        if AXIsProcessTrusted(), let targetWID = item.windowID {
+            let pid = item.pid
+            if let remoteWin = Self.resolveOffSpaceAXWindow(pid: pid, targetWID: targetWID) {
+                Self.raiseAndFocusAXWindow(remoteWin, unminimize: item.isMinimized)
+                runningApp.activate()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                    Self.raiseAndFocusAXWindow(remoteWin, unminimize: false)
+                }
+                return
+            }
+        }
+
+        // 2. Fallback to app's Window menu if title is unique across this app's windows
         if AXIsProcessTrusted() && !item.windowTitle.isEmpty {
-            if Self.selectWindowFromAppWindowMenu(pid: item.pid, targetTitle: item.windowTitle) {
+            let duplicateTitleCount = allSessionItems.filter {
+                $0.pid == item.pid && $0.windowTitle == item.windowTitle
+            }.count
+            if duplicateTitleCount <= 1 && Self.selectWindowFromAppWindowMenu(pid: item.pid, targetTitle: item.windowTitle) {
                 runningApp.activate()
                 return
             }
         }
 
+        // 3. Final fallback: activate app & re-query AXWindow once macOS transitions Space
         runningApp.activate(options: [.activateAllWindows])
 
         if AXIsProcessTrusted(), let targetWID = item.windowID {
             let pid = item.pid
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
-                Self.raiseAXWindowMatchingWID(pid: pid, targetWID: targetWID)
+            let fallbackTitle = item.windowTitle
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
+                if !Self.raiseAXWindowMatchingWID(pid: pid, targetWID: targetWID), !fallbackTitle.isEmpty {
+                    _ = Self.selectWindowFromAppWindowMenu(pid: pid, targetTitle: fallbackTitle)
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+                _ = Self.raiseAXWindowMatchingWID(pid: pid, targetWID: targetWID)
             }
         }
+    }
+
+    func snapAndActivateWindow(_ item: SwitchableWindowItem, placement: WindowSnapPlacement) {
+        activateWindow(item)
+        guard AXIsProcessTrusted(), !item.isWindowlessApp, !item.isFullscreen else { return }
+
+        let screens = NSScreen.screens
+        let targetScreen: NSScreen? = {
+            if item.displayIndex >= 0 && item.displayIndex < screens.count {
+                return screens[item.displayIndex]
+            }
+            let mouse = NSEvent.mouseLocation
+            return screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main ?? screens.first
+        }()
+        guard let screen = targetScreen else { return }
+
+        let vis = screen.visibleFrame
+        let cocoaTarget: NSRect
+        switch placement {
+        case .leftHalf:
+            cocoaTarget = NSRect(x: vis.minX, y: vis.minY, width: floor(vis.width / 2.0), height: vis.height)
+        case .rightHalf:
+            let halfW = floor(vis.width / 2.0)
+            cocoaTarget = NSRect(x: vis.maxX - halfW, y: vis.minY, width: halfW, height: vis.height)
+        case .maximize:
+            cocoaTarget = vis
+        case .centerRestore:
+            let w = round(vis.width * 0.78)
+            let h = round(vis.height * 0.82)
+            cocoaTarget = NSRect(
+                x: round(vis.midX - w / 2.0),
+                y: round(vis.midY - h / 2.0),
+                width: w,
+                height: h
+            )
+        }
+
+        // Convert Cocoa bottom-left visibleFrame to Accessibility/Quartz top-left coordinates
+        let primaryHeight = screens.first?.frame.height ?? screen.frame.height
+        let axRect = CGRect(
+            x: cocoaTarget.minX.rounded(),
+            y: (primaryHeight - cocoaTarget.maxY).rounded(),
+            width: cocoaTarget.width.rounded(),
+            height: cocoaTarget.height.rounded()
+        )
+
+        let pid = item.pid
+        let wid = item.windowID
+        let directAX = item.axWindow
+
+        let applySnap = {
+            let resolved = directAX
+                ?? wid.flatMap { Self.findAXWindow(pid: pid, targetWID: $0) }
+                ?? wid.flatMap { Self.resolveOffSpaceAXWindow(pid: pid, targetWID: $0) }
+            guard let axWin = resolved else { return }
+            Self.applyAXWindowFrame(axWin, quartzRect: axRect)
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            applySnap()
+        }
+        if !item.isOnCurrentSpace || item.isMinimized {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
+                applySnap()
+            }
+        }
+        FloatingToastController.shared.showSuccess(
+            title: placement.toastLabel,
+            subtitle: item.zoomedHeaderTitle,
+            symbol: "rectangle.split.2x1"
+        )
     }
 
     // MARK: - In-Switcher Quick Actions (Close ⌘W, Minimize ⌘M, Hide ⌘H, Quit ⌘Q)
@@ -1397,11 +1503,58 @@ final class WindowSwitcherService: ObservableObject {
         return nil
     }
 
-    private static func raiseAXWindowMatchingWID(pid: pid_t, targetWID: CGWindowID) {
-        guard let w = findAXWindow(pid: pid, targetWID: targetWID) else { return }
-        _ = AXUIElementPerformAction(w, kAXRaiseAction as CFString)
-        AXUIElementSetAttributeValue(w, kAXMainAttribute as CFString, kCFBooleanTrue)
-        AXUIElementSetAttributeValue(w, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+    @discardableResult
+    private static func raiseAXWindowMatchingWID(pid: pid_t, targetWID: CGWindowID) -> Bool {
+        guard let w = findAXWindow(pid: pid, targetWID: targetWID) else { return false }
+        raiseAndFocusAXWindow(w, unminimize: false)
+        return true
+    }
+
+    private static func raiseAndFocusAXWindow(_ axWin: AXUIElement, unminimize: Bool) {
+        AXUIElementSetMessagingTimeout(axWin, 0.12)
+        if unminimize {
+            AXUIElementSetAttributeValue(axWin, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+        }
+        _ = AXUIElementPerformAction(axWin, kAXRaiseAction as CFString)
+        AXUIElementSetAttributeValue(axWin, kAXMainAttribute as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(axWin, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+    }
+
+    private static func applyAXWindowFrame(_ axWin: AXUIElement, quartzRect: CGRect) {
+        AXUIElementSetMessagingTimeout(axWin, 0.12)
+        AXUIElementSetAttributeValue(axWin, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+        var pt = quartzRect.origin
+        var sz = quartzRect.size
+        if let sizeVal = AXValueCreate(.cgSize, &sz) {
+            AXUIElementSetAttributeValue(axWin, kAXSizeAttribute as CFString, sizeVal)
+        }
+        if let posVal = AXValueCreate(.cgPoint, &pt) {
+            AXUIElementSetAttributeValue(axWin, kAXPositionAttribute as CFString, posVal)
+        }
+        if let sizeVal = AXValueCreate(.cgSize, &sz) {
+            AXUIElementSetAttributeValue(axWin, kAXSizeAttribute as CFString, sizeVal)
+        }
+    }
+
+    /// Resolves an `AXUIElement` handle for a `CGWindowID` residing on another Mission Control Desktop / Space
+    /// using HIServices' 20-byte remote accessibility token (`pid` + `0` + `'coco'` + `axElementID`).
+    private static func resolveOffSpaceAXWindow(pid: pid_t, targetWID: CGWindowID) -> AXUIElement? {
+        var token = Data(count: 20)
+        token.replaceSubrange(0..<4, with: withUnsafeBytes(of: pid) { Data($0) })
+        token.replaceSubrange(4..<8, with: withUnsafeBytes(of: Int32(0)) { Data($0) })
+        token.replaceSubrange(8..<12, with: withUnsafeBytes(of: Int32(0x636f636f)) { Data($0) })
+
+        for elementID: UInt64 in 0..<450 {
+            token.replaceSubrange(12..<20, with: withUnsafeBytes(of: elementID) { Data($0) })
+            guard let candidate = _AXUIElementCreateWithRemoteToken(token as CFData)?.takeRetainedValue() else {
+                continue
+            }
+            var wid: CGWindowID = 0
+            if _AXUIElementGetWindow(candidate, &wid) == .success && wid == targetWID {
+                return candidate
+            }
+        }
+        return nil
     }
 
     private static func selectWindowFromAppWindowMenu(pid: pid_t, targetTitle: String) -> Bool {

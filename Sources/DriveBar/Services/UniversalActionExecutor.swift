@@ -48,6 +48,9 @@ final class UniversalActionExecutor {
                 forceXMLWrap: false
             )
 
+        case "ai.ocr_clipboard":
+            viewModel.runClipboardImageOCR(openPreview: modifierFlags.contains(.option) || modifierFlags.contains(.command))
+
         case "ai.chunk_md":
             LauncherPanelController.shared.hide()
             FloatingToastController.shared.showProgress(
@@ -318,11 +321,40 @@ final class UniversalActionExecutor {
             }
 
         // MARK: - 3. File System Actions
+        case "file.extract_archive":
+            LauncherPanelController.shared.hide()
+            performArchiveExtraction(urls: urls)
+
         case "file.open":
             LauncherPanelController.shared.hide()
             for u in urls {
                 NSWorkspace.shared.open(u)
             }
+
+        case "file.toggle_pin":
+            guard !urls.isEmpty else { return }
+            let settings = AppSettings.shared
+            let allAlreadyPinned = urls.allSatisfy { settings.isPinned($0.path) }
+            if allAlreadyPinned {
+                for u in urls { _ = settings.togglePin(u.path) }
+                LauncherPanelController.shared.hide()
+                FloatingToastController.shared.showSuccess(
+                    title: urls.count == 1 ? "Đã bỏ ghim khỏi DriveBar" : "Đã bỏ ghim \(urls.count) mục",
+                    subtitle: target.primaryTitle,
+                    symbol: "pin.slash"
+                )
+            } else {
+                for u in urls where !settings.isPinned(u.path) {
+                    _ = settings.togglePin(u.path)
+                }
+                LauncherPanelController.shared.hide()
+                FloatingToastController.shared.showSuccess(
+                    title: urls.count == 1 ? "Đã ghim lên đầu thanh tìm kiếm DriveBar" : "Đã ghim \(urls.count) mục lên đầu DriveBar",
+                    subtitle: target.primaryTitle,
+                    symbol: "pin.fill"
+                )
+            }
+            viewModel.refreshSearchResults()
 
         case "file.open_with":
             guard let first = urls.first else { return }
@@ -344,6 +376,11 @@ final class UniversalActionExecutor {
         case "file.get_info":
             LauncherPanelController.shared.hide()
             openFinderGetInfo(for: urls)
+
+        case "file.batch_rename":
+            guard !urls.isEmpty else { return }
+            BatchRenameState.shared.configure(for: urls, previousTarget: target)
+            viewModel.screenMode = .batchRename(urls: urls, previousTarget: target)
 
         case "file.copy_to":
             viewModel.enterDestinationPicker(operation: .copy, sources: urls)
@@ -377,6 +414,10 @@ final class UniversalActionExecutor {
             } else {
                 NSWorkspace.shared.open(first)
             }
+
+        case "file.compress_zip":
+            LauncherPanelController.shared.hide()
+            performZipCompression(urls: urls, revealInFinder: modifierFlags.contains(.command))
 
         // MARK: - 4. Clipboard & Buffer
         case "clip.copy_path":
@@ -814,6 +855,202 @@ final class UniversalActionExecutor {
                 proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
                 proc.arguments = ["-e", script]
                 try? proc.run()
+            }
+        }
+    }
+
+    private func performZipCompression(urls: [URL], revealInFinder: Bool) {
+        guard let first = urls.first else { return }
+        let parentDir = first.deletingLastPathComponent()
+        let firstIsDir = GoogleDriveIndexService.shared.isKnownDirectory(first.path, hasDirectoryHint: first.hasDirectoryPath)
+
+        let baseStem: String
+        if urls.count == 1 {
+            baseStem = (firstIsDir || first.pathExtension.isEmpty)
+                ? first.lastPathComponent
+                : first.deletingPathExtension().lastPathComponent
+        } else {
+            let parentName = parentDir.lastPathComponent
+            baseStem = parentName.isEmpty || parentName == "My Drive" ? "Archive_\(urls.count)_items" : "\(parentName)_Archive"
+        }
+
+        FloatingToastController.shared.showProgress(
+            title: "Đang nén thành tệp .ZIP...",
+            subtitle: urls.count == 1 ? first.lastPathComponent : "\(urls.count) mục đã chọn"
+        )
+
+        Task.detached(priority: .userInitiated) {
+            let fm = FileManager.default
+            var zipURL = parentDir.appendingPathComponent("\(baseStem).zip")
+            var suffix = 2
+            while fm.fileExists(atPath: zipURL.path) {
+                zipURL = parentDir.appendingPathComponent("\(baseStem) \(suffix).zip")
+                suffix += 1
+            }
+
+            // Materialize online-only CloudStorage files before zipping
+            _ = GoogleDriveIndexService.triggerOfflineDownload(for: urls)
+
+            var ok = false
+            let sameParent = urls.allSatisfy { $0.deletingLastPathComponent().standardizedFileURL == parentDir.standardizedFileURL }
+
+            if urls.count == 1 {
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+                proc.arguments = firstIsDir
+                    ? ["-c", "-k", "--sequesterRsrc", "--keepParent", first.path, zipURL.path]
+                    : ["-c", "-k", "--sequesterRsrc", first.path, zipURL.path]
+                proc.standardOutput = Pipe()
+                proc.standardError = Pipe()
+                if (try? proc.run()) != nil {
+                    proc.waitUntilExit()
+                    ok = (proc.terminationStatus == 0 && fm.fileExists(atPath: zipURL.path))
+                }
+            } else if sameParent {
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
+                proc.currentDirectoryURL = parentDir
+                proc.arguments = ["-r", "-q", "-y", zipURL.path] + urls.map(\.lastPathComponent) + ["-x", "*.DS_Store", "*__MACOSX*"]
+                proc.standardOutput = Pipe()
+                proc.standardError = Pipe()
+                if (try? proc.run()) != nil {
+                    proc.waitUntilExit()
+                    ok = (proc.terminationStatus == 0 && fm.fileExists(atPath: zipURL.path))
+                }
+            } else {
+                let stageDir = fm.temporaryDirectory.appendingPathComponent("DriveBarZip_\(UUID().uuidString.prefix(8))", isDirectory: true)
+                defer { try? fm.removeItem(at: stageDir) }
+                try? fm.createDirectory(at: stageDir, withIntermediateDirectories: true)
+                for u in urls {
+                    let dst = stageDir.appendingPathComponent(u.lastPathComponent)
+                    try? fm.copyItem(at: u, to: dst)
+                }
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+                proc.arguments = ["-c", "-k", "--sequesterRsrc", stageDir.path, zipURL.path]
+                proc.standardOutput = Pipe()
+                proc.standardError = Pipe()
+                if (try? proc.run()) != nil {
+                    proc.waitUntilExit()
+                    ok = (proc.terminationStatus == 0 && fm.fileExists(atPath: zipURL.path))
+                }
+            }
+
+            let finalZipURL = zipURL
+            let succeeded = ok
+            await MainActor.run {
+                if succeeded {
+                    GoogleDriveIndexService.shared.rebuildFileCacheInBackground()
+                    FloatingToastController.shared.showSuccess(
+                        title: "Đã tạo \(finalZipURL.lastPathComponent)",
+                        subtitle: parentDir.lastPathComponent,
+                        symbol: "doc.zipper"
+                    )
+                    if revealInFinder {
+                        NSWorkspace.shared.activateFileViewerSelecting([finalZipURL])
+                    }
+                } else {
+                    FloatingToastController.shared.showError(
+                        title: "Nén tệp .ZIP thất bại",
+                        subtitle: "Kiểm tra quyền ghi tại thư mục đích"
+                    )
+                }
+            }
+        }
+    }
+
+    private func performArchiveExtraction(urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        FloatingToastController.shared.showProgress(
+            title: "Đang giải nén tệp lưu trữ...",
+            subtitle: urls[0].lastPathComponent
+        )
+
+        Task.detached(priority: .userInitiated) {
+            let fm = FileManager.default
+            _ = GoogleDriveIndexService.triggerOfflineDownload(for: urls)
+            var extractedDirs: [URL] = []
+            var lastError: String?
+
+            for archiveURL in urls {
+                let parentDir = archiveURL.deletingLastPathComponent()
+                let fileName = archiveURL.lastPathComponent
+                let lowerName = fileName.lowercased()
+                let stem: String = {
+                    for compound in [".tar.gz", ".tar.bz2", ".tar.xz"] where lowerName.hasSuffix(compound) {
+                        return String(fileName.dropLast(compound.count))
+                    }
+                    return archiveURL.deletingPathExtension().lastPathComponent
+                }()
+
+                var destDir = parentDir.appendingPathComponent(stem.isEmpty ? "Extracted" : stem, isDirectory: true)
+                var suffix = 2
+                while fm.fileExists(atPath: destDir.path) {
+                    destDir = parentDir.appendingPathComponent("\(stem) \(suffix)", isDirectory: true)
+                    suffix += 1
+                }
+
+                do {
+                    try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+                } catch {
+                    lastError = error.localizedDescription
+                    continue
+                }
+
+                let ext = archiveURL.pathExtension.lowercased()
+                let proc = Process()
+                proc.standardOutput = Pipe()
+                proc.standardError = Pipe()
+
+                if ext == "zip" {
+                    proc.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+                    proc.arguments = ["-x", "-k", archiveURL.path, destDir.path]
+                } else if ["tar", "gz", "tgz", "bz2", "tbz2", "xz"].contains(ext) {
+                    proc.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+                    proc.arguments = ["-xf", archiveURL.path, "-C", destDir.path]
+                } else if let unarPath = ["/opt/homebrew/bin/unar", "/usr/local/bin/unar"].first(where: { fm.isExecutableFile(atPath: $0) }) {
+                    proc.executableURL = URL(fileURLWithPath: unarPath)
+                    proc.arguments = ["-q", "-o", destDir.path, archiveURL.path]
+                } else {
+                    try? fm.removeItem(at: destDir)
+                    lastError = "Định dạng .\(ext) cần cài thêm công cụ 'unar' (brew install unar)"
+                    continue
+                }
+
+                if (try? proc.run()) != nil {
+                    proc.waitUntilExit()
+                    if proc.terminationStatus == 0 {
+                        try? fm.removeItem(at: destDir.appendingPathComponent("__MACOSX"))
+                        extractedDirs.append(destDir)
+                    } else {
+                        try? fm.removeItem(at: destDir)
+                        lastError = "Giải nén '\(fileName)' không thành công"
+                    }
+                } else {
+                    try? fm.removeItem(at: destDir)
+                    lastError = "Không thể khởi chạy trình giải nén"
+                }
+            }
+
+            let finalDirs = extractedDirs
+            let finalErr = lastError
+            await MainActor.run {
+                if !finalDirs.isEmpty {
+                    GoogleDriveIndexService.shared.rebuildAllCaches()
+                    FloatingToastController.shared.showSuccess(
+                        title: finalDirs.count == 1
+                            ? "Đã giải nén vào '\(finalDirs[0].lastPathComponent)'"
+                            : "Đã giải nén \(finalDirs.count) gói lưu trữ",
+                        subtitle: finalDirs[0].deletingLastPathComponent().lastPathComponent,
+                        symbol: "archivebox.fill"
+                    )
+                    NSWorkspace.shared.activateFileViewerSelecting(finalDirs)
+                } else {
+                    FloatingToastController.shared.showError(
+                        title: "Giải nén thất bại",
+                        subtitle: finalErr ?? "Tệp nén bị lỗi hoặc không được hỗ trợ"
+                    )
+                }
             }
         }
     }

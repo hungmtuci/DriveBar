@@ -83,8 +83,22 @@ final class LauncherViewModel: ObservableObject {
             guard searchText != live else { return }
             searchText = live
             let trimmed = live.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.lowercased() == "a" || live.lowercased().hasPrefix("a ") {
-                let appQuery = trimmed.lowercased() == "a" ? "" : String(live.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+            let lowerTrimmed = trimmed.lowercased()
+            let lowerLive = live.lowercased()
+
+            // Synchronous modes (`c`, `s`, `ai`, `ocr`, `http`, `//`) are already populated by `searchText = live`.
+            if lowerTrimmed == "c" || lowerLive.hasPrefix("c ") ||
+               lowerTrimmed == "s" || lowerLive.hasPrefix("s ") ||
+               lowerTrimmed == "ai" || lowerLive.hasPrefix("ai ") ||
+               lowerTrimmed == "ocr" ||
+               lowerTrimmed.hasPrefix("http://") || lowerTrimmed.hasPrefix("https://") ||
+               lowerTrimmed.hasPrefix("//") {
+                selectedIndex = 0
+                return
+            }
+
+            if lowerTrimmed == "a" || lowerLive.hasPrefix("a ") {
+                let appQuery = lowerTrimmed == "a" ? "" : String(live.dropFirst(2)).trimmingCharacters(in: .whitespaces)
                 searchGeneration &+= 1
                 let drive = GoogleDriveIndexService.shared
                 if appQuery.isEmpty {
@@ -101,14 +115,68 @@ final class LauncherViewModel: ObservableObject {
                     searchResults = matched.isEmpty ? Self.emptyAppSearchBanner(for: appQuery) : matched
                 }
                 selectedIndex = 0
+            } else if lowerTrimmed == "ff" || lowerLive.hasPrefix("ff ") {
+                let fileQuery = lowerTrimmed == "ff" ? "" : String(live.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                searchGeneration &+= 1
+                let drive = GoogleDriveIndexService.shared
+                if fileQuery.isEmpty {
+                    searchResults = drive.defaultFileModeResultItems(limit: 40)
+                } else {
+                    let fileTokens = fileQuery.split(separator: " ").map(String.init)
+                    let hits = GoogleDriveIndexService.evaluateFileSearchHits(
+                        tokens: fileTokens,
+                        fastIndex: drive.fastFileIndex,
+                        historySnapshot: drive.history,
+                        pinnedSet: Set(AppSettings.shared.pinnedPaths),
+                        maxResults: 45
+                    )
+                    searchResults = drive.buildFileSearchResultItems(from: hits, maxResults: 45)
+                }
+                selectedIndex = 0
             } else if !trimmed.isEmpty && !live.hasPrefix("/") && !live.hasPrefix("~/") {
-                let tokens = trimmed.split(separator: " ").map(String.init)
+                let isShared = (lowerTrimmed == "fs" || lowerLive.hasPrefix("fs "))
+                var effective = trimmed
+                if lowerLive.hasPrefix("fs ") {
+                    effective = String(live.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                } else if lowerLive.hasPrefix("f ") {
+                    effective = String(live.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                }
+                let tokens = effective.split(separator: " ").map(String.init)
                 if !tokens.isEmpty {
                     searchGeneration &+= 1
-                    searchResults = GoogleDriveIndexService.shared.searchMyDriveFolders(
-                        tokens: tokens,
-                        includeApps: AppSettings.shared.includeMacAppsInSearch
-                    )
+                    let drive = GoogleDriveIndexService.shared
+                    var built: [SearchResultItem]
+                    if isShared {
+                        let hits = GoogleDriveIndexService.evaluateSharedSearchHits(
+                            tokens: tokens,
+                            fastIndex: drive.fastSharedIndex,
+                            historySnapshot: drive.history,
+                            maxResults: 45
+                        )
+                        built = drive.buildSharedSearchResultItems(from: hits, maxResults: 45)
+                    } else {
+                        built = drive.searchMyDriveFolders(
+                            tokens: tokens,
+                            includeApps: AppSettings.shared.includeMacAppsInSearch
+                        )
+                        if GoogleDriveIndexService.hasExplicitFileExtensionToken(tokens) || built.count < 5 {
+                            let fHits = GoogleDriveIndexService.evaluateFileSearchHits(
+                                tokens: tokens,
+                                fastIndex: drive.fastFileIndex,
+                                historySnapshot: drive.history,
+                                pinnedSet: Set(AppSettings.shared.pinnedPaths),
+                                maxResults: 15
+                            )
+                            let fItems = drive.buildFileSearchResultItems(from: fHits, maxResults: 15)
+                            if GoogleDriveIndexService.hasExplicitFileExtensionToken(tokens) {
+                                built.insert(contentsOf: fItems, at: 0)
+                            } else {
+                                built.append(contentsOf: fItems)
+                            }
+                        }
+                    }
+                    applyInlineCommandsAndEmptyFallback(to: &built, effectiveQuery: effective, isSharedMode: isShared)
+                    searchResults = built
                     selectedIndex = 0
                 }
             }
@@ -171,6 +239,8 @@ final class LauncherViewModel: ObservableObject {
             } else {
                 openUniversalActions(for: .files(sources), directExternalTrigger: openedDirectlyInUniversalActions)
             }
+        case .batchRename(_, let prevTarget):
+            openUniversalActions(for: prevTarget, directExternalTrigger: openedDirectlyInUniversalActions)
         case .markdownPreview(_, let src, _, _, _, _):
             openUniversalActions(for: .files([src]), directExternalTrigger: openedDirectlyInUniversalActions)
         }
@@ -324,23 +394,37 @@ final class LauncherViewModel: ObservableObject {
 
     var currentSearchModeBadge: (label: String, color: Color) {
         let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.lowercased().hasPrefix("http://") || trimmed.lowercased().hasPrefix("https://") {
+        let lowerTrimmed = trimmed.lowercased()
+        let lowerRaw = searchText.lowercased()
+        if lowerTrimmed.hasPrefix("http://") || lowerTrimmed.hasPrefix("https://") {
             return ("Web → AI MD", .secondary)
         }
         if searchText.hasPrefix("/") || searchText.hasPrefix("~/") {
             return ("Duyệt thư mục", .secondary)
         }
-        if trimmed.lowercased() == "a" || searchText.lowercased().hasPrefix("a ") {
+        if lowerTrimmed == "a" || lowerRaw.hasPrefix("a ") {
             return ("Ứng dụng", .secondary)
         }
-        if trimmed == "fs" || searchText.lowercased().hasPrefix("fs ") {
+        if lowerTrimmed == "ff" || lowerRaw.hasPrefix("ff ") {
+            return ("Tệp tin", .secondary)
+        }
+        if lowerTrimmed == "c" || lowerRaw.hasPrefix("c ") {
+            return ("Clipboard", .secondary)
+        }
+        if lowerTrimmed == "s" || lowerRaw.hasPrefix("s ") {
+            return ("Hệ thống", .secondary)
+        }
+        if lowerTrimmed == "fs" || lowerRaw.hasPrefix("fs ") {
             return ("Shared Drives", .secondary)
         }
-        if trimmed == "ai" || searchText.lowercased().hasPrefix("ai ") {
+        if lowerTrimmed == "ai" || lowerRaw.hasPrefix("ai ") || lowerTrimmed == "ocr" {
             return ("AI Toolkit", .secondary)
         }
         if trimmed.hasPrefix("//") {
             return ("Lệnh hệ thống", .secondary)
+        }
+        if InstantUtilityService.evaluateMathExpression(trimmed) != nil {
+            return ("Máy tính", .secondary)
         }
         return ("Google Drive", .secondary)
     }
@@ -396,10 +480,47 @@ final class LauncherViewModel: ObservableObject {
             }
         }
 
-        // 2. Check `ai` / `ai <filter>` quick list (Finder selection)
+        // 2. Check `ai` / `ai <filter>` or `ocr` quick list (Finder selection + Clipboard Image OCR)
+        if trimmed.lowercased() == "ocr" {
+            searchResults = [
+                SearchResultItem(
+                    id: "aicmd:ocr_clip",
+                    title: "OCR Ảnh trong Clipboard sang Markdown (Tiếng Việt + Anh)",
+                    subtitle: "Nhận diện chữ chuẩn từ ảnh chụp màn hình vừa lưu trong Clipboard • ↩ Copy Markdown • ⌥↩ Xem trong AI Inspector",
+                    path: nil,
+                    isDirectory: false,
+                    kind: .systemCommand(id: "sys.ocr_clipboard"),
+                    badge: "AI • OCR",
+                    sfSymbolFallback: "camera.viewfinder"
+                ),
+                SearchResultItem(
+                    id: "aicmd:ocr_finder",
+                    title: "OCR Tệp PDF Scan / Ảnh đang chọn trong Finder sang Markdown",
+                    subtitle: "Dùng Apple Vision OCR trên tệp đang chọn trong Finder",
+                    path: nil,
+                    isDirectory: false,
+                    kind: .aiQuickCommand(action: "ai.ocr_md"),
+                    badge: "Finder",
+                    sfSymbolFallback: "text.viewfinder"
+                )
+            ]
+            selectedIndex = 0
+            return
+        }
+
         if trimmed.lowercased() == "ai" || raw.lowercased().hasPrefix("ai ") {
             let sub = raw.count > 3 ? String(raw.dropFirst(3)).lowercased().trimmingCharacters(in: .whitespaces) : ""
             let items: [SearchResultItem] = [
+                SearchResultItem(
+                    id: "aicmd:ocr_clip",
+                    title: "OCR Ảnh chụp màn hình từ Clipboard → Markdown",
+                    subtitle: "Trích xuất chữ Tiếng Việt & Tiếng Anh từ ảnh đang lưu trong Clipboard (⌥↩ xem trước)",
+                    path: nil,
+                    isDirectory: false,
+                    kind: .systemCommand(id: "sys.ocr_clipboard"),
+                    badge: "OCR",
+                    sfSymbolFallback: "camera.viewfinder"
+                ),
                 SearchResultItem(
                     id: "aicmd:md",
                     title: "Convert to Markdown (Mục đang chọn trong Finder)",
@@ -521,6 +642,26 @@ final class LauncherViewModel: ObservableObject {
             return
         }
 
+        // 3.2. Clipboard History Mode (`c` or `c <từ khóa>`)
+        if trimmed.lowercased() == "c" || raw.lowercased().hasPrefix("c ") {
+            let clipQuery = trimmed.lowercased() == "c"
+                ? ""
+                : String(raw.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+            searchResults = ClipboardHistoryService.shared.searchResultItems(query: clipQuery, limit: 60)
+            selectedIndex = 0
+            return
+        }
+
+        // 3.4. System Commands Mode (`s` or `s <từ khóa>`)
+        if trimmed.lowercased() == "s" || raw.lowercased().hasPrefix("s ") {
+            let sysQuery = trimmed.lowercased() == "s"
+                ? ""
+                : String(raw.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+            searchResults = InstantUtilityService.searchSystemCommands(query: sysQuery, isExplicitSystemMode: true)
+            selectedIndex = 0
+            return
+        }
+
         // 3.5. App-Only Mode (`a` or `a <từ khóa>`) — Filter exclusively installed macOS applications!
         if trimmed.lowercased() == "a" || raw.lowercased().hasPrefix("a ") {
             let appQuery = trimmed.lowercased() == "a"
@@ -540,6 +681,109 @@ final class LauncherViewModel: ObservableObject {
                 searchResults = matched.isEmpty ? Self.emptyAppSearchBanner(for: appQuery) : matched
             }
             selectedIndex = 0
+            return
+        }
+
+        // 3.6. Direct File-Only Search Mode (`ff` or `ff <từ khóa>`) — Fast RAM index + Spotlight fallback!
+        if trimmed.lowercased() == "ff" || raw.lowercased().hasPrefix("ff ") {
+            let fileQuery = trimmed.lowercased() == "ff"
+                ? ""
+                : String(raw.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+            if fileQuery.isEmpty {
+                searchResults = drive.defaultFileModeResultItems(limit: 40)
+                selectedIndex = 0
+                return
+            }
+            let fileTokens = fileQuery.split(separator: " ").map(String.init)
+            let fastFiles = drive.fastFileIndex
+            let histSnap = drive.history
+            let pinSet = Set(AppSettings.shared.pinnedPaths)
+            let scopeDirs: [String] = {
+                var dirs = drive.activeAccounts.map(\.rootPath)
+                let home = FileManager.default.homeDirectoryForCurrentUser.path
+                for sub in ["Desktop", "Downloads", "Documents"] {
+                    let p = "\(home)/\(sub)"
+                    if FileManager.default.fileExists(atPath: p) { dirs.append(p) }
+                }
+                return dirs
+            }()
+
+            Self.searchQueue.async {
+                let hits = GoogleDriveIndexService.evaluateFileSearchHits(
+                    tokens: fileTokens,
+                    fastIndex: fastFiles,
+                    historySnapshot: histSnap,
+                    pinnedSet: pinSet,
+                    maxResults: 45
+                )
+                Task { @MainActor in
+                    let vm = LauncherViewModel.shared
+                    guard vm.searchGeneration == gen else { return }
+                    let built = GoogleDriveIndexService.shared.buildFileSearchResultItems(from: hits, maxResults: 45)
+                    if !built.isEmpty {
+                        vm.searchResults = built
+                    } else {
+                        vm.searchResults = [
+                            SearchResultItem(
+                                id: "ffile:searching:\(fileQuery)",
+                                title: "Đang tìm tệp '\(fileQuery)'...",
+                                subtitle: "Đang mở rộng tìm kiếm qua Spotlight macOS",
+                                path: nil,
+                                isDirectory: false,
+                                kind: .infoBanner,
+                                badge: "Tệp tin",
+                                sfSymbolFallback: "magnifyingglass"
+                            )
+                        ]
+                    }
+                    vm.selectedIndex = 0
+                }
+
+                if hits.count < 6 && fileQuery.count >= 2 && !scopeDirs.isEmpty {
+                    let spotPaths = GoogleDriveIndexService.spotlightFallbackFilePaths(
+                        query: fileQuery,
+                        scopeDirs: scopeDirs,
+                        limit: 25
+                    )
+                    Task { @MainActor in
+                        let vm = LauncherViewModel.shared
+                        guard vm.searchGeneration == gen else { return }
+                        let driveSvc = GoogleDriveIndexService.shared
+                        var combined = driveSvc.buildFileSearchResultItems(from: hits, maxResults: 45)
+                        var seen = Set(combined.compactMap(\.path))
+                        for sp in spotPaths where seen.insert(sp).inserted {
+                            let ext = (sp as NSString).pathExtension.uppercased()
+                            combined.append(SearchResultItem(
+                                id: "ffile:spot:\(sp)",
+                                title: (sp as NSString).lastPathComponent,
+                                subtitle: driveSvc.formatHierarchicalSubtitle(sp, maxLevels: 3),
+                                path: sp,
+                                isDirectory: false,
+                                kind: .driveFile(path: sp),
+                                badge: ext.isEmpty ? "Tệp" : ext,
+                                sfSymbolFallback: "doc.fill"
+                            ))
+                            if combined.count >= 45 { break }
+                        }
+                        if combined.isEmpty {
+                            combined = [
+                                SearchResultItem(
+                                    id: "ffile:nomatch:\(fileQuery)",
+                                    title: "Không tìm thấy tệp tin nào khớp '\(fileQuery)'",
+                                    subtitle: "Gõ '//rebuild' nếu tệp vừa được tải lên Google Drive",
+                                    path: nil,
+                                    isDirectory: false,
+                                    kind: .infoBanner,
+                                    badge: "Tệp tin",
+                                    sfSymbolFallback: "doc.questionmark"
+                                )
+                            ]
+                        }
+                        vm.searchResults = combined
+                        vm.selectedIndex = min(vm.selectedIndex, max(0, combined.count - 1))
+                    }
+                }
+            }
             return
         }
 
@@ -628,8 +872,14 @@ final class LauncherViewModel: ObservableObject {
             return
         }
 
-        // 6. Check Google Drive availability (still allow searching installed macOS apps if user typed a keyword!)
+        // 6. Check Google Drive availability (still allow Math Calculator, System Commands & Installed Apps!)
         if drive.accountRoot == nil {
+            var offlineResults: [SearchResultItem] = []
+            if let math = InstantUtilityService.evaluateMathExpression(effectiveQuery) {
+                offlineResults.append(Self.makeCalculatorResultItem(math))
+            }
+            offlineResults.append(contentsOf: InstantUtilityService.searchSystemCommands(query: effectiveQuery, isExplicitSystemMode: false))
+
             let fallbackTokens = effectiveQuery.split(separator: " ").map(String.init)
             if AppSettings.shared.includeMacAppsInSearch && !fallbackTokens.isEmpty {
                 let appMatches = GoogleDriveIndexService.searchInstalledApps(
@@ -639,17 +889,18 @@ final class LauncherViewModel: ObservableObject {
                     isAppOnlyMode: true,
                     maxResults: 30
                 )
-                if !appMatches.isEmpty {
-                    searchResults = appMatches
-                    selectedIndex = 0
-                    return
-                }
+                offlineResults.append(contentsOf: appMatches)
+            }
+            if !offlineResults.isEmpty {
+                searchResults = offlineResults
+                selectedIndex = 0
+                return
             }
             searchResults = [
                 SearchResultItem(
                     id: "no-gdrive",
                     title: "Không tìm thấy thư mục Google Drive trong ~/Library/CloudStorage",
-                    subtitle: "Gõ 'a + từ khóa' để mở nhanh ứng dụng macOS, hoặc dùng Universal Actions (\(AppSettings.shared.universalActionHotKey.readableDisplay))!",
+                    subtitle: "Gõ 'a ' tìm ứng dụng, 'c ' lịch sử Clipboard, 's ' lệnh hệ thống, hoặc dùng Universal Actions (\(AppSettings.shared.universalActionHotKey.readableDisplay))",
                     path: nil,
                     isDirectory: false,
                     kind: .infoBanner,
@@ -668,19 +919,39 @@ final class LauncherViewModel: ObservableObject {
             return
         }
 
+        // Instant 0ms Math Calculator feedback while background search queue evaluates folders/files
+        if let liveMath = InstantUtilityService.evaluateMathExpression(effectiveQuery) {
+            let calcItem = Self.makeCalculatorResultItem(liveMath)
+            var current = searchResults.filter {
+                if case .calculatorResult = $0.kind { return false }
+                if case .infoBanner = $0.kind { return false }
+                return true
+            }
+            current.insert(calcItem, at: 0)
+            searchResults = current
+            selectedIndex = 0
+        }
+
         let cleanTokens = tokens.map(GoogleDriveIndexService.cleanString).filter { !$0.isEmpty }
         if cleanTokens.isEmpty {
-            searchResults = isSharedMode ? drive.recentSharedItems(limit: 9) : drive.recentMyDriveFolders(limit: 9)
+            if let liveMath = InstantUtilityService.evaluateMathExpression(effectiveQuery) {
+                searchResults = [Self.makeCalculatorResultItem(liveMath)]
+            } else {
+                searchResults = isSharedMode ? drive.recentSharedItems(limit: 9) : drive.recentMyDriveFolders(limit: 9)
+            }
             selectedIndex = 0
             return
         }
 
         let fastFolders = drive.fastFolderIndex
         let fastShared = drive.fastSharedIndex
+        let fastFiles = drive.fastFileIndex
         let histSnap = drive.history
+        let pinSet = Set(AppSettings.shared.pinnedPaths)
         let includeApps = AppSettings.shared.includeMacAppsInSearch
         let querySnap = effectiveQuery
         let sharedSnap = isSharedMode
+        let hasExtToken = GoogleDriveIndexService.hasExplicitFileExtensionToken(tokens)
 
         Self.searchQueue.async {
             if sharedSnap {
@@ -705,15 +976,38 @@ final class LauncherViewModel: ObservableObject {
                     historySnapshot: histSnap,
                     maxResults: 45
                 )
+                let shouldIncludeFiles = hasExtToken || (hits.count < 5 && querySnap.count >= 3)
+                let fileHits: [(entry: DriveFileEntry, historyCount: Int, isPinned: Bool)]
+                if shouldIncludeFiles {
+                    fileHits = GoogleDriveIndexService.evaluateFileSearchHits(
+                        tokens: tokens,
+                        fastIndex: fastFiles,
+                        historySnapshot: histSnap,
+                        pinnedSet: pinSet,
+                        maxResults: hasExtToken ? 25 : 12
+                    )
+                } else {
+                    fileHits = []
+                }
+
                 Task { @MainActor in
                     let vm = LauncherViewModel.shared
                     guard vm.searchGeneration == gen else { return }
-                    var built = GoogleDriveIndexService.shared.buildMyDriveSearchResultItems(
+                    let driveSvc = GoogleDriveIndexService.shared
+                    var built = driveSvc.buildMyDriveSearchResultItems(
                         from: hits,
                         cleanTokens: cleanTokens,
                         includeApps: includeApps,
                         maxResults: 45
                     )
+                    if !fileHits.isEmpty {
+                        let fileItems = driveSvc.buildFileSearchResultItems(from: fileHits, maxResults: hasExtToken ? 25 : 12)
+                        if hasExtToken {
+                            built.insert(contentsOf: fileItems, at: 0)
+                        } else {
+                            built.append(contentsOf: fileItems)
+                        }
+                    }
                     vm.applyInlineCommandsAndEmptyFallback(to: &built, effectiveQuery: querySnap, isSharedMode: false)
                     vm.searchResults = built
                     vm.selectedIndex = 0
@@ -832,12 +1126,21 @@ final class LauncherViewModel: ObservableObject {
             )
         }
 
+        let inlineUtilities = InstantUtilityService.searchSystemCommands(query: effectiveQuery, isExplicitSystemMode: false)
+        if !inlineUtilities.isEmpty {
+            results.insert(contentsOf: inlineUtilities, at: 0)
+        }
+
+        if let math = InstantUtilityService.evaluateMathExpression(effectiveQuery) {
+            results.insert(Self.makeCalculatorResultItem(math), at: 0)
+        }
+
         if results.isEmpty {
             results = [
                 SearchResultItem(
                     id: "no-match",
-                    title: isSharedMode ? "Không tìm thấy mục chia sẻ phù hợp" : "Không tìm thấy thư mục Google Drive phù hợp",
-                    subtitle: "Từ khóa: '\(effectiveQuery)'  •  Gõ '//rebuild' để quét lại dữ liệu mới",
+                    title: isSharedMode ? "Không tìm thấy mục chia sẻ phù hợp" : "Không tìm thấy thư mục hoặc tệp phù hợp",
+                    subtitle: "Từ khóa: '\(effectiveQuery)'  •  Gõ 'ff \(effectiveQuery)' để tìm mở rộng qua Spotlight hoặc '//rebuild' quét lại",
                     path: nil,
                     isDirectory: false,
                     kind: .infoBanner,
@@ -846,6 +1149,23 @@ final class LauncherViewModel: ObservableObject {
                 )
             ]
         }
+    }
+
+    private static func makeCalculatorResultItem(_ math: MathEvaluationResult) -> SearchResultItem {
+        SearchResultItem(
+            id: "calc:\(math.expression)",
+            title: "= \(math.formattedDisplay)",
+            subtitle: "Biểu thức: \(math.expression)  •  ↩ Copy kết quả (\(math.rawCopyString))  •  ⌥↩ Copy cả phép tính",
+            path: nil,
+            isDirectory: false,
+            kind: .calculatorResult(
+                expression: math.expression,
+                rawValue: math.rawCopyString,
+                formattedValue: math.formattedDisplay
+            ),
+            badge: "Máy tính",
+            sfSymbolFallback: "function"
+        )
     }
 
     // MARK: - Universal Actions Filtering
@@ -1150,6 +1470,7 @@ final class LauncherViewModel: ObservableObject {
         case .universalActions: return filteredActions.count
         case .openWithPicker: return openWithApps.count
         case .destinationPicker: return destinationFolders.count
+        case .batchRename: return 0
         case .markdownPreview: return 0
         }
     }
@@ -1185,8 +1506,13 @@ final class LauncherViewModel: ObservableObject {
     private func currentQuickLookURLs() -> [URL] {
         switch screenMode {
         case .search:
-            guard selectedIndex >= 0 && selectedIndex < searchResults.count,
-                  let u = searchResults[selectedIndex].fileURL else { return [] }
+            guard selectedIndex >= 0 && selectedIndex < searchResults.count else { return [] }
+            let item = searchResults[selectedIndex]
+            if case .clipboardItem(let clipID) = item.kind,
+               let entry = ClipboardHistoryService.shared.entry(withID: clipID) {
+                return ClipboardHistoryService.shared.previewURLs(for: entry)
+            }
+            guard let u = item.fileURL else { return [] }
             return [u]
         case .universalActions(let target):
             return target.fileURLs
@@ -1196,6 +1522,8 @@ final class LauncherViewModel: ObservableObject {
             return [u]
         case .openWithPicker(let fileURL, _):
             return [fileURL]
+        case .batchRename(let urls, _):
+            return urls
         case .markdownPreview(_, let srcURL, let savedMDURL, _, _, _):
             return [savedMDURL ?? srcURL]
         }
@@ -1241,6 +1569,9 @@ final class LauncherViewModel: ObservableObject {
                 revealInFinder: cleanMods.contains(.command)
             )
 
+        case .batchRename:
+            BatchRenameState.shared.executeCommit(revealInFinder: cleanMods.contains(.command))
+
         case .markdownPreview(_, _, _, let markdown, _, _):
             let pb = NSPasteboard.general
             pb.clearContents()
@@ -1258,6 +1589,28 @@ final class LauncherViewModel: ObservableObject {
         guard case .search = screenMode,
               selectedIndex >= 0 && selectedIndex < searchResults.count else { return false }
         let item = searchResults[selectedIndex]
+        if case .clipboardItem(let clipID) = item.kind,
+           let entry = ClipboardHistoryService.shared.entry(withID: clipID) {
+            switch entry.kind {
+            case .files, .image:
+                let urls = entry.filePaths
+                    .filter { $0.contains("/Library/CloudStorage/") || FileManager.default.fileExists(atPath: $0) }
+                    .map { URL(fileURLWithPath: $0) }
+                guard !urls.isEmpty else { return false }
+                openUniversalActions(for: .files(urls, sourceNote: "Lịch sử Clipboard"), directExternalTrigger: false)
+                return true
+            case .url:
+                if let u = URL(string: entry.textContent.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                    openUniversalActions(for: .url(u, sourceNote: "Lịch sử Clipboard"), directExternalTrigger: false)
+                    return true
+                }
+                openUniversalActions(for: .text(entry.textContent, sourceNote: "Lịch sử Clipboard"), directExternalTrigger: false)
+                return true
+            case .text:
+                openUniversalActions(for: .text(entry.textContent, sourceNote: "Lịch sử Clipboard"), directExternalTrigger: false)
+                return true
+            }
+        }
         if let path = item.path {
             openUniversalActions(
                 for: .files([URL(fileURLWithPath: path, isDirectory: item.isDirectory)]),
@@ -1275,10 +1628,128 @@ final class LauncherViewModel: ObservableObject {
         return false
     }
 
+    @discardableResult
+    func togglePinForSelectedItem() -> Bool {
+        guard case .search = screenMode,
+              selectedIndex >= 0 && selectedIndex < searchResults.count else { return false }
+        let item = searchResults[selectedIndex]
+        if case .clipboardItem = item.kind { return false }
+        guard let path = item.path else { return false }
+
+        let nowPinned = AppSettings.shared.togglePin(path)
+        let name = (path as NSString).lastPathComponent
+        FloatingToastController.shared.showSuccess(
+            title: nowPinned ? "Đã ghim '\(name)'" : "Đã bỏ ghim '\(name)'",
+            subtitle: nowPinned ? "Luôn hiện đầu tiên khi mở DriveBar" : "Đã gỡ khỏi danh sách ghim",
+            symbol: nowPinned ? "pin.fill" : "pin.slash"
+        )
+        refreshSearchResults()
+        if let idx = searchResults.firstIndex(where: { $0.path == path }) {
+            selectedIndex = idx
+        }
+        return true
+    }
+
+    func runClipboardImageOCR(openPreview: Bool) {
+        guard let imgURL = ClipboardHistoryService.shared.materializeCurrentClipboardImageURL() else {
+            FloatingToastController.shared.showError(
+                title: "Không có hình ảnh trong Clipboard",
+                subtitle: "Hãy chụp màn hình (⌘⌃⇧4) hoặc Copy một hình ảnh trước khi chạy OCR"
+            )
+            return
+        }
+
+        if !openPreview {
+            LauncherPanelController.shared.hide()
+        }
+        FloatingToastController.shared.showProgress(
+            title: "Đang OCR ảnh trong Clipboard (Tiếng Việt + Anh)...",
+            subtitle: imgURL.lastPathComponent
+        )
+
+        Task { @MainActor in
+            do {
+                let results = try await MarkdownConverterService.shared.convertFilesToMarkdown(
+                    urls: [imgURL],
+                    saveBesideSource: false,
+                    copyToClipboard: true,
+                    forceOCR: true
+                )
+                guard let first = results.first else { return }
+                FloatingToastController.shared.showSuccess(
+                    title: "Đã OCR ảnh & Copy Markdown vào Clipboard!",
+                    subtitle: "Apple Vision • ~\(first.estimatedTokens.formatted()) tokens • Sẵn sàng ⌘V",
+                    symbol: "camera.viewfinder"
+                )
+                if openPreview {
+                    self.screenMode = .markdownPreview(
+                        title: "OCR Clipboard Image",
+                        sourceURL: imgURL,
+                        savedMDURL: nil,
+                        markdown: first.markdown,
+                        estimatedTokens: first.estimatedTokens,
+                        engineUsed: first.engineUsed
+                    )
+                    LauncherPanelController.shared.showAndFocus()
+                }
+            } catch {
+                FloatingToastController.shared.showError(
+                    title: "Không nhận diện được văn bản trong ảnh",
+                    subtitle: error.localizedDescription
+                )
+            }
+        }
+    }
+
     private func handleSearchItemExecution(_ item: SearchResultItem, modifiers: NSEvent.ModifierFlags) {
         switch item.kind {
         case .infoBanner:
             return
+
+        case .calculatorResult(let expr, let rawVal, let prettyVal):
+            let textToCopy = modifiers.contains(.option) ? "\(expr) = \(prettyVal)" : rawVal
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(textToCopy, forType: .string)
+            LauncherPanelController.shared.hide()
+            FloatingToastController.shared.showSuccess(
+                title: "Đã Copy kết quả: \(textToCopy)",
+                subtitle: "\(expr) = \(prettyVal)",
+                symbol: "function"
+            )
+
+        case .clipboardItem(let clipID):
+            guard let entry = ClipboardHistoryService.shared.entry(withID: clipID) else { return }
+            if modifiers.contains(.shift) {
+                _ = openUniversalActionsForSelectedSearchItem()
+                return
+            }
+            if modifiers.contains(.command) {
+                switch entry.kind {
+                case .url:
+                    if let u = URL(string: entry.textContent.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                        LauncherPanelController.shared.hide()
+                        NSWorkspace.shared.open(u)
+                        return
+                    }
+                case .files, .image:
+                    let urls = entry.filePaths
+                        .filter { $0.contains("/Library/CloudStorage/") || FileManager.default.fileExists(atPath: $0) }
+                        .map { URL(fileURLWithPath: $0) }
+                    if !urls.isEmpty {
+                        LauncherPanelController.shared.hide()
+                        NSWorkspace.shared.activateFileViewerSelecting(urls)
+                        return
+                    }
+                case .text:
+                    break
+                }
+            }
+            ClipboardHistoryService.shared.activateEntry(
+                entry,
+                autoPaste: !modifiers.contains(.option),
+                previousApp: LauncherPanelController.shared.previousFrontApp
+            )
 
         case .webURLQuickConvert(let webURL, let preview):
             let actID = preview ? "ai.url_preview_md" : "ai.url_to_md"
@@ -1292,6 +1763,9 @@ final class LauncherViewModel: ObservableObject {
             }
 
         case .systemCommand(let cmd):
+            if InstantUtilityService.executeSystemUtility(id: cmd, viewModel: self, modifiers: modifiers) {
+                return
+            }
             if cmd == "rebuild" {
                 GoogleDriveIndexService.shared.rebuildAllCaches()
                 FloatingToastController.shared.showProgress(
@@ -1461,9 +1935,9 @@ final class LauncherViewModel: ObservableObject {
             let gd = GoogleDriveIndexService.googleDriveURLs(for: path, isDirectoryHint: isDirectory)
             await MainActor.run {
                 if let gd {
-                    NSWorkspace.shared.open(gd.webURL)
+                    _ = NSWorkspace.shared.open(gd.webURL)
                 } else {
-                    NSWorkspace.shared.open(URL(fileURLWithPath: path, isDirectory: isDirectory))
+                    _ = NSWorkspace.shared.open(URL(fileURLWithPath: path, isDirectory: isDirectory))
                 }
             }
         }

@@ -27,6 +27,9 @@ struct LauncherRootView: View {
             case .destinationPicker(let op, let sources):
                 DestinationFolderPickerView(viewModel: viewModel, operation: op, sources: sources)
 
+            case .batchRename:
+                BatchRenameView(viewModel: viewModel)
+
             case .markdownPreview(let title, let srcURL, let savedURL, let md, let tokens, let engine):
                 MarkdownPreviewView(
                     viewModel: viewModel,
@@ -93,7 +96,7 @@ private struct SearchModeContentView: View {
 
                 NativeSearchInputField(
                     text: $viewModel.searchText,
-                    placeholder: "Tìm nhanh thư mục & ứng dụng ('a ' lọc ứng dụng, 'fs ' chia sẻ, 'ai ' convert)...",
+                    placeholder: "Tìm thư mục, tệp & ứng dụng ('a ' app, 'ff ' tệp, 'c ' clipboard, 's ' lệnh)...",
                     fontSize: 18,
                     focusTrigger: viewModel.focusTrigger,
                     selectAllOnFocus: viewModel.selectAllOnFocus,
@@ -124,7 +127,7 @@ private struct SearchModeContentView: View {
                     .help("Xóa nội dung tìm kiếm (Esc)")
                 }
 
-                if driveService.isRebuildingFolders || driveService.isRebuildingShared {
+                if driveService.isRebuildingFolders || driveService.isRebuildingShared || driveService.isRebuildingFiles {
                     HStack(spacing: 5) {
                         ProgressView().controlSize(.small)
                         Text(driveService.rebuildProgressText ?? "Đang đồng bộ...")
@@ -251,7 +254,7 @@ private struct SearchResultRowView: View {
 
             if isSelected {
                 HStack(spacing: 6) {
-                    if item.path != nil, let onOpenActions {
+                    if supportsUniversalActions, let onOpenActions {
                         Text("→ Actions")
                             .font(.system(size: 10.5, weight: .medium))
                             .foregroundStyle(.white.opacity(0.95))
@@ -279,7 +282,7 @@ private struct SearchResultRowView: View {
                 }
             } else if index < 9 {
                 HStack(spacing: 6) {
-                    if item.path != nil, let onOpenActions {
+                    if supportsUniversalActions, let onOpenActions {
                         Image(systemName: "ellipsis.circle")
                             .font(.system(size: 12.5))
                             .foregroundStyle(.tertiary)
@@ -305,11 +308,33 @@ private struct SearchResultRowView: View {
         )
     }
 
+    private var supportsUniversalActions: Bool {
+        if item.path != nil { return true }
+        switch item.kind {
+        case .clipboardItem, .webURLQuickConvert:
+            return true
+        default:
+            return false
+        }
+    }
+
     private var dynamicSubtitle: String {
+        if isSelected, case .clipboardItem = item.kind {
+            if activeModifiers.contains(.option) {
+                return "⌥↩ Chỉ sao chép lại vào Clipboard (không tự dán)"
+            }
+            if activeModifiers.contains(.command) && item.path != nil {
+                return "⌘↩ Mở vị trí tệp / ảnh trong Finder  •  ⇥ Mở Universal Actions"
+            }
+            if activeModifiers.contains(.shift) {
+                return "⇧ (Thả phím Shift) Xem nhanh Quick Look  •  ⇧↩ Mở Universal Actions"
+            }
+            return item.subtitle
+        }
         guard isSelected, item.path != nil else { return item.subtitle }
         if case .localApp = item.kind {
             if activeModifiers.contains(.command) {
-                return "⌘↩ Mở vị trí ứng dụng trong Finder  •  ⌘/ Mở Universal Actions"
+                return "⌘↩ Mở vị trí ứng dụng trong Finder  •  ⌘D Ghim  •  ⌘/ Universal Actions"
             }
             if activeModifiers.contains(.option) {
                 return "⌥↩ Sao chép đường dẫn ứng dụng vào Clipboard"
@@ -320,7 +345,7 @@ private struct SearchResultRowView: View {
             return item.subtitle
         }
         if activeModifiers.contains(.command) {
-            return "⌘↩ Mở vị trí trực tiếp trong Finder  •  ⌘/ Mở Universal Actions"
+            return "⌘↩ Mở vị trí trực tiếp trong Finder  •  ⌘D Ghim  •  ⌘/ Universal Actions"
         }
         if activeModifiers.contains(.option) {
             return "⌥↩ Sao chép liên kết chia sẻ Google Drive vào Clipboard"
@@ -342,11 +367,11 @@ private struct SearchFooterBar: View {
     let folderCount: Int
 
     var body: some View {
-        HStack(spacing: 11) {
+        HStack(spacing: 10) {
             FooterShortcutHint(key: "↩", label: "Mở")
             FooterShortcutHint(key: "⇥", label: "Actions")
             FooterShortcutHint(key: "⇧", label: "Quick Look")
-            FooterShortcutHint(key: "⌘↩", label: "Finder")
+            FooterShortcutHint(key: "⌘D", label: "Ghim")
 
             Spacer(minLength: 4)
 
@@ -781,7 +806,8 @@ struct FileOrSymbolIconView: View {
 
     private var prefersDirectSymbol: Bool {
         fallbackSymbol == "arrow.turn.left.up" ||
-        fallbackSymbol == "checkmark.circle.fill"
+        fallbackSymbol == "checkmark.circle.fill" ||
+        fallbackSymbol == "function"
     }
 
     var body: some View {

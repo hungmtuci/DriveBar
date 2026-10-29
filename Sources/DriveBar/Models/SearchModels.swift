@@ -80,6 +80,42 @@ struct SharedCachePayload: Codable, Sendable {
     let items: [SharedDriveEntry]
 }
 
+/// Compact representation of a cached file (`[path, ext, cleanName, acronym, cleanParent]`).
+struct DriveFileEntry: Sendable {
+    let path: String
+    let ext: String
+    let cleanName: String
+    let acronym: String
+    let cleanParent: String
+}
+
+extension DriveFileEntry: Decodable {
+    init(from decoder: Decoder) throws {
+        var unkeyed = try decoder.unkeyedContainer()
+        self.path = try unkeyed.decode(String.self)
+        self.ext = (try? unkeyed.decode(String.self)) ?? ""
+        self.cleanName = (try? unkeyed.decode(String.self)) ?? ""
+        self.acronym = (try? unkeyed.decode(String.self)) ?? ""
+        self.cleanParent = (try? unkeyed.decode(String.self)) ?? ""
+    }
+}
+
+extension DriveFileEntry: Encodable {
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.unkeyedContainer()
+        try container.encode(path)
+        try container.encode(ext)
+        try container.encode(cleanName)
+        try container.encode(acronym)
+        try container.encode(cleanParent)
+    }
+}
+
+struct FileCachePayload: Codable, Sendable {
+    let timestamp: Double
+    let items: [DriveFileEntry]
+}
+
 struct HistoryRecord: Codable, Sendable {
     var count: Int
     var last_used: Double
@@ -94,6 +130,8 @@ enum ResultItemKind: Equatable {
     case systemCommand(id: String)
     case aiQuickCommand(action: String)
     case webURLQuickConvert(url: URL, preview: Bool)
+    case clipboardItem(id: String)
+    case calculatorResult(expression: String, rawValue: String, formattedValue: String)
     case infoBanner
 }
 
@@ -125,5 +163,6 @@ enum LauncherScreenMode: Equatable {
     case universalActions(target: ActionTarget)
     case openWithPicker(fileURL: URL, previousTarget: ActionTarget)
     case destinationPicker(operation: FileTransferOperation, sources: [URL])
+    case batchRename(urls: [URL], previousTarget: ActionTarget)
     case markdownPreview(title: String, sourceURL: URL, savedMDURL: URL?, markdown: String, estimatedTokens: Int, engineUsed: String)
 }

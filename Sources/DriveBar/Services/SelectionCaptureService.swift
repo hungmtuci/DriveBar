@@ -7,7 +7,7 @@ import Carbon
 final class SelectionCaptureService {
     static let shared = SelectionCaptureService()
 
-    private static let appleScriptQueue = DispatchQueue(label: "com.hunglx.DriveBar.finderAppleScript", qos: .userInteractive)
+    private nonisolated static let appleScriptQueue = DispatchQueue(label: "com.hunglx.DriveBar.finderAppleScript", qos: .userInteractive)
 
     private init() {}
 
@@ -196,6 +196,12 @@ final class SelectionCaptureService {
         let savedItems = snapshotPasteboard(pb)
         let beforeCount = pb.changeCount
 
+        ClipboardHistoryService.shared.isTemporarilySuspended = true
+        defer {
+            ClipboardHistoryService.shared.isTemporarilySuspended = false
+            ClipboardHistoryService.shared.noteInternalPasteboardWrite()
+        }
+
         let src = CGEventSource(stateID: .hidSystemState)
         let keyDown = CGEvent(keyboardEventSource: src, virtualKey: CGKeyCode(kVK_ANSI_C), keyDown: true)
         keyDown?.flags = .maskCommand
@@ -237,6 +243,12 @@ final class SelectionCaptureService {
         if let str = pb.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines),
            !str.isEmpty {
             return classifyString(str, note: note)
+        }
+        if pb == .general,
+           let types = pb.types,
+           (types.contains(.png) || types.contains(.tiff)),
+           let imgURL = ClipboardHistoryService.shared.materializeCurrentClipboardImageURL() {
+            return .files([imgURL], sourceNote: "Ảnh chụp / Hình ảnh từ Clipboard")
         }
         return nil
     }

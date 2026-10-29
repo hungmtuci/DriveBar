@@ -79,6 +79,24 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         openWinPreview.target = self
         menu.addItem(openWinPreview)
 
+        let openClipHist = NSMenuItem(
+            title: "Lịch sử Clipboard ('c ' — \(ClipboardHistoryService.shared.entries.count) mục)",
+            action: #selector(openClipboardHistoryAction),
+            keyEquivalent: ""
+        )
+        openClipHist.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: nil)
+        openClipHist.target = self
+        menu.addItem(openClipHist)
+
+        let ocrClipItem = NSMenuItem(
+            title: "OCR Ảnh trong Clipboard sang Markdown (Tiếng Việt + Anh)",
+            action: #selector(ocrClipboardImageAction),
+            keyEquivalent: ""
+        )
+        ocrClipItem.image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: nil)
+        ocrClipItem.target = self
+        menu.addItem(ocrClipItem)
+
         let quickConvertMD = NSMenuItem(
             title: "Convert mục đang chọn trong Finder sang Markdown (.md + Copy)",
             action: #selector(convertFinderSelectionToMD),
@@ -315,6 +333,16 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     @objc private func openWindowsPreviewAction() {
         WindowSwitcherController.shared.openPinnedFromMenuOrSearch()
+    }
+
+    @objc private func openClipboardHistoryAction() {
+        LauncherViewModel.shared.prepareForSearchLaunch()
+        LauncherViewModel.shared.searchText = "c "
+        LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
+    }
+
+    @objc private func ocrClipboardImageAction() {
+        LauncherViewModel.shared.runClipboardImageOCR(openPreview: false)
     }
 
     @objc private func convertFinderSelectionToMD() {

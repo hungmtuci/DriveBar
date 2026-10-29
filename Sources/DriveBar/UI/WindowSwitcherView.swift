@@ -31,6 +31,9 @@ struct WindowSwitcherOverlayView: View {
                             onActivate: {
                                 controller.commitSelectionAndDismiss()
                             },
+                            onSnapWindow: { placement in
+                                controller.commitSnapSelectionAndDismiss(placement)
+                            },
                             onCloseWindow: {
                                 controller.pinOpenFromInteraction()
                                 service.closeSelectedWindow()
@@ -72,6 +75,7 @@ private struct ZoomedWindowPreviewCard: View {
     let maxWidth: CGFloat
     let maxHeight: CGFloat
     let onActivate: () -> Void
+    let onSnapWindow: (WindowSnapPlacement) -> Void
     let onCloseWindow: () -> Void
     let onToggleMinimize: () -> Void
     let onRequestScreenRecording: () -> Void
@@ -118,6 +122,38 @@ private struct ZoomedWindowPreviewCard: View {
 
                 if !item.isWindowlessApp {
                     HStack(spacing: 4) {
+                        if !item.isFullscreen {
+                            Button { onSnapWindow(.leftHalf) } label: {
+                                Image(systemName: "rectangle.lefthalf.inset.filled")
+                                    .font(.system(size: 10.5, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 22, height: 22)
+                                    .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                            .help("Chia cửa sổ sang Nửa trái màn hình (⌃←)")
+
+                            Button { onSnapWindow(.rightHalf) } label: {
+                                Image(systemName: "rectangle.righthalf.inset.filled")
+                                    .font(.system(size: 10.5, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 22, height: 22)
+                                    .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                            .help("Chia cửa sổ sang Nửa phải màn hình (⌃→)")
+
+                            Button { onSnapWindow(.maximize) } label: {
+                                Image(systemName: "arrow.up.left.and.arrow.down.right.rectangle")
+                                    .font(.system(size: 10.5, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 22, height: 22)
+                                    .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                            .help("Phóng tối đa cửa sổ vừa khít màn hình (⌃↑)")
+                        }
+
                         Button(action: onToggleMinimize) {
                             Image(systemName: item.isMinimized ? "arrow.up.left.and.arrow.down.right" : "minus")
                                 .font(.system(size: 10.5, weight: .medium))
@@ -368,13 +404,13 @@ private struct WindowThumbnailStripCard: View {
 
             // Subtle Single-Line Controls & Filter Toggles Footer
             HStack(spacing: 10) {
-                FooterShortcutHint(key: "↩", label: "Mở cửa sổ")
+                FooterShortcutHint(key: "↩", label: "Mở")
                 FooterShortcutHint(key: "← →", label: "Di chuyển")
-                FooterShortcutHint(key: "⌘⇥", label: "Kế tiếp")
+                FooterShortcutHint(key: "⌃←→↑", label: "Chia đôi/Tối đa")
                 FooterShortcutHint(key: "⌘Y", label: settings.windowSwitcherShowZoomPreview ? "Ẩn phóng to" : "Phóng to")
                 FooterShortcutHint(key: "⌘W", label: "Đóng")
                 FooterShortcutHint(key: "⌘M", label: "Minimize")
-                FooterShortcutHint(key: "Esc", label: service.filterQuery.isEmpty ? "Đóng bảng" : "Xóa lọc")
+                FooterShortcutHint(key: "Esc", label: service.filterQuery.isEmpty ? "Đóng" : "Xóa lọc")
 
                 Spacer(minLength: 10)
 

@@ -43,6 +43,8 @@ final class AppSettings: ObservableObject {
         static let windowSwitcherShowZoomPreview = "drivebar.windowSwitcherShowZoomPreview"
         static let windowSwitcherScope = "drivebar.windowSwitcherScope"
         static let windowSwitcherReleaseToActivate = "drivebar.windowSwitcherReleaseToActivate"
+        static let pinnedPaths = "drivebar.pinnedPaths"
+        static let enableClipboardHistory = "drivebar.enableClipboardHistory"
     }
 
     @Published var enableWindowSwitcher: Bool {
@@ -212,6 +214,21 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    @Published var pinnedPaths: [String] {
+        didSet {
+            defaults.set(pinnedPaths, forKey: Keys.pinnedPaths)
+            notifyPortableSettingsChanged()
+        }
+    }
+
+    @Published var enableClipboardHistory: Bool {
+        didSet {
+            defaults.set(enableClipboardHistory, forKey: Keys.enableClipboardHistory)
+            ClipboardHistoryService.shared.updatePollingState()
+            notifyPortableSettingsChanged()
+        }
+    }
+
     @Published var enableActionLatching: Bool {
         didSet {
             defaults.set(enableActionLatching, forKey: Keys.enableActionLatching)
@@ -329,6 +346,8 @@ final class AppSettings: ObservableObject {
 
         self.showDockIcon = defaults.object(forKey: Keys.showDockIcon) as? Bool ?? false
         self.includeMacAppsInSearch = defaults.object(forKey: Keys.includeMacAppsInSearch) as? Bool ?? true
+        self.pinnedPaths = defaults.stringArray(forKey: Keys.pinnedPaths) ?? []
+        self.enableClipboardHistory = defaults.object(forKey: Keys.enableClipboardHistory) as? Bool ?? true
         self.enableActionLatching = defaults.object(forKey: Keys.enableActionLatching) as? Bool ?? true
         self.enableRealtimeFSEvents = defaults.object(forKey: Keys.enableRealtimeFSEvents) as? Bool ?? true
         self.selectedDriveAccountFilter = defaults.string(forKey: Keys.selectedDriveAccountFilter) ?? "ALL"
@@ -405,6 +424,23 @@ final class AppSettings: ObservableObject {
             disabledActionIDs.remove(id)
         } else {
             disabledActionIDs.insert(id)
+        }
+    }
+
+    func isPinned(_ path: String) -> Bool {
+        let normalized = path.hasSuffix("/") && path.count > 1 ? String(path.dropLast()) : path
+        return pinnedPaths.contains(normalized)
+    }
+
+    @discardableResult
+    func togglePin(_ path: String) -> Bool {
+        let normalized = path.hasSuffix("/") && path.count > 1 ? String(path.dropLast()) : path
+        if let idx = pinnedPaths.firstIndex(of: normalized) {
+            pinnedPaths.remove(at: idx)
+            return false
+        } else {
+            pinnedPaths.insert(normalized, at: 0)
+            return true
         }
     }
 

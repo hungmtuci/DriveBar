@@ -297,6 +297,7 @@ private struct GeneralSettingsTab: View {
     @ObservedObject var updater: UpdateCheckerService
     @ObservedObject var syncService: SyncAndLatchingService
     @ObservedObject var uiState: SettingsUIState
+    @ObservedObject private var clipboardService = ClipboardHistoryService.shared
     @Binding var axTrusted: Bool
 
     var body: some View {
@@ -551,7 +552,8 @@ private struct GeneralSettingsTab: View {
                                 }
                                 HStack(spacing: 14) {
                                     Text("My Drive: **\(driveService.folderCount.formatted())** thư mục")
-                                    Text("Shared Drives & Shortcuts: **\(driveService.sharedCount.formatted())** mục")
+                                    Text("Shared: **\(driveService.sharedCount.formatted())** mục")
+                                    Text("Tệp tin: **\(driveService.fileCount.formatted())** tệp")
                                     if let updated = driveService.lastCacheUpdate {
                                         Text("Cập nhật: \(updated.formatted(date: .abbreviated, time: .shortened))")
                                             .foregroundStyle(.secondary)
@@ -609,6 +611,63 @@ private struct GeneralSettingsTab: View {
                     .padding(8)
                 } label: {
                     Label("Chỉ mục Tìm kiếm Siêu tốc Google Drive (Real-time & Đa tài khoản)", systemImage: "externaldrive.fill.badge.icloud")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+
+                // 3.2. Clipboard History (`c `), Pinned Favorites (`⌘D`) & Quick Prefixes (`ff `, `s `, Math)
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 12) {
+                            Toggle(
+                                "Tự động lưu Lịch sử Clipboard thông minh (Văn bản, URL, Tệp & Ảnh chụp — gõ 'c ' để tìm & dán ngay)",
+                                isOn: $settings.enableClipboardHistory
+                            )
+                            .font(.system(size: 12.5, weight: .medium))
+
+                            Spacer()
+
+                            Button("Mở Clipboard ('c ')") {
+                                LauncherViewModel.shared.prepareForSearchLaunch()
+                                LauncherViewModel.shared.searchText = "c "
+                                LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+
+                            Button("Xóa Clipboard (\(clipboardService.entries.count))") {
+                                clipboardService.clearHistory()
+                                settings.statusBannerMessage = "Đã xóa sạch lịch sử Clipboard của DriveBar."
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(clipboardService.entries.isEmpty)
+                        }
+
+                        HStack(spacing: 12) {
+                            Text("• Đã ghim đầu danh sách (⌘D): **\(settings.pinnedPaths.count)** mục  •  Tự động bỏ qua dữ liệu nhạy cảm từ trình quản lý mật khẩu.")
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(.secondary)
+
+                            Spacer()
+
+                            if !settings.pinnedPaths.isEmpty {
+                                Button("Bỏ ghim tất cả (\(settings.pinnedPaths.count))") {
+                                    settings.pinnedPaths = []
+                                    LauncherViewModel.shared.refreshSearchResults()
+                                    settings.statusBannerMessage = "Đã gỡ toàn bộ các mục đã ghim."
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.mini)
+                            }
+                        }
+
+                        Text("• Cú pháp tìm nhanh: **ff ** (Tệp tin) • **a ** (Ứng dụng) • **c ** (Clipboard) • **s ** (Lệnh hệ thống) • **ocr** (OCR ảnh Clipboard) • gõ phép tính trực tiếp (**15% * 2400000**, **sqrt(144)**).")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(8)
+                } label: {
+                    Label("Lịch sử Clipboard, Mục Đã Ghim (⌘D), Tìm Tệp (ff) & Máy Tính Nhanh", systemImage: "doc.on.clipboard")
                         .font(.system(size: 13, weight: .semibold))
                 }
 
@@ -1242,7 +1301,7 @@ private struct WindowSwitcherSettingsTab: View {
                             Text("• Giữ ⌘ + bấm Tab / ⇧Tab liên tiếp: Di chuyển mượt qua từng cửa sổ (cùng ứng dụng xếp cạnh nhau).")
                         }
                         VStack(alignment: .leading, spacing: 5) {
-                            Text("• Phím ⌘Y (hoặc ⌃Space): Ẩn / hiện khung phóng to nội dung phía trên.")
+                            Text("• Phím ⌃← / ⌃→ / ⌃↑ / ⌃↓: Chia cửa sổ Nửa trái (⌃←), Nửa phải (⌃→), Tối đa (⌃↑), Giữa màn hình (⌃↓).")
                             Text("• Phím ⌘W / ⌘M / ⌘H / ⌘Q: Đóng cửa sổ (⌘W), Minimize (⌘M), Ẩn App (⌘H), Thoát App (⌘Q).")
                             Text("• Phím ⌘1 / ⌘2 / ⌘3 / ⌘4: Đổi nhanh Màn hình (⌘1), Minimize (⌘2), App ẩn (⌘3), Cùng App (⌘4).")
                         }

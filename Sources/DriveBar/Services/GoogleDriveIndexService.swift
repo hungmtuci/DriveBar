@@ -91,6 +91,35 @@ struct FastSharedIndex: Sendable {
     }
 }
 
+struct FastFileRecord: Sendable {
+    let entry: DriveFileEntry
+    let cleanNameBytes: [UInt8]
+    let acrBytes: [UInt8]
+    let extBytes: [UInt8]
+    let cleanParentBytes: [UInt8]
+}
+
+struct FastFileIndex: Sendable {
+    let records: [FastFileRecord]
+
+    static let empty = FastFileIndex(records: [])
+
+    nonisolated static func build(from entries: [DriveFileEntry]) -> FastFileIndex {
+        var recs: [FastFileRecord] = []
+        recs.reserveCapacity(entries.count)
+        for e in entries {
+            recs.append(FastFileRecord(
+                entry: e,
+                cleanNameBytes: Array(e.cleanName.utf8),
+                acrBytes: Array(e.acronym.utf8),
+                extBytes: Array(e.ext.utf8),
+                cleanParentBytes: Array(e.cleanParent.utf8)
+            ))
+        }
+        return FastFileIndex(records: recs)
+    }
+}
+
 @MainActor
 final class GoogleDriveIndexService: ObservableObject {
     static let shared = GoogleDriveIndexService()
@@ -104,15 +133,19 @@ final class GoogleDriveIndexService: ObservableObject {
 
     @Published private(set) var folderCount: Int = 0
     @Published private(set) var sharedCount: Int = 0
+    @Published private(set) var fileCount: Int = 0
     @Published private(set) var isRebuildingFolders: Bool = false
     @Published private(set) var isRebuildingShared: Bool = false
+    @Published private(set) var isRebuildingFiles: Bool = false
     @Published private(set) var rebuildProgressText: String?
     @Published private(set) var lastCacheUpdate: Date?
 
     private var folderEntries: [DriveFolderEntry] = []
     private var sharedEntries: [SharedDriveEntry] = []
+    private var fileEntries: [DriveFileEntry] = []
     private(set) var fastFolderIndex: FastFolderIndex = .empty
     private(set) var fastSharedIndex: FastSharedIndex = .empty
+    private(set) var fastFileIndex: FastFileIndex = .empty
     private(set) var history: [String: HistoryRecord] = [:]
     private(set) var installedApps: [InstalledAppEntry] = []
     private var lastAppScanUptime: TimeInterval = 0
@@ -128,6 +161,7 @@ final class GoogleDriveIndexService: ObservableObject {
     private var cacheDir: String { "\(homePath)/.config/alfred-scripts" }
     private var folderCachePath: String { "\(cacheDir)/folder_cache.json" }
     private var sharedCachePath: String { "\(cacheDir)/shared_cache.json" }
+    private var fileCachePath: String { "\(cacheDir)/file_cache.json" }
     private var historyPath: String { "\(cacheDir)/folder_history.json" }
 
     nonisolated private static let skipExtensions: Set<String> = [
@@ -521,6 +555,7 @@ final class GoogleDriveIndexService: ObservableObject {
     private func loadInitialDataAsync() {
         let fCache = folderCachePath
         let sCache = sharedCachePath
+        let flCache = fileCachePath
         let hPath = historyPath
         let currentAccount = accountRoot
 
@@ -530,6 +565,8 @@ final class GoogleDriveIndexService: ObservableObject {
             let builtFastFolders = loadedFolders.map { FastFolderIndex.build(from: $0.0) }
             let loadedShared = Self.readSharedCacheDisk(at: sCache)
             let builtFastShared = loadedShared.map { FastSharedIndex.build(from: $0.0) }
+            let loadedFiles = Self.readFileCacheDisk(at: flCache)
+            let builtFastFiles = loadedFiles.map { FastFileIndex.build(from: $0.0) }
             let scannedApps = Self.scanInstalledApplications()
 
             await MainActor.run {
@@ -561,10 +598,29 @@ final class GoogleDriveIndexService: ObservableObject {
                     service.rebuildSharedCacheInBackground()
                 }
 
+                if let (fEntries, ts) = loadedFiles, let builtFastFiles {
+                    service.fileEntries = fEntries
+                    service.fastFileIndex = builtFastFiles
+                    service.fileCount = fEntries.count
+                    if Date().timeIntervalSince1970 - ts > 86_400 {
+                        service.rebuildFileCacheInBackground()
+                    }
+                } else {
+                    service.rebuildFileCacheInBackground()
+                }
+
                 SyncAndLatchingService.shared.start()
                 LauncherViewModel.shared.refreshSearchResults()
             }
         }
+    }
+
+    private nonisolated static func readFileCacheDisk(at path: String) -> ([DriveFileEntry], Double)? {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let payload = try? JSONDecoder().decode(FileCachePayload.self, from: data) else {
+            return nil
+        }
+        return (payload.items, payload.timestamp)
     }
 
     private nonisolated static func readHistoryDisk(at path: String) -> [String: HistoryRecord] {
@@ -912,6 +968,7 @@ final class GoogleDriveIndexService: ObservableObject {
         refreshInstalledAppsIfNeeded(force: true)
         rebuildFolderCacheInBackground()
         rebuildSharedCacheInBackground()
+        rebuildFileCacheInBackground()
     }
 
     func rebuildFolderCacheInBackground() {
@@ -1124,6 +1181,118 @@ final class GoogleDriveIndexService: ObservableObject {
         }
     }
 
+    func rebuildFileCacheInBackground() {
+        guard !isRebuildingFiles else { return }
+        isRebuildingFiles = true
+
+        let home = homePath
+        let targetCache = fileCachePath
+        var scanRoots: [(path: String, maxDepth: Int)] = []
+        for acc in activeAccounts {
+            if let md = acc.myDrivePath { scanRoots.append((md, 10)) }
+            if let sd = acc.sharedDrivesPath { scanRoots.append((sd, 8)) }
+        }
+        for localSub in ["Desktop", "Downloads", "Documents"] {
+            scanRoots.append(("\(home)/\(localSub)", 4))
+        }
+
+        let rootsSnap = scanRoots
+        Task.detached(priority: .utility) {
+            let skippedDirNames: Set<String> = [
+                "node_modules", ".git", ".svn", ".venv", "venv", "__pycache__",
+                ".build", "build", "deriveddata", "pods", "library"
+            ]
+            var collected: [DriveFileEntry] = []
+            collected.reserveCapacity(60_000)
+            let maxFiles = 200_000
+
+            outerLoop: for root in rootsSnap {
+                var stack: [(dir: String, depth: Int, cleanParent: String)] = [(root.path, 0, "")]
+                let rootPrefixLen = root.path.count + 1
+
+                while let (curDir, depth, parentClean) = stack.popLast() {
+                    if collected.count >= maxFiles { break outerLoop }
+                    guard let dirPtr = Darwin.opendir(curDir) else { continue }
+                    var childDirs: [(String, String)] = []
+
+                    while let ent = Darwin.readdir(dirPtr) {
+                        let nameLen = Int(ent.pointee.d_namlen)
+                        guard nameLen > 0 else { continue }
+                        let dType = ent.pointee.d_type
+
+                        let name: String = withUnsafePointer(to: ent.pointee.d_name) { ptr in
+                            ptr.withMemoryRebound(to: UInt8.self, capacity: nameLen) { utf8Ptr in
+                                String(decoding: UnsafeBufferPointer(start: utf8Ptr, count: nameLen), as: UTF8.self)
+                            }
+                        }
+                        if name.isEmpty || name.hasPrefix(".") || name == "Icon\r" { continue }
+
+                        let fullPath = "\(curDir)/\(name)"
+                        let isDirectory: Bool
+                        if dType == DT_DIR {
+                            isDirectory = true
+                        } else if dType == DT_REG || dType == DT_LNK {
+                            isDirectory = false
+                        } else {
+                            // DT_UNKNOWN: only lstat outside CloudStorage, or infer from extension
+                            if fullPath.contains("/Library/CloudStorage/") {
+                                let extGuess = (name as NSString).pathExtension
+                                isDirectory = extGuess.isEmpty
+                            } else {
+                                var st = Darwin.stat()
+                                isDirectory = (Darwin.lstat(fullPath, &st) == 0) && ((st.st_mode & S_IFMT) == S_IFDIR)
+                            }
+                        }
+
+                        if isDirectory {
+                            let lowerName = name.lowercased()
+                            if skippedDirNames.contains(lowerName) || Self.shouldSkip(name) { continue }
+                            if depth < root.maxDepth {
+                                let relParent = fullPath.hasPrefix(root.path + "/")
+                                    ? String(fullPath.dropFirst(rootPrefixLen))
+                                    : name
+                                childDirs.append((fullPath, Self.cleanString(relParent)))
+                            }
+                        } else {
+                            let ext = (name as NSString).pathExtension.lowercased()
+                            if ext == "tmp" || ext == "part" || ext == "crdownload" || ext == "ds_store" { continue }
+                            let stem = ext.isEmpty ? name : (name as NSString).deletingPathExtension
+                            let (cStem, acr) = Self.extractSignatures(stem)
+                            let cFull = ext.isEmpty ? cStem : "\(cStem)\(ext)"
+                            collected.append(DriveFileEntry(
+                                path: fullPath,
+                                ext: ext,
+                                cleanName: cFull,
+                                acronym: acr,
+                                cleanParent: parentClean
+                            ))
+                            if collected.count >= maxFiles { break }
+                        }
+                    }
+                    Darwin.closedir(dirPtr)
+
+                    for (subPath, subClean) in childDirs.reversed() {
+                        stack.append((subPath, depth + 1, subClean))
+                    }
+                }
+            }
+
+            let now = Date().timeIntervalSince1970
+            let payload = FileCachePayload(timestamp: now, items: collected)
+            Self.writeCodableAtomic(payload, to: targetCache)
+
+            let finalFiles = collected
+            let builtFast = FastFileIndex.build(from: finalFiles)
+            await MainActor.run {
+                let svc = GoogleDriveIndexService.shared
+                svc.fileEntries = finalFiles
+                svc.fastFileIndex = builtFast
+                svc.fileCount = finalFiles.count
+                svc.isRebuildingFiles = false
+            }
+        }
+    }
+
     private nonisolated static func writeCodableAtomic<T: Encodable>(_ value: T, to filePath: String) {
         let fm = FileManager.default
         let dir = (filePath as NSString).deletingLastPathComponent
@@ -1205,6 +1374,39 @@ final class GoogleDriveIndexService: ObservableObject {
             }
         }
         return out
+    }
+
+    func exportPortablePathList(_ paths: [String]) -> [String] {
+        paths.map { absPath in
+            if let acc = accountForPath(absPath), absPath.hasPrefix(acc.rootPath + "/") {
+                let rel = String(absPath.dropFirst(acc.rootPath.count + 1))
+                return "gdrive::\(acc.email)::\(rel)"
+            }
+            if absPath.hasPrefix(homePath + "/") {
+                return "~/" + String(absPath.dropFirst(homePath.count + 1))
+            }
+            return absPath
+        }
+    }
+
+    func resolvePortablePathList(_ portablePaths: [String]) -> [String] {
+        portablePaths.compactMap { item in
+            if item.hasPrefix("gdrive::") {
+                let rest = String(item.dropFirst("gdrive::".count))
+                if let sepRange = rest.range(of: "::") {
+                    let email = String(rest[..<sepRange.lowerBound])
+                    let rel = String(rest[sepRange.upperBound...])
+                    if let acc = availableAccounts.first(where: { $0.email == email }) ?? availableAccounts.first {
+                        return "\(acc.rootPath)/\(rel)"
+                    }
+                }
+                return nil
+            }
+            if item.hasPrefix("~/") {
+                return homePath + String(item.dropFirst(1))
+            }
+            return item
+        }
     }
 
     func mergeWithPortableSyncFile(at remoteFilePath: String) -> Int {
@@ -1328,7 +1530,45 @@ final class GoogleDriveIndexService: ObservableObject {
         return ext.isEmpty || ext.contains(" ")
     }
 
+    func pinnedSearchResultItems() -> [SearchResultItem] {
+        let pinned = AppSettings.shared.pinnedPaths
+        guard !pinned.isEmpty else { return [] }
+        var out: [SearchResultItem] = []
+        for p in pinned {
+            let lower = p.lowercased()
+            if lower.hasSuffix(".app") {
+                let appTitle = ((p as NSString).lastPathComponent as NSString).deletingPathExtension
+                out.append(SearchResultItem(
+                    id: "pin:app:\(p)",
+                    title: appTitle,
+                    subtitle: "Đã ghim (⌘D bỏ ghim) • \(p)",
+                    path: p,
+                    isDirectory: false,
+                    kind: .localApp(path: p),
+                    badge: "Đã ghim",
+                    sfSymbolFallback: "app.fill"
+                ))
+            } else {
+                let isDir = isKnownDirectory(p)
+                out.append(SearchResultItem(
+                    id: "pin:\(p)",
+                    title: (p as NSString).lastPathComponent,
+                    subtitle: "Đã ghim (⌘D bỏ ghim) ‹ \(formatHierarchicalSubtitle(p))",
+                    path: p,
+                    isDirectory: isDir,
+                    kind: isDir ? .driveFolder(path: p) : .driveFile(path: p),
+                    badge: "Đã ghim",
+                    sfSymbolFallback: isDir ? "folder.fill" : "doc.fill"
+                ))
+            }
+        }
+        return out
+    }
+
     func recentMyDriveFolders(limit: Int = 9) -> [SearchResultItem] {
+        let pinnedItems = pinnedSearchResultItems()
+        let pinnedPathSet = Set(pinnedItems.compactMap(\.path))
+
         let validMyDrivePrefixes = activeAccounts.compactMap(\.myDrivePath)
         let knownFolderSet = fastFolderIndex.knownPaths
         let sorted = history.sorted {
@@ -1338,8 +1578,11 @@ final class GoogleDriveIndexService: ObservableObject {
             return $0.value.count > $1.value.count
         }
 
-        var items: [SearchResultItem] = []
+        var items: [SearchResultItem] = pinnedItems
+        let targetLimit = max(limit, pinnedItems.count + 5)
+
         for (hPath, rec) in sorted {
+            if pinnedPathSet.contains(hPath) { continue }
             if !validMyDrivePrefixes.isEmpty, !validMyDrivePrefixes.contains(where: { hPath.hasPrefix($0) }) {
                 continue
             }
@@ -1357,11 +1600,11 @@ final class GoogleDriveIndexService: ObservableObject {
                 badge: nil,
                 sfSymbolFallback: "folder.fill"
             ))
-            if items.count >= limit { break }
+            if items.count >= targetLimit { break }
         }
 
-        if items.isEmpty {
-            for entry in folderEntries where entry.cleanSegs.count <= 1 {
+        if items.count == pinnedItems.count {
+            for entry in folderEntries where entry.cleanSegs.count <= 1 && !pinnedPathSet.contains(entry.path) {
                 items.append(SearchResultItem(
                     id: "root:\(entry.path)",
                     title: (entry.path as NSString).lastPathComponent,
@@ -1372,7 +1615,7 @@ final class GoogleDriveIndexService: ObservableObject {
                     badge: nil,
                     sfSymbolFallback: "folder.fill"
                 ))
-                if items.count >= limit { break }
+                if items.count >= targetLimit { break }
             }
         }
         return items
@@ -2140,5 +2383,243 @@ final class GoogleDriveIndexService: ObservableObject {
             }
         }
         return count
+    }
+
+    // MARK: - Direct Fast File Search (`ff` / `ff + từ khóa` & Extension-Aware Search)
+
+    nonisolated static let knownSearchableExtensions: Set<String> = [
+        "pdf", "docx", "doc", "xlsx", "xls", "csv", "tsv", "pptx", "ppt",
+        "md", "markdown", "txt", "rtf", "gdoc", "gsheet", "gslides",
+        "sav", "zsav", "spv", "sps", "dta", "do", "r", "rmd", "qmd", "ipynb", "py",
+        "json", "yaml", "yml", "xml", "html", "tex", "bib", "ris", "enl",
+        "zip", "rar", "7z", "tar", "gz", "dmg",
+        "png", "jpg", "jpeg", "heic", "webp", "svg", "mp4", "mp3", "m4a", "wav"
+    ]
+
+    nonisolated static func hasExplicitFileExtensionToken(_ rawTokens: [String]) -> Bool {
+        for raw in rawTokens {
+            let trimmed = raw.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            if knownSearchableExtensions.contains(trimmed) {
+                return true
+            }
+            let pathExt = (raw as NSString).pathExtension.lowercased()
+            if !pathExt.isEmpty && knownSearchableExtensions.contains(pathExt) {
+                return true
+            }
+        }
+        return false
+    }
+
+    func defaultFileModeResultItems(limit: Int = 35) -> [SearchResultItem] {
+        var results: [SearchResultItem] = []
+        var seen = Set<String>()
+
+        // 1. Pinned files first
+        for p in AppSettings.shared.pinnedPaths where !p.lowercased().hasSuffix(".app") && !isKnownDirectory(p) {
+            guard seen.insert(p).inserted else { continue }
+            let ext = (p as NSString).pathExtension.uppercased()
+            results.append(SearchResultItem(
+                id: "ffile:pin:\(p)",
+                title: (p as NSString).lastPathComponent,
+                subtitle: "Đã ghim ‹ \(formatHierarchicalSubtitle(p))",
+                path: p,
+                isDirectory: false,
+                kind: .driveFile(path: p),
+                badge: ext.isEmpty ? "Đã ghim" : "Đã ghim • \(ext)",
+                sfSymbolFallback: "doc.fill"
+            ))
+        }
+
+        // 2. Recently opened files from history
+        let sortedHist = history.sorted { $0.value.last_used > $1.value.last_used }
+        for (hPath, rec) in sortedHist {
+            let ext = (hPath as NSString).pathExtension
+            guard !ext.isEmpty, !hPath.lowercased().hasSuffix(".app"), !isKnownDirectory(hPath) else { continue }
+            guard seen.insert(hPath).inserted else { continue }
+            results.append(SearchResultItem(
+                id: "ffile:hist:\(hPath)",
+                title: (hPath as NSString).lastPathComponent,
+                subtitle: "Mở gần đây (\(rec.count) lần) ‹ \(formatHierarchicalSubtitle(hPath))",
+                path: hPath,
+                isDirectory: false,
+                kind: .driveFile(path: hPath),
+                badge: ext.uppercased(),
+                sfSymbolFallback: "doc.fill"
+            ))
+            if results.count >= limit { return results }
+        }
+
+        // 3. Fill with indexed files
+        for f in fileEntries.prefix(limit) where seen.insert(f.path).inserted {
+            results.append(SearchResultItem(
+                id: "ffile:idx:\(f.path)",
+                title: (f.path as NSString).lastPathComponent,
+                subtitle: formatHierarchicalSubtitle(f.path),
+                path: f.path,
+                isDirectory: false,
+                kind: .driveFile(path: f.path),
+                badge: f.ext.isEmpty ? "Tệp" : f.ext.uppercased(),
+                sfSymbolFallback: "doc.fill"
+            ))
+            if results.count >= limit { break }
+        }
+
+        if results.isEmpty {
+            results.append(SearchResultItem(
+                id: "ffile:empty",
+                title: isRebuildingFiles
+                    ? "Đang lập chỉ mục tệp tin Google Drive & máy cục bộ ở nền..."
+                    : "Gõ từ khóa sau 'ff ' để tìm trực tiếp tệp tin (.docx, .pdf, .xlsx, .sav...)",
+                subtitle: "Hỗ trợ Google Drive, ~/Desktop, ~/Downloads, ~/Documents • Nhấn ⇧ xem Quick Look, ⇥ Convert .MD",
+                path: nil,
+                isDirectory: false,
+                kind: .infoBanner,
+                badge: "Tệp tin",
+                sfSymbolFallback: "doc.text.magnifyingglass"
+            ))
+        }
+        return results
+    }
+
+    nonisolated static func evaluateFileSearchHits(
+        tokens: [String],
+        fastIndex: FastFileIndex,
+        historySnapshot: [String: HistoryRecord],
+        pinnedSet: Set<String>,
+        maxResults: Int
+    ) -> [(entry: DriveFileEntry, historyCount: Int, isPinned: Bool)] {
+        let cleanedTokens = tokens.map { raw -> String in
+            let strippedDot = raw.hasPrefix(".") ? String(raw.dropFirst()) : raw
+            return cleanString(strippedDot)
+        }.filter { !$0.isEmpty }
+        guard !cleanedTokens.isEmpty else { return [] }
+
+        let tokenBytes = cleanedTokens.map { Array($0.utf8) }
+
+        struct ScoredFileHit {
+            let score: Int
+            let negLen: Int
+            let entry: DriveFileEntry
+            let historyCount: Int
+            let isPinned: Bool
+        }
+
+        var hits: [ScoredFileHit] = []
+        hits.reserveCapacity(128)
+
+        for rec in fastIndex.records {
+            var totalScore = 0
+            var nameMatchCount = 0
+            var allMatched = true
+
+            for tok in tokenBytes {
+                if !rec.extBytes.isEmpty && asciiEquals(rec.extBytes, from: 0, tok) {
+                    totalScore += 950
+                    nameMatchCount += 1
+                } else if asciiEquals(rec.cleanNameBytes, from: 0, tok) || (!rec.acrBytes.isEmpty && asciiEquals(rec.acrBytes, from: 0, tok)) {
+                    totalScore += 1_300
+                    nameMatchCount += 1
+                } else if asciiHasPrefix(rec.cleanNameBytes, from: 0, tok) || (!rec.acrBytes.isEmpty && asciiHasPrefix(rec.acrBytes, from: 0, tok)) {
+                    totalScore += 1_050
+                    nameMatchCount += 1
+                } else if asciiContains(rec.cleanNameBytes, tok) {
+                    totalScore += 820
+                    nameMatchCount += 1
+                } else if !rec.cleanParentBytes.isEmpty && asciiContains(rec.cleanParentBytes, tok) {
+                    totalScore += 320
+                } else {
+                    allMatched = false
+                    break
+                }
+            }
+
+            guard allMatched && nameMatchCount > 0 else { continue }
+
+            let isPin = pinnedSet.contains(rec.entry.path)
+            let hCount = historySnapshot[rec.entry.path]?.count ?? 0
+            let boost = (isPin ? 900 : 0) + min(320, hCount * 40)
+            hits.append(ScoredFileHit(
+                score: totalScore + boost,
+                negLen: -rec.entry.cleanName.utf8.count,
+                entry: rec.entry,
+                historyCount: hCount,
+                isPinned: isPin
+            ))
+        }
+
+        hits.sort { a, b in
+            if a.score != b.score { return a.score > b.score }
+            return a.negLen > b.negLen
+        }
+
+        return hits.prefix(maxResults).map { ($0.entry, $0.historyCount, $0.isPinned) }
+    }
+
+    func buildFileSearchResultItems(
+        from hits: [(entry: DriveFileEntry, historyCount: Int, isPinned: Bool)],
+        maxResults: Int = 45
+    ) -> [SearchResultItem] {
+        hits.prefix(maxResults).map { hit in
+            let extUpper = hit.entry.ext.uppercased()
+            let badge: String? = hit.isPinned
+                ? (extUpper.isEmpty ? "Đã ghim" : "Đã ghim • \(extUpper)")
+                : (extUpper.isEmpty ? "Tệp" : extUpper)
+            let subPrefix: String
+            if hit.isPinned {
+                subPrefix = "Đã ghim ‹ "
+            } else if hit.historyCount > 0 {
+                subPrefix = "Mở gần đây (\(hit.historyCount) lần) ‹ "
+            } else {
+                subPrefix = ""
+            }
+            return SearchResultItem(
+                id: "ffile:\(hit.entry.path)",
+                title: (hit.entry.path as NSString).lastPathComponent,
+                subtitle: subPrefix + formatHierarchicalSubtitle(hit.entry.path, maxLevels: 3),
+                path: hit.entry.path,
+                isDirectory: false,
+                kind: .driveFile(path: hit.entry.path),
+                badge: badge,
+                sfSymbolFallback: "doc.fill"
+            )
+        }
+    }
+
+    /// Spotlight (`mdfind -name`) fallback when searching in `ff <từ khóa>` mode for uncached local files.
+    nonisolated static func spotlightFallbackFilePaths(query: String, scopeDirs: [String], limit: Int = 25) -> [String] {
+        let tokens = query.split(separator: " ").map(String.init).filter { !$0.isEmpty }
+        guard let primary = tokens.first else { return [] }
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/mdfind")
+        var args: [String] = []
+        for dir in scopeDirs {
+            args.append(contentsOf: ["-onlyin", dir])
+        }
+        args.append(contentsOf: ["-name", primary])
+        proc.arguments = args
+
+        let out = Pipe()
+        proc.standardOutput = out
+        proc.standardError = Pipe()
+        guard (try? proc.run()) != nil else { return [] }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        proc.waitUntilExit()
+        guard let str = String(data: data, encoding: .utf8) else { return [] }
+
+        let cleanTokens = tokens.map { cleanString($0.hasPrefix(".") ? String($0.dropFirst()) : $0) }.filter { !$0.isEmpty }
+        var matched: [String] = []
+        for line in str.components(separatedBy: .newlines) {
+            let p = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !p.isEmpty else { continue }
+            let ext = (p as NSString).pathExtension.lowercased()
+            guard !ext.isEmpty && !skipExtensions.contains(ext) else { continue }
+            let cleanName = cleanString((p as NSString).lastPathComponent)
+            if cleanTokens.allSatisfy({ cleanName.contains($0) }) {
+                matched.append(p)
+                if matched.count >= limit { break }
+            }
+        }
+        return matched
     }
 }
