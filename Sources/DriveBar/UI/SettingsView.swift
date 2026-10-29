@@ -1105,13 +1105,22 @@ private struct WindowSwitcherSettingsTab: View {
                                 .font(.system(size: 12.5, weight: .medium))
                             Picker("", selection: $settings.windowSwitcherScope) {
                                 ForEach(WindowSwitcherScope.allCases, id: \.self) { scope in
-                                    Text(scope.rawValue).tag(scope)
+                                    Text(scope.displayName).tag(scope)
                                 }
                             }
                             .pickerStyle(.segmented)
                         }
 
                         Divider()
+
+                        Toggle(
+                            "Giữ bảng chọn mở sau khi nhả phím ⌘ để điều hướng bằng phím mũi tên & gõ từ khóa lọc (Nhấn Enter / Click để chọn)",
+                            isOn: Binding(
+                                get: { !settings.windowSwitcherReleaseToActivate },
+                                set: { settings.windowSwitcherReleaseToActivate = !$0 }
+                            )
+                        )
+                        .font(.system(size: 12.5, weight: .medium))
 
                         Toggle(
                             "Phóng to nội dung cửa sổ đang chọn (hiển thị khung xem trước độ phân giải cao phía trên thanh chọn)",
@@ -1228,14 +1237,14 @@ private struct WindowSwitcherSettingsTab: View {
                 GroupBox {
                     HStack(alignment: .top, spacing: 24) {
                         VStack(alignment: .leading, spacing: 5) {
-                            Text("• Giữ ⌘ + bấm Tab / ⇧Tab (hoặc `): Di chuyển lần lượt, nhả ⌘ để chọn.")
-                            Text("• Phím mũi tên ← → ↑ ↓ + Enter: Điều hướng tự do & nhảy tới cửa sổ.")
-                            Text("• Di chuột & Click: Xem phóng to tức thì và nhảy đến cửa sổ.")
+                            Text("• Bấm ⌘Tab rồi bỏ phím: Dùng ← → ↑ ↓ để di chuyển, nhấn Enter (↩) để nhảy tới cửa sổ.")
+                            Text("• Gõ từ khóa trực tiếp: Lọc tức thì theo tên ứng dụng, tiêu đề cửa sổ, Desktop hoặc màn hình.")
+                            Text("• Giữ ⌘ + bấm Tab / ⇧Tab liên tiếp: Di chuyển mượt qua từng cửa sổ (cùng ứng dụng xếp cạnh nhau).")
                         }
                         VStack(alignment: .leading, spacing: 5) {
-                            Text("• Space: Ẩn / hiện khung phóng to nội dung phía trên.")
-                            Text("• Phím W / M / H / Q: Đóng cửa sổ (W), Minimize (M), Ẩn App (H), Thoát App (Q).")
-                            Text("• Phím 1 / 2 / 3 / 4: Đổi nhanh Màn hình (1), Minimize (2), App ẩn (3), Cùng App (4).")
+                            Text("• Phím ⌘Y (hoặc ⌃Space): Ẩn / hiện khung phóng to nội dung phía trên.")
+                            Text("• Phím ⌘W / ⌘M / ⌘H / ⌘Q: Đóng cửa sổ (⌘W), Minimize (⌘M), Ẩn App (⌘H), Thoát App (⌘Q).")
+                            Text("• Phím ⌘1 / ⌘2 / ⌘3 / ⌘4: Đổi nhanh Màn hình (⌘1), Minimize (⌘2), App ẩn (⌘3), Cùng App (⌘4).")
                         }
                         Spacer(minLength: 0)
                     }

@@ -85,7 +85,7 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
 
     func showAndFocus(selectExistingQuery: Bool = false) {
         if WindowSwitcherController.shared.isVisible {
-            WindowSwitcherController.shared.dismissWithoutActivating()
+            WindowSwitcherController.shared.dismissWithoutActivating(restorePreviousApp: false)
         }
         ensurePanelCreated()
         guard let panel else { return }

@@ -12,6 +12,7 @@ struct NativeSearchInputField: NSViewRepresentable {
     let fontSize: CGFloat
     var focusTrigger: Int = 0
     var selectAllOnFocus: Bool = false
+    var interceptHorizontalArrows: Bool = false
     var onMoveSelection: @MainActor (Int) -> Void
     var onSubmit: @MainActor (NSEvent.ModifierFlags) -> Void
     var onTab: @MainActor () -> Void
@@ -116,6 +117,19 @@ struct NativeSearchInputField: NSViewRepresentable {
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if parent.interceptHorizontalArrows {
+                if commandSelector == #selector(NSResponder.moveLeft(_:)) {
+                    if textView.hasMarkedText() { textView.unmarkText() }
+                    parent.onMoveSelection(-1)
+                    return true
+                }
+                if commandSelector == #selector(NSResponder.moveRight(_:)) {
+                    if textView.hasMarkedText() { textView.unmarkText() }
+                    parent.onMoveSelection(1)
+                    return true
+                }
+            }
+
             if commandSelector == #selector(NSResponder.moveUp(_:)) {
                 if textView.hasMarkedText() { textView.unmarkText() }
                 parent.onMoveSelection(-1)

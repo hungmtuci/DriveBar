@@ -13,7 +13,11 @@ final class HotKeyService: ObservableObject {
         case sameAppWindowSwitcher
     }
 
-    @Published private(set) var recordingTarget: RecordingTarget?
+    @Published private(set) var recordingTarget: RecordingTarget? {
+        didSet {
+            WindowSwitcherController.shared.syncSharedTapConfiguration()
+        }
+    }
     @Published private(set) var liveModifiersPreview: String = ""
     @Published private(set) var isSearchHotKeyActive: Bool = false
     @Published private(set) var isUniversalHotKeyActive: Bool = false

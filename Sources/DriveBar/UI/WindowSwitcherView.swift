@@ -13,11 +13,11 @@ struct WindowSwitcherOverlayView: View {
                 Color.black.opacity(0.001)
                     .ignoresSafeArea()
                     .onTapGesture {
-                        controller.dismissWithoutActivating()
+                        controller.dismissWithoutActivating(restorePreviousApp: true)
                     }
 
-                VStack(spacing: 16) {
-                    Spacer(minLength: 24)
+                VStack(spacing: 14) {
+                    Spacer(minLength: 20)
 
                     // 1. Upper Center: Large High-Resolution Magnified Window Content Preview
                     if settings.windowSwitcherShowZoomPreview, let selected = service.selectedItem {
@@ -27,35 +27,35 @@ struct WindowSwitcherOverlayView: View {
                                 ?? selected.windowID.flatMap { service.thumbnails[$0] },
                             hasScreenRecordingPermission: service.hasScreenRecordingPermission,
                             maxWidth: min(geo.size.width * 0.64, 920),
-                            maxHeight: min(geo.size.height * 0.50, 490),
+                            maxHeight: min(geo.size.height * 0.47, 465),
                             onActivate: {
                                 controller.commitSelectionAndDismiss()
                             },
                             onCloseWindow: {
-                                controller.isPinnedOpen = true
+                                controller.pinOpenFromInteraction()
                                 service.closeSelectedWindow()
                             },
                             onToggleMinimize: {
-                                controller.isPinnedOpen = true
+                                controller.pinOpenFromInteraction()
                                 service.toggleMinimizeSelectedWindow()
                             },
                             onRequestScreenRecording: {
-                                controller.dismissWithoutActivating()
+                                controller.dismissWithoutActivating(restorePreviousApp: false)
                                 service.promptScreenRecordingPermission()
                             }
                         )
                         .transition(.opacity)
                     }
 
-                    // 2. Lower Center: Horizontal Frosted-Glass Window Thumbnail Strip (Matches Reference Screenshot)
+                    // 2. Lower Center: Search Filter + Grouped Horizontal Window Thumbnail Strip
                     WindowThumbnailStripCard(
                         controller: controller,
                         service: service,
                         settings: settings,
-                        maxStripWidth: min(geo.size.width - 56, 1260)
+                        maxStripWidth: min(geo.size.width - 52, 1280)
                     )
 
-                    Spacer(minLength: 28)
+                    Spacer(minLength: 22)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -78,7 +78,7 @@ private struct ZoomedWindowPreviewCard: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Compact Finder/macOS Window Header
+            // Compact Finder/macOS Window Header with Desktop Name + Real Monitor Name
             HStack(spacing: 10) {
                 Image(nsImage: item.appIcon)
                     .resizable()
@@ -103,11 +103,17 @@ private struct ZoomedWindowPreviewCard: View {
 
                 ForEach(item.statusBadges, id: \.self) { badge in
                     Text(badge)
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.system(size: 10.5, weight: .medium))
                         .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6.5)
-                        .padding(.vertical, 2)
-                        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 4.5, style: .continuous))
+                        .lineLimit(1)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2.5)
+                        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                        )
+                        .fixedSize(horizontal: true, vertical: false)
                 }
 
                 if !item.isWindowlessApp {
@@ -120,7 +126,7 @@ private struct ZoomedWindowPreviewCard: View {
                                 .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
                         }
                         .buttonStyle(.plain)
-                        .help(item.isMinimized ? "Khôi phục cửa sổ (M)" : "Thu nhỏ cửa sổ xuống Dock (M)")
+                        .help(item.isMinimized ? "Khôi phục cửa sổ (⌘M)" : "Thu nhỏ cửa sổ xuống Dock (⌘M)")
 
                         Button(action: onCloseWindow) {
                             Image(systemName: "xmark")
@@ -130,7 +136,7 @@ private struct ZoomedWindowPreviewCard: View {
                                 .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
                         }
                         .buttonStyle(.plain)
-                        .help("Đóng cửa sổ này (W)")
+                        .help("Đóng cửa sổ này (⌘W)")
                     }
                 }
             }
@@ -156,7 +162,7 @@ private struct ZoomedWindowPreviewCard: View {
                         Image(nsImage: item.appIcon)
                             .resizable()
                             .interpolation(.high)
-                            .frame(width: 76, height: 76)
+                            .frame(width: 72, height: 72)
                             .shadow(color: .black.opacity(0.12), radius: 5, y: 2)
 
                         Text(item.zoomedHeaderTitle)
@@ -166,6 +172,12 @@ private struct ZoomedWindowPreviewCard: View {
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 24)
 
+                        if !item.cardLocationSubtitle.isEmpty {
+                            Text(item.cardLocationSubtitle)
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                        }
+
                         if !hasScreenRecordingPermission && !item.isWindowlessApp {
                             Button(action: onRequestScreenRecording) {
                                 Text("Cấp quyền Ghi màn hình để xem ảnh chụp nội dung trực tiếp")
@@ -174,11 +186,11 @@ private struct ZoomedWindowPreviewCard: View {
                             .buttonStyle(.bordered)
                             .controlSize(.small)
                         } else if item.isMinimized {
-                            Text("Cửa sổ đang thu nhỏ dưới thanh Dock • Nhấn chọn để khôi phục ngay")
+                            Text("Cửa sổ đang thu nhỏ dưới thanh Dock • Nhấn Enter hoặc click để khôi phục ngay")
                                 .font(.system(size: 11.5))
                                 .foregroundStyle(.secondary)
                         } else if item.isWindowlessApp {
-                            Text("Ứng dụng đang chạy nền chưa có cửa sổ mở • Nhấn chọn để mở cửa sổ")
+                            Text("Ứng dụng đang chạy nền chưa có cửa sổ mở • Nhấn Enter hoặc click để mở")
                                 .font(.system(size: 11.5))
                                 .foregroundStyle(.secondary)
                         }
@@ -196,7 +208,7 @@ private struct ZoomedWindowPreviewCard: View {
         .background(
             ZStack {
                 VisualEffectFrostView(material: .menu, blendingMode: .behindWindow)
-                Color(nsColor: .windowBackgroundColor).opacity(0.72)
+                Color(nsColor: .windowBackgroundColor).opacity(0.74)
             }
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         )
@@ -208,7 +220,7 @@ private struct ZoomedWindowPreviewCard: View {
     }
 }
 
-// MARK: - 2. Horizontal Frosted-Glass Window Thumbnail Strip
+// MARK: - 2. Horizontal Frosted-Glass Window Thumbnail Strip + Live Keyword Filter Bar
 
 private struct WindowThumbnailStripCard: View {
     @ObservedObject var controller: WindowSwitcherController
@@ -218,15 +230,80 @@ private struct WindowThumbnailStripCard: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Top Live Keyword Filter Bar (Auto-focused: type immediately or use ← → ↑ ↓ / Tab)
+            HStack(spacing: 9) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                NativeSearchInputField(
+                    text: $service.filterQuery,
+                    placeholder: "Gõ từ khóa lọc theo tên ứng dụng, tiêu đề cửa sổ, Desktop hoặc màn hình (hoặc dùng ← → / ⌘Tab)...",
+                    fontSize: 13,
+                    focusTrigger: service.focusSearchTrigger,
+                    selectAllOnFocus: false,
+                    interceptHorizontalArrows: true,
+                    onMoveSelection: { delta in
+                        controller.stepFromKeyboard(delta: delta)
+                    },
+                    onSubmit: { _ in
+                        controller.commitSelectionAndDismiss()
+                    },
+                    onTab: {
+                        let back = NSEvent.modifierFlags.contains(.shift)
+                        controller.stepFromKeyboard(delta: back ? -1 : 1)
+                    },
+                    onEscape: {
+                        controller.handleEscapeInSwitcher()
+                    }
+                )
+                .frame(maxWidth: .infinity, minHeight: 20, maxHeight: 22)
+
+                if !service.filterQuery.isEmpty {
+                    Button {
+                        service.filterQuery = ""
+                        service.triggerSearchInputFocus()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Xóa từ khóa lọc (Esc)")
+                }
+
+                Text("\(service.items.count) cửa sổ")
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 9)
+            .background(Color.primary.opacity(0.02))
+
+            Divider()
+
+            // Horizontal Window Cards (Same-App Windows Grouped Adjacent with Subtle Hairline Separators)
             if service.items.isEmpty {
                 VStack(spacing: 8) {
-                    Text("Không có cửa sổ nào khớp bộ lọc hiện tại")
+                    Text(service.filterQuery.isEmpty
+                         ? "Không có cửa sổ nào khớp bộ lọc hiện tại"
+                         : "Không có cửa sổ hay ứng dụng nào khớp từ khóa '\(service.filterQuery)'")
                         .font(.system(size: 13.5, weight: .medium))
                         .foregroundStyle(.secondary)
+
                     HStack(spacing: 8) {
+                        if !service.filterQuery.isEmpty {
+                            Button("Xóa từ khóa lọc") {
+                                service.filterQuery = ""
+                                service.triggerSearchInputFocus()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
                         if service.sessionSameAppPID != nil {
                             Button("Hiện tất cả ứng dụng") {
-                                controller.isPinnedOpen = true
+                                controller.pinOpenFromInteraction()
                                 service.sessionSameAppPID = nil
                                 service.rebuildFilteredItemsPreservingSelection()
                             }
@@ -235,7 +312,7 @@ private struct WindowThumbnailStripCard: View {
                         }
                         if settings.windowSwitcherScope != .allSpacesAndDisplays {
                             Button("Mở rộng sang Tất cả Desktop & Màn hình") {
-                                controller.isPinnedOpen = true
+                                controller.pinOpenFromInteraction()
                                 settings.windowSwitcherScope = .allSpacesAndDisplays
                                 service.rebuildFilteredItemsPreservingSelection()
                             }
@@ -245,18 +322,25 @@ private struct WindowThumbnailStripCard: View {
                     }
                 }
                 .padding(.horizontal, 36)
-                .padding(.vertical, 26)
+                .padding(.vertical, 24)
             } else {
                 ScrollViewReader { proxy in
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 12) {
+                        HStack(spacing: 10) {
                             ForEach(Array(service.items.enumerated()), id: \.element.id) { idx, item in
+                                if idx > 0 && service.items[idx - 1].pid != item.pid {
+                                    Rectangle()
+                                        .fill(Color(nsColor: .separatorColor).opacity(0.65))
+                                        .frame(width: 1, height: 104)
+                                        .padding(.horizontal, 2)
+                                }
+
                                 WindowThumbnailItemCard(
                                     item: item,
                                     thumbnail: item.windowID.flatMap { service.thumbnails[$0] },
                                     isSelected: idx == service.selectedIndex
                                 )
-                                .id(idx)
+                                .id(item.id)
                                 .onHover { hovering in
                                     if hovering {
                                         controller.hoverItemAtIndex(idx)
@@ -268,12 +352,13 @@ private struct WindowThumbnailStripCard: View {
                             }
                         }
                         .padding(.horizontal, 18)
-                        .padding(.top, 16)
+                        .padding(.top, 14)
                         .padding(.bottom, 12)
                     }
-                    .onChange(of: service.selectedIndex) { _, newIdx in
-                        withAnimation(.easeOut(duration: 0.14)) {
-                            proxy.scrollTo(newIdx, anchor: .center)
+                    .onChange(of: service.selectedItem?.id) { _, selectedID in
+                        guard let selectedID else { return }
+                        withAnimation(.easeOut(duration: 0.12)) {
+                            proxy.scrollTo(selectedID, anchor: .center)
                         }
                     }
                 }
@@ -283,18 +368,19 @@ private struct WindowThumbnailStripCard: View {
 
             // Subtle Single-Line Controls & Filter Toggles Footer
             HStack(spacing: 10) {
-                FooterShortcutHint(key: "⇥", label: "Kế tiếp")
+                FooterShortcutHint(key: "↩", label: "Mở cửa sổ")
                 FooterShortcutHint(key: "← →", label: "Di chuyển")
-                FooterShortcutHint(key: "Space", label: settings.windowSwitcherShowZoomPreview ? "Ẩn phóng to" : "Phóng to")
-                FooterShortcutHint(key: "W", label: "Đóng")
-                FooterShortcutHint(key: "M", label: "Minimize")
-                FooterShortcutHint(key: "Esc", label: "Hủy")
+                FooterShortcutHint(key: "⌘⇥", label: "Kế tiếp")
+                FooterShortcutHint(key: "⌘Y", label: settings.windowSwitcherShowZoomPreview ? "Ẩn phóng to" : "Phóng to")
+                FooterShortcutHint(key: "⌘W", label: "Đóng")
+                FooterShortcutHint(key: "⌘M", label: "Minimize")
+                FooterShortcutHint(key: "Esc", label: service.filterQuery.isEmpty ? "Đóng bảng" : "Xóa lọc")
 
                 Spacer(minLength: 10)
 
                 if !service.hasScreenRecordingPermission {
                     Button {
-                        controller.dismissWithoutActivating()
+                        controller.dismissWithoutActivating(restorePreviousApp: false)
                         service.promptScreenRecordingPermission()
                     } label: {
                         filterTogglePill(title: "Bật ảnh chụp nội dung", isActive: true)
@@ -304,7 +390,7 @@ private struct WindowThumbnailStripCard: View {
                 }
 
                 Button {
-                    controller.isPinnedOpen = true
+                    controller.pinOpenFromInteraction()
                     settings.windowSwitcherScope = settings.windowSwitcherScope.nextCycle()
                     service.rebuildFilteredItemsPreservingSelection()
                 } label: {
@@ -314,10 +400,10 @@ private struct WindowThumbnailStripCard: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .help("Phím 1: Đổi phạm vi hiển thị (Tất cả màn hình & Desktop / Màn hình này / Desktop này)")
+                .help("⌘1: Đổi phạm vi hiển thị (Tất cả màn hình & Desktop / Màn hình này / Desktop này)")
 
                 Button {
-                    controller.isPinnedOpen = true
+                    controller.pinOpenFromInteraction()
                     settings.windowSwitcherShowMinimized.toggle()
                     service.rebuildFilteredItemsPreservingSelection()
                 } label: {
@@ -327,10 +413,10 @@ private struct WindowThumbnailStripCard: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .help("Phím 2: Bật/tắt hiển thị các cửa sổ đang thu nhỏ dưới Dock")
+                .help("⌘2: Bật/tắt hiển thị các cửa sổ đang thu nhỏ dưới Dock")
 
                 Button {
-                    controller.isPinnedOpen = true
+                    controller.pinOpenFromInteraction()
                     settings.windowSwitcherShowHiddenApps.toggle()
                     service.rebuildFilteredItemsPreservingSelection()
                 } label: {
@@ -340,10 +426,10 @@ private struct WindowThumbnailStripCard: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .help("Phím 3: Bật/tắt hiển thị cửa sổ của ứng dụng đang ẩn bằng ⌘H")
+                .help("⌘3: Bật/tắt hiển thị cửa sổ của ứng dụng đang ẩn bằng ⌘H")
 
                 Button {
-                    controller.isPinnedOpen = true
+                    controller.pinOpenFromInteraction()
                     controller.toggleSameAppFilterLive()
                 } label: {
                     filterTogglePill(
@@ -352,7 +438,7 @@ private struct WindowThumbnailStripCard: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .help("Phím 4 / A: Chỉ lọc các cửa sổ thuộc cùng 1 ứng dụng")
+                .help("⌘4: Chỉ lọc các cửa sổ thuộc cùng 1 ứng dụng")
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 7.5)
@@ -363,7 +449,7 @@ private struct WindowThumbnailStripCard: View {
         .background(
             ZStack {
                 VisualEffectFrostView(material: .menu, blendingMode: .behindWindow)
-                Color(nsColor: .windowBackgroundColor).opacity(0.74)
+                Color(nsColor: .windowBackgroundColor).opacity(0.76)
             }
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         )
@@ -396,7 +482,7 @@ private struct WindowThumbnailStripCard: View {
     }
 }
 
-// MARK: - Individual Window Card in Horizontal Strip (Matches Screenshot Aesthetics)
+// MARK: - Individual Window Card in Horizontal Strip (Shows Window Title + Desktop Name + Real Monitor Name)
 
 private struct WindowThumbnailItemCard: View {
     let item: SwitchableWindowItem
@@ -404,7 +490,7 @@ private struct WindowThumbnailItemCard: View {
     let isSelected: Bool
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 6) {
             // Window Thumbnail Frame
             ZStack(alignment: .topTrailing) {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -427,7 +513,7 @@ private struct WindowThumbnailItemCard: View {
                         Image(nsImage: item.appIcon)
                             .resizable()
                             .interpolation(.high)
-                            .frame(width: 40, height: 40)
+                            .frame(width: 38, height: 38)
                         Text(item.appName)
                             .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(.secondary)
@@ -437,9 +523,8 @@ private struct WindowThumbnailItemCard: View {
                     .opacity((item.isMinimized || item.isAppHidden) ? 0.65 : 1.0)
                 }
 
-                // Compact Status Corner Pill (Minimized / Hidden / Other Space / Display)
-                if let primaryBadge = item.statusBadges.first {
-                    Text(primaryBadge)
+                if let stateBadge = item.cardStateCornerBadge {
+                    Text(stateBadge)
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(.primary)
                         .padding(.horizontal, 5)
@@ -448,23 +533,34 @@ private struct WindowThumbnailItemCard: View {
                         .padding(5)
                 }
             }
-            .frame(width: 172, height: 104)
+            .frame(width: 180, height: 104)
             .shadow(color: .black.opacity(isSelected ? 0.14 : 0.07), radius: isSelected ? 6 : 3, y: 2)
 
-            // App Icon + Window Title Label Below Card
-            HStack(spacing: 6) {
-                Image(nsImage: item.appIcon)
-                    .resizable()
-                    .interpolation(.high)
-                    .frame(width: 16, height: 16)
+            // App Icon + Window Title + Desktop & Monitor Name
+            VStack(spacing: 2) {
+                HStack(spacing: 5.5) {
+                    Image(nsImage: item.appIcon)
+                        .resizable()
+                        .interpolation(.high)
+                        .frame(width: 15, height: 15)
 
-                Text(item.cardLabel)
-                    .font(.system(size: 11.5, weight: isSelected ? .semibold : .medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                    Text(item.cardLabel)
+                        .font(.system(size: 11.5, weight: isSelected ? .semibold : .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .frame(width: 176)
+
+                if !item.cardLocationSubtitle.isEmpty {
+                    Text(item.cardLocationSubtitle)
+                        .font(.system(size: 9.5, weight: .regular))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(width: 176)
+                }
             }
-            .frame(width: 168)
         }
         .padding(.horizontal, 8)
         .padding(.top, 8)
@@ -480,8 +576,8 @@ private struct WindowThumbnailItemCard: View {
                     lineWidth: 2
                 )
         )
-        .scaleEffect(isSelected ? 1.055 : 1.0)
-        .animation(.spring(response: 0.20, dampingFraction: 0.82), value: isSelected)
+        .scaleEffect(isSelected ? 1.045 : 1.0)
+        .animation(.spring(response: 0.18, dampingFraction: 0.84), value: isSelected)
         .contentShape(Rectangle())
     }
 }

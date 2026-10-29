@@ -7,14 +7,33 @@ import ScreenCaptureKit
 @_silgen_name("_AXUIElementGetWindow")
 private func _AXUIElementGetWindow(_ element: AXUIElement, _ wid: UnsafeMutablePointer<CGWindowID>) -> AXError
 
+@_silgen_name("CGSMainConnectionID")
+private func _CGSMainConnectionID() -> UInt32
+
+@_silgen_name("CGSCopyManagedDisplaySpaces")
+private func _CGSCopyManagedDisplaySpaces(_ cid: UInt32) -> CFArray?
+
+@_silgen_name("CGSCopySpacesForWindows")
+private func _CGSCopySpacesForWindows(_ cid: UInt32, _ mask: Int32, _ windowIDs: CFArray) -> CFArray?
+
+@_silgen_name("CGDisplayCreateUUIDFromDisplayID")
+private func _CGDisplayCreateUUIDFromDisplayID(_ displayID: UInt32) -> Unmanaged<CFUUID>?
+
 @MainActor
 final class WindowSwitcherService: ObservableObject {
     static let shared = WindowSwitcherService()
 
     @Published private(set) var items: [SwitchableWindowItem] = []
+    @Published var filterQuery: String = "" {
+        didSet {
+            if filterQuery != oldValue {
+                applySearchFilterFromSessionCache(resetSelectionToFirst: true)
+            }
+        }
+    }
     @Published var selectedIndex: Int = 0 {
         didSet {
-            requestHighResZoomPreviewForSelection()
+            requestHighResZoomPreviewForSelection(debounced: true)
         }
     }
     @Published private(set) var thumbnails: [CGWindowID: NSImage] = [:]
@@ -23,7 +42,9 @@ final class WindowSwitcherService: ObservableObject {
     @Published private(set) var hasScreenRecordingPermission: Bool = CGPreflightScreenCaptureAccess()
     @Published private(set) var hasAccessibilityPermission: Bool = AXIsProcessTrusted()
     @Published var sessionSameAppPID: pid_t?
+    @Published var focusSearchTrigger: Int = 0
 
+    private var allSessionItems: [SwitchableWindowItem] = []
     private var mruPIDs: [pid_t] = []
     private var mruWindowKeys: [String] = []
     private var scWindowsByID: [CGWindowID: SCWindow] = [:]
@@ -34,9 +55,26 @@ final class WindowSwitcherService: ObservableObject {
     private struct DisplayInfo {
         let index: Int
         let displayID: CGDirectDisplayID
+        let uuidString: String
         let cgBounds: CGRect
         let name: String
         let isActiveDisplay: Bool
+    }
+
+    private struct SpaceMetadata {
+        let spaceID: UInt64
+        let desktopName: String
+        let desktopOrder: Int
+        let display: DisplayInfo
+        let isCurrentOnDisplay: Bool
+        let isFullScreenSpace: Bool
+    }
+
+    private struct SpaceCatalog {
+        let bySpaceID: [UInt64: SpaceMetadata]
+        let activeSpaceIDsAllDisplays: Set<UInt64>
+        let activeDisplayCurrentSpaceID: UInt64?
+        let defaultSpaceForDisplayID: [CGDirectDisplayID: SpaceMetadata]
     }
 
     private struct RawCGWindow {
@@ -46,10 +84,12 @@ final class WindowSwitcherService: ObservableObject {
         let cgTitle: String?
         let isOnScreen: Bool
         let zRank: Int
+        let spaceIDs: [UInt64]
     }
 
     private init() {
-        if let front = NSWorkspace.shared.frontmostApplication {
+        if let front = NSWorkspace.shared.frontmostApplication,
+           front.processIdentifier != ProcessInfo.processInfo.processIdentifier {
             mruPIDs.append(front.processIdentifier)
         }
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -69,6 +109,7 @@ final class WindowSwitcherService: ObservableObject {
     }
 
     func recordMRUPID(_ pid: pid_t) {
+        guard pid != ProcessInfo.processInfo.processIdentifier else { return }
         mruPIDs.removeAll { $0 == pid }
         mruPIDs.insert(pid, at: 0)
         if mruPIDs.count > 64 {
@@ -87,6 +128,10 @@ final class WindowSwitcherService: ObservableObject {
     var selectedItem: SwitchableWindowItem? {
         guard selectedIndex >= 0 && selectedIndex < items.count else { return nil }
         return items[selectedIndex]
+    }
+
+    func triggerSearchInputFocus() {
+        focusSearchTrigger &+= 1
     }
 
     func refreshPermissionStates() {
@@ -111,11 +156,26 @@ final class WindowSwitcherService: ObservableObject {
 
     // MARK: - Full Multi-Window / Multi-Space / Multi-Display Discovery
 
-    func reloadSessionWindows(sameAppPID: pid_t? = nil, selectPreviousWindow: Bool = true, moveBackward: Bool = false) {
+    func reloadSessionWindows(
+        sameAppPID: pid_t? = nil,
+        frontmostPIDBeforePresentation: pid_t? = nil,
+        selectPreviousWindow: Bool = true,
+        moveBackward: Bool = false
+    ) {
         refreshPermissionStates()
+        if let frontPID = frontmostPIDBeforePresentation {
+            recordMRUPID(frontPID)
+        }
         self.sessionSameAppPID = sameAppPID
+        if !filterQuery.isEmpty {
+            filterQuery = ""
+        }
 
-        let discovered = collectSwitchableWindows(sameAppPID: sameAppPID)
+        let discovered = collectSwitchableWindows(
+            sameAppPID: sameAppPID,
+            frontmostPID: frontmostPIDBeforePresentation
+        )
+        self.allSessionItems = discovered
         self.items = discovered
 
         if discovered.isEmpty {
@@ -130,21 +190,84 @@ final class WindowSwitcherService: ObservableObject {
             selectedIndex = 0
         }
 
-        requestHighResZoomPreviewForSelection()
+        requestHighResZoomPreviewForSelection(debounced: false)
         startAsyncScreenCaptureRefresh()
     }
 
     func rebuildFilteredItemsPreservingSelection() {
         let previousID = selectedItem?.id
-        let discovered = collectSwitchableWindows(sameAppPID: sessionSameAppPID)
-        self.items = discovered
-        if let previousID, let newIdx = discovered.firstIndex(where: { $0.id == previousID }) {
-            selectedIndex = newIdx
-        } else {
-            selectedIndex = min(max(0, selectedIndex), max(0, discovered.count - 1))
-        }
-        requestHighResZoomPreviewForSelection()
+        let discovered = collectSwitchableWindows(
+            sameAppPID: sessionSameAppPID,
+            frontmostPID: mruPIDs.first
+        )
+        self.allSessionItems = discovered
+        applySearchFilterFromSessionCache(resetSelectionToFirst: false, preferredItemID: previousID)
+        requestHighResZoomPreviewForSelection(debounced: false)
         startAsyncScreenCaptureRefresh()
+    }
+
+    private func applySearchFilterFromSessionCache(resetSelectionToFirst: Bool, preferredItemID: String? = nil) {
+        let previousID = preferredItemID ?? selectedItem?.id
+        let trimmed = GoogleDriveIndexService.removeAccents(filterQuery)
+            .lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if trimmed.isEmpty {
+            self.items = allSessionItems
+        } else {
+            let tokens = trimmed.split(separator: " ").map(String.init).filter { !$0.isEmpty }
+            // Filter & score while preserving adjacent same-app grouping!
+            var matched: [SwitchableWindowItem] = []
+            var bestAppScoreByPID: [pid_t: Int] = [:]
+            var itemScoreByID: [String: Int] = [:]
+
+            for (idx, item) in allSessionItems.enumerated() {
+                let allFound = tokens.allSatisfy { item.searchableTextNormalized.contains($0) }
+                guard allFound else { continue }
+
+                let appNorm = GoogleDriveIndexService.removeAccents(item.appName).lowercased()
+                let titleNorm = GoogleDriveIndexService.removeAccents(item.windowTitle).lowercased()
+
+                var score = max(0, 500 - idx)
+                if appNorm.hasPrefix(trimmed) {
+                    score += 4_000
+                } else if appNorm.contains(trimmed) {
+                    score += 2_500
+                }
+                if titleNorm.hasPrefix(trimmed) {
+                    score += 3_200
+                } else if titleNorm.contains(trimmed) {
+                    score += 1_800
+                }
+
+                matched.append(item)
+                itemScoreByID[item.id] = score
+                bestAppScoreByPID[item.pid] = max(bestAppScoreByPID[item.pid] ?? 0, score)
+            }
+
+            // Keep windows of the same app adjacent even during search filtering!
+            matched.sort { a, b in
+                if a.pid != b.pid {
+                    let appA = bestAppScoreByPID[a.pid] ?? 0
+                    let appB = bestAppScoreByPID[b.pid] ?? 0
+                    if appA != appB { return appA > appB }
+                }
+                return (itemScoreByID[a.id] ?? 0) > (itemScoreByID[b.id] ?? 0)
+            }
+            self.items = matched
+        }
+
+        if items.isEmpty {
+            selectedIndex = 0
+            zoomedPreviewImage = nil
+            zoomedPreviewWindowID = nil
+        } else if resetSelectionToFirst {
+            selectedIndex = 0
+        } else if let previousID, let foundIdx = items.firstIndex(where: { $0.id == previousID }) {
+            selectedIndex = foundIdx
+        } else {
+            selectedIndex = min(max(0, selectedIndex), items.count - 1)
+        }
     }
 
     func stepSelection(delta: Int) {
@@ -153,19 +276,22 @@ final class WindowSwitcherService: ObservableObject {
         selectedIndex = ((selectedIndex + delta) % count + count) % count
     }
 
-    private func collectSwitchableWindows(sameAppPID: pid_t?) -> [SwitchableWindowItem] {
+    private func collectSwitchableWindows(sameAppPID: pid_t?, frontmostPID: pid_t?) -> [SwitchableWindowItem] {
         let settings = AppSettings.shared
         let ownPID = ProcessInfo.processInfo.processIdentifier
         let displays = Self.buildDisplayList()
+        let spaceCatalog = Self.buildSpaceCatalog(displays: displays)
+        let cid = _CGSMainConnectionID()
         let mainDisplayBounds = CGDisplayBounds(CGMainDisplayID())
 
-        // 1. Snapshot WindowServer Z-Order across ALL Spaces & Current Space
+        // 1. Snapshot WindowServer Z-Order & Space Membership across ALL Spaces
         let cgAllRaw = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         let cgOnScreenRaw = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         let onScreenIDs = Set(cgOnScreenRaw.compactMap { $0[kCGWindowNumber as String] as? CGWindowID })
 
         var cgByPID: [pid_t: [RawCGWindow]] = [:]
         var cgByWID: [CGWindowID: RawCGWindow] = [:]
+        var bestZByPID: [pid_t: Int] = [:]
 
         for (zIdx, dict) in cgAllRaw.enumerated() {
             let layer = dict[kCGWindowLayer as String] as? Int ?? -1
@@ -186,23 +312,33 @@ final class WindowSwitcherService: ObservableObject {
             guard rect.width >= 110 && rect.height >= 80 else { continue }
 
             let cgTitle = dict[kCGWindowName as String] as? String
+            let spaceIDs: [UInt64]
+            if cid != 0, let rawSpaces = _CGSCopySpacesForWindows(cid, 0x7, [NSNumber(value: wid)] as CFArray) as? [NSNumber] {
+                spaceIDs = rawSpaces.map(\.uint64Value)
+            } else {
+                spaceIDs = []
+            }
+
             let entry = RawCGWindow(
                 wid: wid,
                 pid: pid,
                 bounds: rect,
                 cgTitle: cgTitle,
                 isOnScreen: onScreenIDs.contains(wid),
-                zRank: zIdx
+                zRank: zIdx,
+                spaceIDs: spaceIDs
             )
             cgByPID[pid, default: []].append(entry)
             cgByWID[wid] = entry
+            if !spaceIDs.isEmpty && bestZByPID[pid] == nil {
+                bestZByPID[pid] = zIdx
+            }
         }
 
         // 2. Enumerate Regular Running Applications
         let runningApps = NSWorkspace.shared.runningApplications.filter { app in
             guard !app.isTerminated else { return false }
             if app.processIdentifier == ownPID {
-                // Only include DriveBar if Settings window is visibly open
                 return AppDelegate.shared?.isSettingsWindowVisible == true
             }
             if let filterPID = sameAppPID, app.processIdentifier != filterPID {
@@ -212,7 +348,15 @@ final class WindowSwitcherService: ObservableObject {
         }
 
         let axTrusted = AXIsProcessTrusted()
-        var candidates: [(item: SwitchableWindowItem, sortRank: Int)] = []
+
+        struct RankedCandidate {
+            let item: SwitchableWindowItem
+            let appGroupRank: Int
+            let stateTier: Int
+            let intraAppRank: Int
+        }
+
+        var candidates: [RankedCandidate] = []
 
         for app in runningApps {
             let pid = app.processIdentifier
@@ -225,13 +369,26 @@ final class WindowSwitcherService: ObservableObject {
                 continue
             }
 
+            let appRank: Int = {
+                if let frontmostPID, pid == frontmostPID {
+                    return 0
+                }
+                if let mruIdx = mruPIDs.firstIndex(of: pid) {
+                    return 1 + mruIdx
+                }
+                if let bestZ = bestZByPID[pid] {
+                    return 200 + bestZ
+                }
+                return 5_000 + Int(pid % 1_000)
+            }()
+
             var matchedWIDs = Set<CGWindowID>()
             var appProducedWindow = false
 
-            // 2A. Rich Accessibility Window Discovery (captures exact window titles, minimized windows, multi-window handles)
+            // 2A. Rich Accessibility Window Discovery (exact window titles, minimized windows, individual AX handles)
             if axTrusted && pid != ownPID {
                 let axApp = AXUIElementCreateApplication(pid)
-                AXUIElementSetMessagingTimeout(axApp, 0.06)
+                AXUIElementSetMessagingTimeout(axApp, 0.05)
 
                 var winsRef: CFTypeRef?
                 if AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &winsRef) == .success,
@@ -267,7 +424,6 @@ final class WindowSwitcherService: ObservableObject {
                         let cgEntry = hasWID ? cgByWID[wid] : nil
 
                         var winBounds = cgEntry?.bounds ?? Self.axBounds(axWin) ?? .zero
-                        // Skip Finder's giant desktop backdrop window
                         if bundleID == "com.apple.finder" && axTitle.isEmpty && winBounds.width >= mainDisplayBounds.width {
                             continue
                         }
@@ -278,14 +434,24 @@ final class WindowSwitcherService: ObservableObject {
                             winBounds = CGRect(x: 0, y: 0, width: 1280, height: 800)
                         }
 
-                        let disp = Self.matchDisplay(for: winBounds, displays: displays)
-                        let isOnSpace: Bool = {
-                            if isMin || appHidden { return false }
-                            if let cgEntry { return cgEntry.isOnScreen }
-                            return true
-                        }()
+                        let resolvedLoc = Self.resolveWindowLocation(
+                            bounds: winBounds,
+                            spaceIDs: cgEntry?.spaceIDs ?? [],
+                            cgIsOnScreen: cgEntry?.isOnScreen ?? true,
+                            isMinimized: isMin,
+                            isAppHidden: appHidden,
+                            isFullscreen: isFull,
+                            displays: displays,
+                            spaceCatalog: spaceCatalog
+                        )
 
-                        if !Self.matchesScope(settings.windowSwitcherScope, isOnCurrentDisplay: disp.isActiveDisplay, isOnCurrentSpace: isOnSpace, isMinimized: isMin, isHidden: appHidden) {
+                        if !Self.matchesScope(
+                            settings.windowSwitcherScope,
+                            isOnCurrentDisplay: resolvedLoc.display.isActiveDisplay,
+                            isOnActiveDisplayCurrentSpace: resolvedLoc.isOnActiveDisplayCurrentSpace,
+                            isMinimized: isMin,
+                            isHidden: appHidden
+                        ) {
                             continue
                         }
 
@@ -294,15 +460,16 @@ final class WindowSwitcherService: ObservableObject {
                             : (hasWID ? (scWindowTitlesByID[wid] ?? cgEntry?.cgTitle ?? "") : "")
 
                         let itemID = hasWID ? "wid:\(wid)" : "ax:\(pid):\(axIdx)"
-                        let rank = Self.computeSortRank(
-                            itemID: itemID,
-                            pid: pid,
-                            cgRank: cgEntry?.zRank,
+                        let stateTier = Self.computeWindowStateTier(
+                            isVisibleOnAnyMonitorCurrentSpace: resolvedLoc.isVisibleOnItsDisplaySpace,
                             isMinimized: isMin,
-                            isAppHidden: appHidden,
-                            isOnCurrentSpace: isOnSpace,
+                            isAppHidden: appHidden
+                        )
+                        let intraRank = Self.computeIntraAppRank(
+                            itemID: itemID,
+                            cgRank: cgEntry?.zRank,
+                            desktopOrder: resolvedLoc.desktopOrder,
                             mruWindowKeys: mruWindowKeys,
-                            mruPIDs: mruPIDs,
                             fallbackOffset: axIdx
                         )
 
@@ -315,26 +482,42 @@ final class WindowSwitcherService: ObservableObject {
                             windowTitle: resolvedTitle,
                             appIcon: appIcon,
                             bounds: winBounds,
-                            displayIndex: disp.index,
-                            displayName: disp.name,
+                            displayIndex: resolvedLoc.display.index,
+                            displayName: resolvedLoc.display.name,
+                            desktopName: resolvedLoc.desktopName,
+                            spaceID: resolvedLoc.primarySpaceID,
                             totalDisplaysCount: displays.count,
-                            isOnCurrentDisplay: disp.isActiveDisplay,
-                            isOnCurrentSpace: isOnSpace,
+                            isOnCurrentDisplay: resolvedLoc.display.isActiveDisplay,
+                            isOnCurrentSpace: resolvedLoc.isVisibleOnItsDisplaySpace,
                             isMinimized: isMin,
                             isAppHidden: appHidden,
-                            isFullscreen: isFull,
+                            isFullscreen: isFull || resolvedLoc.isFullScreenSpace,
                             isWindowlessApp: false,
                             axWindow: axWin
                         )
-                        candidates.append((item, rank))
+                        candidates.append(RankedCandidate(
+                            item: item,
+                            appGroupRank: appRank,
+                            stateTier: stateTier,
+                            intraAppRank: intraRank
+                        ))
                         appProducedWindow = true
                     }
                 }
             }
 
-            // 2B. Supplement with CGWindowList windows on OTHER Spaces / Full-Screen Spaces (or when AX isn't granted yet)
+            // 2B. Windows on OTHER Desktops / Full-Screen Spaces (verified via CGS Space membership!)
             if let cgWins = cgByPID[pid] {
                 for cgEntry in cgWins where !matchedWIDs.contains(cgEntry.wid) {
+                    // Eliminate phantom offscreen backing windows (e.g. Electron/Singlebox/Office 500x500 or titlebar proxies):
+                    // Every real user window on any Desktop or Full-Screen Space belongs to >= 1 CGS Space!
+                    if cid != 0 && cgEntry.spaceIDs.isEmpty && !cgEntry.isOnScreen {
+                        continue
+                    }
+                    if cid != 0 && cgEntry.spaceIDs.isEmpty {
+                        continue
+                    }
+
                     // Filter Finder desktop backdrop
                     if bundleID == "com.apple.finder" &&
                        cgEntry.bounds.width >= mainDisplayBounds.width &&
@@ -343,37 +526,44 @@ final class WindowSwitcherService: ObservableObject {
                         continue
                     }
 
-                    // Filter AppKit / Chromium / Office invisible 500x500 offscreen dummy backing windows
                     let scTitle = scWindowTitlesByID[cgEntry.wid] ?? cgEntry.cgTitle ?? ""
-                    if !cgEntry.isOnScreen &&
-                       scTitle.isEmpty &&
-                       abs(cgEntry.bounds.width - 500) <= 2 &&
-                       abs(cgEntry.bounds.height - 500) <= 2 {
-                        continue
-                    }
+                    let resolvedLoc = Self.resolveWindowLocation(
+                        bounds: cgEntry.bounds,
+                        spaceIDs: cgEntry.spaceIDs,
+                        cgIsOnScreen: cgEntry.isOnScreen,
+                        isMinimized: false,
+                        isAppHidden: appHidden,
+                        isFullscreen: false,
+                        displays: displays,
+                        spaceCatalog: spaceCatalog
+                    )
 
-                    let disp = Self.matchDisplay(for: cgEntry.bounds, displays: displays)
-                    let isFull = abs(cgEntry.bounds.width - disp.cgBounds.width) <= 4 &&
-                                 abs(cgEntry.bounds.height - disp.cgBounds.height) <= 40
+                    let isFull = resolvedLoc.isFullScreenSpace || (
+                        abs(cgEntry.bounds.width - resolvedLoc.display.cgBounds.width) <= 4 &&
+                        abs(cgEntry.bounds.height - resolvedLoc.display.cgBounds.height) <= 40
+                    )
 
-                    // If AX is trusted and didn't report this window on the current Space, and it's not onScreen,
-                    // it lives on another Desktop (Space) or Full-Screen Space!
-                    let isOnSpace = cgEntry.isOnScreen && !appHidden
-
-                    if !Self.matchesScope(settings.windowSwitcherScope, isOnCurrentDisplay: disp.isActiveDisplay, isOnCurrentSpace: isOnSpace, isMinimized: false, isHidden: appHidden) {
+                    if !Self.matchesScope(
+                        settings.windowSwitcherScope,
+                        isOnCurrentDisplay: resolvedLoc.display.isActiveDisplay,
+                        isOnActiveDisplayCurrentSpace: resolvedLoc.isOnActiveDisplayCurrentSpace,
+                        isMinimized: false,
+                        isHidden: appHidden
+                    ) {
                         continue
                     }
 
                     let itemID = "wid:\(cgEntry.wid)"
-                    let rank = Self.computeSortRank(
-                        itemID: itemID,
-                        pid: pid,
-                        cgRank: cgEntry.zRank,
+                    let stateTier = Self.computeWindowStateTier(
+                        isVisibleOnAnyMonitorCurrentSpace: resolvedLoc.isVisibleOnItsDisplaySpace,
                         isMinimized: false,
-                        isAppHidden: appHidden,
-                        isOnCurrentSpace: isOnSpace,
+                        isAppHidden: appHidden
+                    )
+                    let intraRank = Self.computeIntraAppRank(
+                        itemID: itemID,
+                        cgRank: cgEntry.zRank,
+                        desktopOrder: resolvedLoc.desktopOrder,
                         mruWindowKeys: mruWindowKeys,
-                        mruPIDs: mruPIDs,
                         fallbackOffset: cgEntry.zRank
                     )
 
@@ -386,25 +576,33 @@ final class WindowSwitcherService: ObservableObject {
                         windowTitle: scTitle,
                         appIcon: appIcon,
                         bounds: cgEntry.bounds,
-                        displayIndex: disp.index,
-                        displayName: disp.name,
+                        displayIndex: resolvedLoc.display.index,
+                        displayName: resolvedLoc.display.name,
+                        desktopName: resolvedLoc.desktopName,
+                        spaceID: resolvedLoc.primarySpaceID,
                         totalDisplaysCount: displays.count,
-                        isOnCurrentDisplay: disp.isActiveDisplay,
-                        isOnCurrentSpace: isOnSpace,
+                        isOnCurrentDisplay: resolvedLoc.display.isActiveDisplay,
+                        isOnCurrentSpace: resolvedLoc.isVisibleOnItsDisplaySpace,
                         isMinimized: false,
                         isAppHidden: appHidden,
                         isFullscreen: isFull,
                         isWindowlessApp: false,
                         axWindow: nil
                     )
-                    candidates.append((item, rank))
+                    candidates.append(RankedCandidate(
+                        item: item,
+                        appGroupRank: appRank,
+                        stateTier: stateTier,
+                        intraAppRank: intraRank
+                    ))
                     appProducedWindow = true
                 }
             }
 
-            // 2C. Optional Windowless Running Applications (e.g. Finder/Mail with all windows closed)
+            // 2C. Optional Windowless Running Applications
             if !appProducedWindow && settings.windowSwitcherShowWindowlessApps && pid != ownPID {
                 let activeDisp = displays.first(where: \.isActiveDisplay) ?? displays.first
+                let activeSpaceName = activeDisp.flatMap { spaceCatalog.defaultSpaceForDisplayID[$0.displayID]?.desktopName } ?? ""
                 let itemID = "app:\(pid)"
                 let mruPos = mruPIDs.firstIndex(of: pid) ?? 99
                 let item = SwitchableWindowItem(
@@ -418,6 +616,8 @@ final class WindowSwitcherService: ObservableObject {
                     bounds: .zero,
                     displayIndex: activeDisp?.index ?? 0,
                     displayName: activeDisp?.name ?? "",
+                    desktopName: activeSpaceName,
+                    spaceID: nil,
                     totalDisplaysCount: displays.count,
                     isOnCurrentDisplay: true,
                     isOnCurrentSpace: true,
@@ -427,18 +627,98 @@ final class WindowSwitcherService: ObservableObject {
                     isWindowlessApp: true,
                     axWindow: nil
                 )
-                candidates.append((item, 50_000 + mruPos))
+                candidates.append(RankedCandidate(
+                    item: item,
+                    appGroupRank: 10_000 + mruPos,
+                    stateTier: 4,
+                    intraAppRank: 0
+                ))
             }
         }
 
-        candidates.sort { $0.sortRank < $1.sortRank }
+        // Sort so ALL windows of the same application sit right next to each other!
+        candidates.sort { a, b in
+            if a.appGroupRank != b.appGroupRank {
+                return a.appGroupRank < b.appGroupRank
+            }
+            if a.item.pid != b.item.pid {
+                return a.item.pid < b.item.pid
+            }
+            if a.stateTier != b.stateTier {
+                return a.stateTier < b.stateTier
+            }
+            return a.intraAppRank < b.intraAppRank
+        }
         return candidates.map(\.item)
+    }
+
+    private struct ResolvedWindowLocation {
+        let display: DisplayInfo
+        let desktopName: String
+        let primarySpaceID: UInt64?
+        let desktopOrder: Int
+        let isVisibleOnItsDisplaySpace: Bool
+        let isOnActiveDisplayCurrentSpace: Bool
+        let isFullScreenSpace: Bool
+    }
+
+    private static func resolveWindowLocation(
+        bounds: CGRect,
+        spaceIDs: [UInt64],
+        cgIsOnScreen: Bool,
+        isMinimized: Bool,
+        isAppHidden: Bool,
+        isFullscreen: Bool,
+        displays: [DisplayInfo],
+        spaceCatalog: SpaceCatalog
+    ) -> ResolvedWindowLocation {
+        let geometricDisplay = matchDisplay(for: bounds, displays: displays)
+
+        if !spaceIDs.isEmpty {
+            // Prefer an active Space if the window spans multiple Spaces (e.g. "All Desktops")
+            let chosenSpaceID = spaceIDs.first(where: { spaceCatalog.activeSpaceIDsAllDisplays.contains($0) }) ?? spaceIDs[0]
+            if let meta = spaceCatalog.bySpaceID[chosenSpaceID] {
+                let deskLabel: String = {
+                    if spaceIDs.count > 1 && !meta.isFullScreenSpace {
+                        return "\(meta.desktopName) (Mọi Desktop)"
+                    }
+                    return meta.desktopName
+                }()
+                let visibleOnItsDisplay = !isMinimized && !isAppHidden && spaceCatalog.activeSpaceIDsAllDisplays.contains(chosenSpaceID)
+                let onActiveDisplaySpace = !isMinimized && !isAppHidden && (
+                    spaceCatalog.activeDisplayCurrentSpaceID.map { spaceIDs.contains($0) } ?? cgIsOnScreen
+                )
+                return ResolvedWindowLocation(
+                    display: meta.display,
+                    desktopName: deskLabel,
+                    primarySpaceID: chosenSpaceID,
+                    desktopOrder: meta.desktopOrder,
+                    isVisibleOnItsDisplaySpace: visibleOnItsDisplay,
+                    isOnActiveDisplayCurrentSpace: onActiveDisplaySpace,
+                    isFullScreenSpace: meta.isFullScreenSpace
+                )
+            }
+        }
+
+        // Fallback (e.g. minimized window whose CGS space list is empty while docked)
+        let fallbackSpace = spaceCatalog.defaultSpaceForDisplayID[geometricDisplay.displayID]
+        let deskLabel = isFullscreen ? "Toàn màn hình" : (fallbackSpace?.desktopName ?? "Desktop 1")
+        let visibleNow = !isMinimized && !isAppHidden && cgIsOnScreen
+        return ResolvedWindowLocation(
+            display: geometricDisplay,
+            desktopName: deskLabel,
+            primarySpaceID: fallbackSpace?.spaceID,
+            desktopOrder: fallbackSpace?.desktopOrder ?? 1,
+            isVisibleOnItsDisplaySpace: visibleNow,
+            isOnActiveDisplayCurrentSpace: visibleNow && geometricDisplay.isActiveDisplay,
+            isFullScreenSpace: isFullscreen
+        )
     }
 
     private static func matchesScope(
         _ scope: WindowSwitcherScope,
         isOnCurrentDisplay: Bool,
-        isOnCurrentSpace: Bool,
+        isOnActiveDisplayCurrentSpace: Bool,
         isMinimized: Bool,
         isHidden: Bool
     ) -> Bool {
@@ -448,49 +728,47 @@ final class WindowSwitcherService: ObservableObject {
         case .currentDisplayOnly:
             return isOnCurrentDisplay
         case .currentSpaceOnly:
-            return isOnCurrentSpace || isMinimized || isHidden
+            return isOnActiveDisplayCurrentSpace || (isOnCurrentDisplay && (isMinimized || isHidden))
         }
     }
 
-    private static func computeSortRank(
-        itemID: String,
-        pid: pid_t,
-        cgRank: Int?,
+    private static func computeWindowStateTier(
+        isVisibleOnAnyMonitorCurrentSpace: Bool,
         isMinimized: Bool,
-        isAppHidden: Bool,
-        isOnCurrentSpace: Bool,
+        isAppHidden: Bool
+    ) -> Int {
+        if isMinimized { return 2 }
+        if isAppHidden { return 3 }
+        if isVisibleOnAnyMonitorCurrentSpace { return 0 }
+        return 1
+    }
+
+    private static func computeIntraAppRank(
+        itemID: String,
+        cgRank: Int?,
+        desktopOrder: Int,
         mruWindowKeys: [String],
-        mruPIDs: [pid_t],
         fallbackOffset: Int
     ) -> Int {
-        // Frontmost visible window on active Space always stays near the front in true Z-order
-        if let cgRank, isOnCurrentSpace && !isMinimized && !isAppHidden {
-            return cgRank
+        if let cgRank, cgRank == 0 {
+            return 0
         }
-        if let mruWinIdx = mruWindowKeys.firstIndex(of: itemID) {
-            return 2_000 + mruWinIdx * 10 + fallbackOffset
+        if let mruIdx = mruWindowKeys.firstIndex(of: itemID) {
+            return 10 + mruIdx * 5
         }
-        if let cgRank, !isMinimized && !isAppHidden {
-            // Windows on other Spaces keep their WindowServer Z-order right after current-Space windows
-            return 5_000 + cgRank
+        if let cgRank {
+            return 500 + cgRank
         }
-        let pidRank = mruPIDs.firstIndex(of: pid) ?? 80
-        if isMinimized {
-            return 15_000 + pidRank * 20 + fallbackOffset
-        }
-        if isAppHidden {
-            return 25_000 + pidRank * 20 + fallbackOffset
-        }
-        return 30_000 + pidRank * 20 + fallbackOffset
+        return 5_000 + desktopOrder * 50 + fallbackOffset
     }
 
-    // MARK: - Live ScreenCaptureKit Thumbnails & High-Res Zoom Preview
+    // MARK: - Live ScreenCaptureKit Thumbnails & Debounced High-Res Zoom Preview
 
     private func startAsyncScreenCaptureRefresh() {
         thumbnailCaptureTask?.cancel()
         guard CGPreflightScreenCaptureAccess() else { return }
 
-        let targetItems = self.items
+        let targetItems = self.allSessionItems
         guard !targetItems.isEmpty else { return }
 
         thumbnailCaptureTask = Task { @MainActor in
@@ -510,14 +788,15 @@ final class WindowSwitcherService: ObservableObject {
             }
             self.scWindowsByID = winMap
 
-            // Backfill titles for windows on other Spaces immediately if SCWindow provided them
+            // Backfill titles for windows on other Spaces without disturbing selection or IDs
             if titleUpdated {
-                for idx in self.items.indices {
-                    if self.items[idx].windowTitle.isEmpty,
-                       let wid = self.items[idx].windowID,
+                var didChangeAny = false
+                for idx in self.allSessionItems.indices {
+                    if self.allSessionItems[idx].windowTitle.isEmpty,
+                       let wid = self.allSessionItems[idx].windowID,
                        let scTitle = scWindowTitlesByID[wid], !scTitle.isEmpty {
-                        let old = self.items[idx]
-                        self.items[idx] = SwitchableWindowItem(
+                        let old = self.allSessionItems[idx]
+                        self.allSessionItems[idx] = SwitchableWindowItem(
                             id: old.id,
                             windowID: old.windowID,
                             pid: old.pid,
@@ -528,6 +807,8 @@ final class WindowSwitcherService: ObservableObject {
                             bounds: old.bounds,
                             displayIndex: old.displayIndex,
                             displayName: old.displayName,
+                            desktopName: old.desktopName,
+                            spaceID: old.spaceID,
                             totalDisplaysCount: old.totalDisplaysCount,
                             isOnCurrentDisplay: old.isOnCurrentDisplay,
                             isOnCurrentSpace: old.isOnCurrentSpace,
@@ -537,30 +818,46 @@ final class WindowSwitcherService: ObservableObject {
                             isWindowlessApp: old.isWindowlessApp,
                             axWindow: old.axWindow
                         )
+                        didChangeAny = true
                     }
+                }
+                if didChangeAny {
+                    applySearchFilterFromSessionCache(resetSelectionToFirst: false)
                 }
             }
 
             // Capture High-Res Zoom Preview for currently selected item FIRST
-            requestHighResZoomPreviewForSelection()
+            requestHighResZoomPreviewForSelection(debounced: false)
 
-            // Then capture crisp strip thumbnails for all items
+            // Capture strip thumbnails in batches to avoid flooding SwiftUI layout during rapid Tab navigation
+            var pendingBatch: [CGWindowID: NSImage] = [:]
             for item in targetItems {
                 if Task.isCancelled { break }
                 guard let wid = item.windowID, let scWin = winMap[wid] else { continue }
                 if let cgImg = await Self.captureSCWindowImage(scWin: scWin, maxDimension: 520) {
                     let nsImg = NSImage(cgImage: cgImg, size: NSSize(width: cgImg.width, height: cgImg.height))
-                    self.thumbnails[wid] = nsImg
+                    pendingBatch[wid] = nsImg
                     if self.selectedItem?.windowID == wid && self.zoomedPreviewImage == nil {
                         self.zoomedPreviewImage = nsImg
                         self.zoomedPreviewWindowID = wid
                     }
+                    if pendingBatch.count >= 4 {
+                        for (k, v) in pendingBatch {
+                            self.thumbnails[k] = v
+                        }
+                        pendingBatch.removeAll(keepingCapacity: true)
+                    }
+                }
+            }
+            if !pendingBatch.isEmpty && !Task.isCancelled {
+                for (k, v) in pendingBatch {
+                    self.thumbnails[k] = v
                 }
             }
         }
     }
 
-    private func requestHighResZoomPreviewForSelection() {
+    private func requestHighResZoomPreviewForSelection(debounced: Bool) {
         zoomCaptureTask?.cancel()
         guard let item = selectedItem, let wid = item.windowID else {
             zoomedPreviewImage = nil
@@ -568,7 +865,7 @@ final class WindowSwitcherService: ObservableObject {
             return
         }
 
-        // Instant zero-latency fallback from cached strip thumbnail while high-res renders
+        // Instant 0ms preview from strip thumbnail cache while stepping rapidly
         if zoomedPreviewWindowID != wid {
             zoomedPreviewImage = thumbnails[wid]
             zoomedPreviewWindowID = wid
@@ -577,6 +874,10 @@ final class WindowSwitcherService: ObservableObject {
         guard CGPreflightScreenCaptureAccess(), let scWin = scWindowsByID[wid] else { return }
 
         zoomCaptureTask = Task { @MainActor in
+            if debounced {
+                try? await Task.sleep(nanoseconds: 65_000_000)
+                guard !Task.isCancelled else { return }
+            }
             if let cgImg = await Self.captureSCWindowImage(scWin: scWin, maxDimension: 1440) {
                 guard !Task.isCancelled else { return }
                 let nsImg = NSImage(cgImage: cgImg, size: NSSize(width: cgImg.width, height: cgImg.height))
@@ -632,7 +933,6 @@ final class WindowSwitcherService: ObservableObject {
 
         if item.isWindowlessApp {
             runningApp.activate(options: [.activateAllWindows])
-            // Reopen default window if app supports reopen (like Finder/Mail/Safari)
             if let bundleURL = runningApp.bundleURL {
                 let cfg = NSWorkspace.OpenConfiguration()
                 cfg.activates = true
@@ -651,7 +951,6 @@ final class WindowSwitcherService: ObservableObject {
 
             runningApp.activate()
 
-            // Re-assert exact target window after app activation so sibling windows never jump ahead
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) {
                 _ = AXUIElementPerformAction(axWin, kAXRaiseAction as CFString)
                 AXUIElementSetAttributeValue(axWin, kAXMainAttribute as CFString, kCFBooleanTrue)
@@ -661,7 +960,6 @@ final class WindowSwitcherService: ObservableObject {
         }
 
         // Cross-Space / Full-Screen Space window activation:
-        // 1. Try clicking the window's item in the app's Menu Bar -> "Window" menu (switches Spaces even when same app has windows on multiple Spaces!)
         if AXIsProcessTrusted() && !item.windowTitle.isEmpty {
             if Self.selectWindowFromAppWindowMenu(pid: item.pid, targetTitle: item.windowTitle) {
                 runningApp.activate()
@@ -669,7 +967,6 @@ final class WindowSwitcherService: ObservableObject {
             }
         }
 
-        // 2. Activate app across Spaces, then raise the exact CGWindowID once macOS lands on that Space
         runningApp.activate(options: [.activateAllWindows])
 
         if AXIsProcessTrusted(), let targetWID = item.windowID {
@@ -680,7 +977,7 @@ final class WindowSwitcherService: ObservableObject {
         }
     }
 
-    // MARK: - In-Switcher Quick Actions (Close W, Minimize M, Hide H, Quit Q)
+    // MARK: - In-Switcher Quick Actions (Close ⌘W, Minimize ⌘M, Hide ⌘H, Quit ⌘Q)
 
     func closeSelectedWindow() {
         guard let item = selectedItem, !item.isWindowlessApp else { return }
@@ -735,7 +1032,7 @@ final class WindowSwitcherService: ObservableObject {
         }
     }
 
-    // MARK: - Private AX & Display Helpers
+    // MARK: - Display Localized Names & Mission Control Desktop / Space Mapping
 
     private static func buildDisplayList() -> [DisplayInfo] {
         let mouseLoc = NSEvent.mouseLocation
@@ -746,19 +1043,144 @@ final class WindowSwitcherService: ObservableObject {
 
         return NSScreen.screens.enumerated().map { idx, scr in
             let id = (scr.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) ?? CGMainDisplayID()
+            let uuidStr = _CGDisplayCreateUUIDFromDisplayID(id)
+                .map { (CFUUIDCreateString(nil, $0.takeRetainedValue()) as String).uppercased() } ?? ""
+            let cleanName = scr.localizedName.trimmingCharacters(in: .whitespacesAndNewlines)
             return DisplayInfo(
                 index: idx,
                 displayID: id,
+                uuidString: uuidStr,
                 cgBounds: CGDisplayBounds(id),
-                name: scr.localizedName,
+                name: cleanName.isEmpty ? "Màn hình \(idx + 1)" : cleanName,
                 isActiveDisplay: id == activeID
             )
         }
     }
 
+    private static func buildSpaceCatalog(displays: [DisplayInfo]) -> SpaceCatalog {
+        let cid = _CGSMainConnectionID()
+        guard cid != 0,
+              let managedDisplays = _CGSCopyManagedDisplaySpaces(cid) as? [[String: Any]],
+              !managedDisplays.isEmpty else {
+            var defaultsByDisplay: [CGDirectDisplayID: SpaceMetadata] = [:]
+            for (i, d) in displays.enumerated() {
+                defaultsByDisplay[d.displayID] = SpaceMetadata(
+                    spaceID: UInt64(i + 1),
+                    desktopName: "Desktop \(i + 1)",
+                    desktopOrder: i + 1,
+                    display: d,
+                    isCurrentOnDisplay: true,
+                    isFullScreenSpace: false
+                )
+            }
+            return SpaceCatalog(
+                bySpaceID: [:],
+                activeSpaceIDsAllDisplays: [],
+                activeDisplayCurrentSpaceID: nil,
+                defaultSpaceForDisplayID: defaultsByDisplay
+            )
+        }
+
+        var bySpaceID: [UInt64: SpaceMetadata] = [:]
+        var activeSpaceIDs = Set<UInt64>()
+        var activeDisplayCurrentSpaceID: UInt64?
+        var defaultSpaceForDisplayID: [CGDirectDisplayID: SpaceMetadata] = [:]
+
+        let mainDisp = displays.first(where: { $0.displayID == CGMainDisplayID() }) ?? displays.first
+        var globalDesktopCounter = 0
+
+        for (dispIdx, dDict) in managedDisplays.enumerated() {
+            let ident = (dDict["Display Identifier"] as? String ?? "").uppercased()
+            let matchedDisplay: DisplayInfo = {
+                if !ident.isEmpty, let exact = displays.first(where: { $0.uuidString == ident }) {
+                    return exact
+                }
+                if ident == "MAIN", let mainDisp {
+                    return mainDisp
+                }
+                if dispIdx < displays.count {
+                    return displays[dispIdx]
+                }
+                return mainDisp ?? DisplayInfo(
+                    index: 0,
+                    displayID: CGMainDisplayID(),
+                    uuidString: "",
+                    cgBounds: CGDisplayBounds(CGMainDisplayID()),
+                    name: "Màn hình chính",
+                    isActiveDisplay: true
+                )
+            }()
+
+            let currentSpaceDict = dDict["Current Space"] as? [String: Any]
+            let currentSpaceID = Self.extractUInt64(currentSpaceDict?["id64"]) ?? Self.extractUInt64(currentSpaceDict?["ManagedSpaceID"])
+            if let currentSpaceID {
+                activeSpaceIDs.insert(currentSpaceID)
+                if matchedDisplay.isActiveDisplay {
+                    activeDisplayCurrentSpaceID = currentSpaceID
+                }
+            }
+
+            let spacesList = dDict["Spaces"] as? [[String: Any]] ?? []
+            for sp in spacesList {
+                guard let sid = Self.extractUInt64(sp["id64"]) ?? Self.extractUInt64(sp["ManagedSpaceID"]) else {
+                    continue
+                }
+                let spType = sp["type"] as? Int ?? 0
+                let isFullScreen = (spType != 0)
+                let customName = (sp["wsname"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+                let desktopLabel: String
+                let orderVal: Int
+                if !isFullScreen {
+                    globalDesktopCounter += 1
+                    orderVal = globalDesktopCounter
+                    desktopLabel = customName.isEmpty ? "Desktop \(globalDesktopCounter)" : customName
+                } else {
+                    orderVal = globalDesktopCounter + 100
+                    desktopLabel = customName.isEmpty ? "Toàn màn hình" : "Toàn màn hình (\(customName))"
+                }
+
+                let isCur = (sid == currentSpaceID)
+                let meta = SpaceMetadata(
+                    spaceID: sid,
+                    desktopName: desktopLabel,
+                    desktopOrder: orderVal,
+                    display: matchedDisplay,
+                    isCurrentOnDisplay: isCur,
+                    isFullScreenSpace: isFullScreen
+                )
+                bySpaceID[sid] = meta
+                if isCur || defaultSpaceForDisplayID[matchedDisplay.displayID] == nil {
+                    defaultSpaceForDisplayID[matchedDisplay.displayID] = meta
+                }
+            }
+        }
+
+        return SpaceCatalog(
+            bySpaceID: bySpaceID,
+            activeSpaceIDsAllDisplays: activeSpaceIDs,
+            activeDisplayCurrentSpaceID: activeDisplayCurrentSpaceID,
+            defaultSpaceForDisplayID: defaultSpaceForDisplayID
+        )
+    }
+
+    private static func extractUInt64(_ anyVal: Any?) -> UInt64? {
+        if let u = anyVal as? UInt64 { return u }
+        if let n = anyVal as? NSNumber { return n.uint64Value }
+        if let i = anyVal as? Int { return UInt64(i) }
+        return nil
+    }
+
     private static func matchDisplay(for windowBounds: CGRect, displays: [DisplayInfo]) -> DisplayInfo {
         guard let fallback = displays.first else {
-            return DisplayInfo(index: 0, displayID: CGMainDisplayID(), cgBounds: CGDisplayBounds(CGMainDisplayID()), name: "Màn hình chính", isActiveDisplay: true)
+            return DisplayInfo(
+                index: 0,
+                displayID: CGMainDisplayID(),
+                uuidString: "",
+                cgBounds: CGDisplayBounds(CGMainDisplayID()),
+                name: "Màn hình chính",
+                isActiveDisplay: true
+            )
         }
         let center = CGPoint(x: windowBounds.midX, y: windowBounds.midY)
         if let containing = displays.first(where: { $0.cgBounds.contains(center) }) {

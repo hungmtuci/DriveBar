@@ -140,6 +140,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if LauncherPanelController.shared.isVisible && !LauncherPanelController.shared.isSuppressingAutoHide {
             LauncherPanelController.shared.hide()
         }
+        if WindowSwitcherController.shared.isVisible && !WindowSwitcherController.shared.isSuppressingResignDismiss {
+            WindowSwitcherController.shared.dismissWithoutActivating(restorePreviousApp: false)
+        }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -188,7 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func openSettingsWindow() {
         LauncherPanelController.shared.hide()
-        WindowSwitcherController.shared.dismissWithoutActivating()
+        WindowSwitcherController.shared.dismissWithoutActivating(restorePreviousApp: false)
 
         if settingsWindow == nil {
             let win = NSWindow(

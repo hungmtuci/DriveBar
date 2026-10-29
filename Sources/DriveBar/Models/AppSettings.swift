@@ -42,6 +42,7 @@ final class AppSettings: ObservableObject {
         static let windowSwitcherShowWindowlessApps = "drivebar.windowSwitcherShowWindowlessApps"
         static let windowSwitcherShowZoomPreview = "drivebar.windowSwitcherShowZoomPreview"
         static let windowSwitcherScope = "drivebar.windowSwitcherScope"
+        static let windowSwitcherReleaseToActivate = "drivebar.windowSwitcherReleaseToActivate"
     }
 
     @Published var enableWindowSwitcher: Bool {
@@ -103,6 +104,14 @@ final class AppSettings: ObservableObject {
     @Published var windowSwitcherScope: WindowSwitcherScope {
         didSet {
             defaults.set(windowSwitcherScope.rawValue, forKey: Keys.windowSwitcherScope)
+        }
+    }
+
+    /// When false (default), releasing ⌘ after pressing ⌘Tab keeps Windows Preview open so user can navigate with arrows or type keywords, then press Enter/Click to jump.
+    @Published var windowSwitcherReleaseToActivate: Bool {
+        didSet {
+            defaults.set(windowSwitcherReleaseToActivate, forKey: Keys.windowSwitcherReleaseToActivate)
+            WindowSwitcherController.shared.syncSharedTapConfiguration()
         }
     }
 
@@ -303,6 +312,7 @@ final class AppSettings: ObservableObject {
         } else {
             self.windowSwitcherScope = .allSpacesAndDisplays
         }
+        self.windowSwitcherReleaseToActivate = defaults.object(forKey: Keys.windowSwitcherReleaseToActivate) as? Bool ?? false
 
         let savedDisabled = defaults.stringArray(forKey: Keys.disabledActionIDs) ?? []
         self.disabledActionIDs = Set(savedDisabled)
