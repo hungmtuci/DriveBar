@@ -8,6 +8,12 @@ final class SpotlightPanel: NSPanel {
     override var acceptsFirstResponder: Bool { true }
 }
 
+final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+}
+
 @MainActor
 final class LauncherPanelController: NSObject, NSWindowDelegate {
     static let shared = LauncherPanelController()
@@ -15,6 +21,13 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
     private var panel: SpotlightPanel?
     private var localKeyMonitor: Any?
     private var flagsMonitor: Any?
+    private var mouseMonitor: Any?
+
+    // Standalone Shift-tap Quick Look tracking (Alfred behavior: tap Shift -> Quick Look)
+    private var shiftTapStartTime: TimeInterval?
+    private var shiftInvalidatedByOtherInput: Bool = false
+
+    var isSuppressingAutoHide: Bool = false
 
     var isVisible: Bool {
         panel?.isVisible ?? false
@@ -47,7 +60,11 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
                     LauncherViewModel.shared.openUniversalActionsForSelectedSearchItem()
                     return
                 case .universalActions:
-                    hide()
+                    if !LauncherViewModel.shared.openedDirectlyInUniversalActions {
+                        LauncherViewModel.shared.returnToSearchMode()
+                    } else {
+                        hide()
+                    }
                     return
                 default:
                     break
@@ -70,14 +87,11 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
         ensurePanelCreated()
         guard let panel else { return }
 
+        isSuppressingAutoHide = true
         positionPanelCenteredOnActiveScreen(panel)
         installKeyboardMonitorsIfNeeded()
 
-        if #available(macOS 14.0, *) {
-            NSApp.activate()
-        } else {
-            NSApp.activate(ignoringOtherApps: true)
-        }
+        NSApp.activate(ignoringOtherApps: true)
         NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
@@ -85,21 +99,39 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
         LauncherViewModel.shared.triggerInputFocus(selectAll: selectExistingQuery)
         NotificationCenter.default.post(name: .driveBarFocusInput, object: nil)
 
-        if let tf = Self.findEditableTextField(in: panel.contentView) {
-            NativeSearchInputField.focusTextField(tf, selectAll: selectExistingQuery)
+        DispatchQueue.main.async { [weak self, weak panel] in
+            guard let self, let panel, panel.isVisible else { return }
+            if let tf = Self.findEditableTextField(in: panel.contentView) {
+                NativeSearchInputField.focusTextField(tf, selectAll: selectExistingQuery)
+            }
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.025) { [weak panel] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) { [weak self, weak panel] in
+            self?.isSuppressingAutoHide = false
             guard let panel, panel.isVisible else { return }
-            if let tf = Self.findEditableTextField(in: panel.contentView) {
+            if !QuickLookCoordinator.shared.isQuickLookVisible,
+               let tf = Self.findEditableTextField(in: panel.contentView) {
                 NativeSearchInputField.focusTextField(tf, selectAll: selectExistingQuery)
             }
         }
     }
 
+    func restoreFocusFromAuxiliaryPanel() {
+        guard let panel, panel.isVisible else { return }
+        isSuppressingAutoHide = true
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+        if let tf = Self.findEditableTextField(in: panel.contentView) {
+            NativeSearchInputField.focusTextField(tf, selectAll: false)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.isSuppressingAutoHide = false
+        }
+    }
+
     private static func findEditableTextField(in view: NSView?) -> NSTextField? {
         guard let view else { return nil }
-        if let tf = view as? NSTextField, tf.isEditable {
+        if let tf = view as? NSTextField, tf.isEditable, !tf.isHidden {
             return tf
         }
         for sub in view.subviews {
@@ -111,6 +143,12 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
     }
 
     func hide() {
+        shiftTapStartTime = nil
+        shiftInvalidatedByOtherInput = false
+        isSuppressingAutoHide = false
+        if QuickLookCoordinator.shared.isQuickLookVisible {
+            QuickLookCoordinator.shared.closeQuickLook(restoreLauncherFocus: false)
+        }
         removeKeyboardMonitors()
         LauncherViewModel.shared.activeModifiers = []
         panel?.orderOut(nil)
@@ -121,7 +159,12 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        // Auto-hide spotlight bar when clicking outside (unless QuickLook preview panel is frontmost)
+        if isSuppressingAutoHide {
+            return
+        }
+        if QuickLookCoordinator.shared.isQuickLookVisible {
+            return
+        }
         if let keyWin = NSApp.keyWindow, String(describing: type(of: keyWin)).contains("QLPreview") {
             return
         }
@@ -149,7 +192,7 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         p.delegate = self
 
-        let hosting = NSHostingView(rootView: LauncherRootView(viewModel: LauncherViewModel.shared))
+        let hosting = FirstMouseHostingView(rootView: LauncherRootView(viewModel: LauncherViewModel.shared))
         hosting.frame = rect
         p.contentView = hosting
         self.panel = p
@@ -170,12 +213,14 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
         panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
     }
 
-    // MARK: - Rich Keyboard Navigation (Alfred-grade, Vietnamese IME Safe)
+    // MARK: - Rich Keyboard Navigation (Alfred-grade, Vietnamese IME Safe, Shift Quick Look)
 
     private func installKeyboardMonitorsIfNeeded() {
         if localKeyMonitor == nil {
             localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let self, self.isVisible else { return event }
+                self.shiftInvalidatedByOtherInput = true
+                self.shiftTapStartTime = nil
                 if self.handleKeyDown(event) {
                     return nil
                 }
@@ -184,8 +229,36 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
         }
 
         if flagsMonitor == nil {
-            flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
-                LauncherViewModel.shared.activeModifiers = event.modifierFlags.cleanShortcutModifiers
+            flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+                guard let self, self.isVisible else { return event }
+                let clean = event.modifierFlags.cleanShortcutModifiers
+                let code = Int(event.keyCode)
+                LauncherViewModel.shared.activeModifiers = clean
+
+                if (code == kVK_Shift || code == kVK_RightShift) && clean == .shift {
+                    self.shiftTapStartTime = ProcessInfo.processInfo.systemUptime
+                    self.shiftInvalidatedByOtherInput = false
+                } else if clean.isEmpty {
+                    if let t0 = self.shiftTapStartTime,
+                       !self.shiftInvalidatedByOtherInput,
+                       (ProcessInfo.processInfo.systemUptime - t0) < 0.45 {
+                        self.shiftTapStartTime = nil
+                        LauncherViewModel.shared.toggleQuickLookForCurrentContext()
+                    } else {
+                        self.shiftTapStartTime = nil
+                    }
+                } else {
+                    self.shiftInvalidatedByOtherInput = true
+                    self.shiftTapStartTime = nil
+                }
+                return event
+            }
+        }
+
+        if mouseMonitor == nil {
+            mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+                self?.shiftInvalidatedByOtherInput = true
+                self?.shiftTapStartTime = nil
                 return event
             }
         }
@@ -200,16 +273,33 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
             NSEvent.removeMonitor(fMon)
             flagsMonitor = nil
         }
+        if let mMon = mouseMonitor {
+            NSEvent.removeMonitor(mMon)
+            mouseMonitor = nil
+        }
     }
 
     private func commitActiveIMEIfNeeded(syncBeforeSubmit: Bool) {
         guard let editor = panel?.firstResponder as? NSTextView else { return }
         if syncBeforeSubmit {
             let live = editor.string
+            let preservedIndex = LauncherViewModel.shared.selectedIndex
+            let alreadyMatches: Bool = {
+                switch LauncherViewModel.shared.screenMode {
+                case .search: return LauncherViewModel.shared.searchText == live
+                case .universalActions: return LauncherViewModel.shared.actionFilterText == live
+                case .destinationPicker: return LauncherViewModel.shared.destinationSearchText == live
+                default: return true
+                }
+            }()
             if editor.hasMarkedText() {
                 editor.unmarkText()
             }
-            LauncherViewModel.shared.syncImmediateTextBeforeSubmit(live)
+            if !alreadyMatches {
+                LauncherViewModel.shared.syncImmediateTextBeforeSubmit(live)
+            } else {
+                LauncherViewModel.shared.selectedIndex = preservedIndex
+            }
         } else if editor.hasMarkedText() {
             editor.unmarkText()
         }
@@ -220,44 +310,55 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
         let flags = event.modifierFlags.cleanShortcutModifiers
         let code = Int(event.keyCode)
 
-        // 1. Escape handling
+        // 1. Escape handling (close Quick Look first if open!)
         if code == kVK_Escape {
+            if QuickLookCoordinator.shared.isQuickLookVisible {
+                QuickLookCoordinator.shared.closeQuickLook(restoreLauncherFocus: true)
+                return true
+            }
             commitActiveIMEIfNeeded(syncBeforeSubmit: false)
             vm.handleEscapeKey()
             return true
         }
 
-        // 2. Quick Look: ⌘Y
+        // 2. Quick Look: ⌘Y (in addition to standalone Shift tap)
         if flags == .command && code == kVK_ANSI_Y {
-            switch vm.screenMode {
-            case .search:
-                if vm.selectedIndex < vm.searchResults.count,
-                   let u = vm.searchResults[vm.selectedIndex].fileURL {
-                    QuickLookCoordinator.shared.toggleQuickLook(for: [u])
+            vm.toggleQuickLookForCurrentContext()
+            return true
+        }
+
+        // 3. Universal Action Hotkey (default ⌘/) or ⌘K while DriveBar is open
+        if Self.matchesBinding(AppSettings.shared.universalActionHotKey, code: code, flags: flags) ||
+           (flags == .command && code == kVK_ANSI_Slash) ||
+           (flags == .command && code == kVK_ANSI_K) {
+            commitActiveIMEIfNeeded(syncBeforeSubmit: false)
+            if case .search = vm.screenMode {
+                vm.openUniversalActionsForSelectedSearchItem()
+            } else if case .universalActions = vm.screenMode {
+                if !vm.openedDirectlyInUniversalActions {
+                    vm.returnToSearchMode()
+                } else {
+                    hide()
                 }
-            case .universalActions(let target):
-                QuickLookCoordinator.shared.toggleQuickLook(for: target.fileURLs)
-            default:
-                break
             }
             return true
         }
 
-        // 3. Open Preferences: ⌘,
+        // 4. Open Preferences: ⌘,
         if flags == .command && code == kVK_ANSI_Comma {
             hide()
             AppDelegate.shared?.openSettingsWindow()
             return true
         }
 
-        // 4. Instant row hotkeys: ⌘1 ... ⌘9
+        // 5. Instant row hotkeys: ⌘1 ... ⌘9
         if flags == .command, let numIndex = Self.numberIndex(for: code) {
             commitActiveIMEIfNeeded(syncBeforeSubmit: false)
             vm.executeAtIndex(numIndex, modifiers: [])
             return true
         }
 
-        // 5. File Buffer shortcuts in Search mode: ⌥↑, ⌥↓, ⌥→, ⌥⌫
+        // 6. File Buffer shortcuts in Search mode: ⌥↑, ⌥↓, ⌥→, ⌥⌫
         if flags == .option, case .search = vm.screenMode {
             if code == kVK_UpArrow {
                 if vm.selectedIndex < vm.searchResults.count,
@@ -292,7 +393,7 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
             }
         }
 
-        // 6. Up / Down navigation (or ⌃P / ⌃N)
+        // 7. Up / Down navigation (or ⌃P / ⌃N)
         if (code == kVK_UpArrow && flags.isEmpty) || (flags == .control && code == kVK_ANSI_P) {
             commitActiveIMEIfNeeded(syncBeforeSubmit: false)
             vm.moveSelection(delta: -1)
@@ -304,14 +405,66 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
             return true
         }
 
-        // 7. Tab or ⌘K -> Open Universal Actions on selected item (or go back)
-        if code == kVK_Tab || (flags == .command && code == kVK_ANSI_K) {
+        // 8. Tab -> Open Universal Actions / Drill into Destination Folder / Go Back
+        if code == kVK_Tab && (flags.isEmpty || flags == .shift) {
             commitActiveIMEIfNeeded(syncBeforeSubmit: false)
             vm.handleTabKey()
             return true
         }
 
-        // 8. Backspace at trailing `/` in Browse Mode pops up one parent folder
+        // 9. Right / Left Arrow Alfred-style Universal Actions navigation
+        if code == kVK_RightArrow && flags.isEmpty {
+            let editor = panel?.firstResponder as? NSTextView
+            let hasMarked = editor?.hasMarkedText() ?? false
+            if !hasMarked {
+                let isCursorAtEnd: Bool = {
+                    guard let editor else { return true }
+                    let sel = editor.selectedRange()
+                    return sel.length == 0 && sel.location >= (editor.string as NSString).length
+                }()
+                switch vm.screenMode {
+                case .search:
+                    let inBrowseWithChildSelected = (vm.searchText.hasPrefix("/") || vm.searchText.hasPrefix("~/")) && vm.selectedIndex > 0
+                    if vm.searchText.isEmpty || isCursorAtEnd || inBrowseWithChildSelected {
+                        if vm.openUniversalActionsForSelectedSearchItem() {
+                            return true
+                        }
+                    }
+                case .universalActions:
+                    if vm.actionFilterText.isEmpty || isCursorAtEnd {
+                        vm.executeCurrentSelection(modifiers: [])
+                        return true
+                    }
+                case .destinationPicker:
+                    if isCursorAtEnd && vm.drillIntoSelectedDestinationFolder() {
+                        return true
+                    }
+                default:
+                    break
+                }
+            }
+        }
+
+        if code == kVK_LeftArrow && flags.isEmpty {
+            let editor = panel?.firstResponder as? NSTextView
+            let hasMarked = editor?.hasMarkedText() ?? false
+            if !hasMarked {
+                switch vm.screenMode {
+                case .universalActions:
+                    if vm.actionFilterText.isEmpty && !vm.openedDirectlyInUniversalActions {
+                        vm.returnToSearchMode()
+                        return true
+                    }
+                case .openWithPicker(_, let prevTarget):
+                    vm.openUniversalActions(for: prevTarget, directExternalTrigger: vm.openedDirectlyInUniversalActions)
+                    return true
+                default:
+                    break
+                }
+            }
+        }
+
+        // 10. Backspace at trailing `/` in Browse Mode pops up one parent folder
         if code == kVK_Delete && flags.isEmpty {
             let hasMarked = (panel?.firstResponder as? NSTextView)?.hasMarkedText() ?? false
             if !hasMarked && vm.popParentFolderIfAtSlashBoundary() {
@@ -319,7 +472,7 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
             }
         }
 
-        // 9. Enter / Return -> Execute with active modifiers (↩, ⌘↩, ⌥↩, ⌃↩, ⇧↩)
+        // 11. Enter / Return -> Execute with active modifiers (↩, ⌘↩, ⌥↩, ⌃↩, ⇧↩)
         if code == kVK_Return || code == kVK_ANSI_KeypadEnter {
             commitActiveIMEIfNeeded(syncBeforeSubmit: true)
             vm.executeCurrentSelection(modifiers: flags)
@@ -327,6 +480,16 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
         }
 
         return false
+    }
+
+    private static func matchesBinding(_ binding: HotKeyBinding, code: Int, flags: NSEvent.ModifierFlags) -> Bool {
+        guard Int(binding.keyCode) == code else { return false }
+        var expected: NSEvent.ModifierFlags = []
+        if binding.hasCommand { expected.insert(.command) }
+        if binding.hasOption { expected.insert(.option) }
+        if binding.hasControl { expected.insert(.control) }
+        if binding.hasShift { expected.insert(.shift) }
+        return flags == expected
     }
 
     private static func numberIndex(for keyCode: Int) -> Int? {

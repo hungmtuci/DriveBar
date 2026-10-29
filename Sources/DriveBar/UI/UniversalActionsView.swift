@@ -104,21 +104,19 @@ struct UniversalActionsView: View {
                                 .padding(.vertical, 40)
                             } else {
                                 ForEach(Array(viewModel.filteredActions.enumerated()), id: \.offset) { idx, action in
-                                    Button {
+                                    UniversalActionRowView(
+                                        action: action,
+                                        index: idx,
+                                        isSelected: idx == viewModel.selectedIndex,
+                                        isLatchedFavorite: SyncAndLatchingService.shared.isFrequentlyUsed(actionID: action.id, target: target)
+                                    )
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
                                         viewModel.executeAtIndex(
                                             idx,
                                             modifiers: NSEvent.modifierFlags.cleanShortcutModifiers
                                         )
-                                    } label: {
-                                        UniversalActionRowView(
-                                            action: action,
-                                            index: idx,
-                                            isSelected: idx == viewModel.selectedIndex,
-                                            isLatchedFavorite: SyncAndLatchingService.shared.isFrequentlyUsed(actionID: action.id, target: target)
-                                        )
-                                        .contentShape(Rectangle())
                                     }
-                                    .buttonStyle(.plain)
                                     .id(idx)
                                 }
                             }
@@ -158,15 +156,19 @@ struct UniversalActionsView: View {
                 } label: {
                     Label("Finder: \(AppSettings.shared.universalActionHotKey.readableDisplay)", systemImage: "bolt.horizontal.circle")
                         .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                        .lineLimit(1)
                         .foregroundStyle(.indigo)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 2)
                         .background(Color.indigo.opacity(0.12), in: Capsule())
                 }
                 .buttonStyle(.plain)
+                .fixedSize(horizontal: true, vertical: false)
                 .help("Bấm để đổi phím tắt mở Universal Actions khi thao tác trên Finder (Mặc định: ⌘/)")
 
-                Text("⌘Y Quick Look • ⎋ Esc")
+                Text("⇧ / ⌘Y Quick Look • ⎋ Esc")
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                     .foregroundStyle(.tertiary)
             }
             .font(.system(size: 10.5, weight: .medium))

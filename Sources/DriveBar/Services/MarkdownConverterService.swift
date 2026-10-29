@@ -1709,10 +1709,32 @@ final class MarkdownConverterService: ObservableObject {
 
         try proc.run()
 
-        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        // Drain stdout and stderr concurrently to prevent 64KB kernel pipe deadlocks on large documents
+        let outBox = SyncBox<Data>()
+        let errBox = SyncBox<Data>()
+        let group = DispatchGroup()
+
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            outBox.value = outPipe.fileHandleForReading.readDataToEndOfFile()
+            group.leave()
+        }
+
+        group.enter()
+        DispatchQueue.global(qos: .utility).async {
+            errBox.value = errPipe.fileHandleForReading.readDataToEndOfFile()
+            group.leave()
+        }
+
+        let waitResult = group.wait(timeout: .now() + max(5, timeout))
+        if waitResult == .timedOut {
+            proc.terminate()
+            throw MarkdownConversionError.conversionFailed("Quá thời gian xử lý (\(Int(timeout))s).")
+        }
         proc.waitUntilExit()
 
+        let outData = outBox.value ?? Data()
+        let errData = errBox.value ?? Data()
         let stdout = String(data: outData, encoding: .utf8) ?? ""
         if proc.terminationStatus != 0 && stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let stderr = String(data: errData, encoding: .utf8) ?? "Exit code \(proc.terminationStatus)"

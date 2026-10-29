@@ -17,11 +17,14 @@ final class SelectionCaptureService {
         let frontApp = NSWorkspace.shared.frontmostApplication
         let bundleID = frontApp?.bundleIdentifier ?? ""
 
+        var finderScriptSucceeded = false
+
         // 1. If Finder is frontmost, grab Finder's selected items directly (with open Finder folder fallback!)
         if bundleID == "com.apple.finder" {
-            let (urls, note) = await Self.fetchFinderSelectionAsync(includeOpenWindowFallback: true)
-            if !urls.isEmpty {
-                return .files(urls, sourceNote: note)
+            let res = await Self.fetchFinderSelectionAsync(includeOpenWindowFallback: true)
+            finderScriptSucceeded = res.scriptSucceeded
+            if !res.urls.isEmpty {
+                return .files(res.urls, sourceNote: res.note)
             }
         }
 
@@ -30,8 +33,8 @@ final class SelectionCaptureService {
             return classifyString(selectedText, note: "Văn bản bôi đen (\(frontApp?.localizedName ?? "App"))")
         }
 
-        // 3. Try non-destructive simulated ⌘C if Accessibility is granted (skip if Finder was already checked)
-        if bundleID != "com.apple.finder", AXIsProcessTrusted() {
+        // 3. Try non-destructive simulated ⌘C if Accessibility is granted (only fall back on Finder if AppleEvents was blocked)
+        if (bundleID != "com.apple.finder" || !finderScriptSucceeded) && AXIsProcessTrusted() {
             if let captured = await simulateCopyAndCapture(sourceAppName: frontApp?.localizedName) {
                 return captured
             }
@@ -39,9 +42,9 @@ final class SelectionCaptureService {
 
         // 4. Even if Finder wasn't frontmost, check if Finder has an active selection
         if bundleID != "com.apple.finder" {
-            let (finderURLs, _) = await Self.fetchFinderSelectionAsync(includeOpenWindowFallback: false)
-            if !finderURLs.isEmpty {
-                return .files(finderURLs, sourceNote: "Đang chọn trong Finder")
+            let res = await Self.fetchFinderSelectionAsync(includeOpenWindowFallback: false)
+            if !res.urls.isEmpty {
+                return .files(res.urls, sourceNote: "Đang chọn trong Finder")
             }
         }
 
@@ -49,7 +52,7 @@ final class SelectionCaptureService {
         return readFromCurrentClipboard()
     }
 
-    private nonisolated static func fetchFinderSelectionAsync(includeOpenWindowFallback: Bool) async -> ([URL], String) {
+    private nonisolated static func fetchFinderSelectionAsync(includeOpenWindowFallback: Bool) async -> (urls: [URL], note: String, scriptSucceeded: Bool) {
         await withCheckedContinuation { continuation in
             appleScriptQueue.async {
                 let res = fetchFinderSelectionInternal(includeOpenWindowFallback: includeOpenWindowFallback)
@@ -59,16 +62,20 @@ final class SelectionCaptureService {
     }
 
     nonisolated static func fetchFinderSelectionURLs() -> [URL] {
-        fetchFinderSelectionInternal(includeOpenWindowFallback: false).0
+        fetchFinderSelectionInternal(includeOpenWindowFallback: false).urls
     }
 
-    private nonisolated static func fetchFinderSelectionInternal(includeOpenWindowFallback: Bool) -> ([URL], String) {
+    private nonisolated static func fetchFinderSelectionInternal(includeOpenWindowFallback: Bool) -> (urls: [URL], note: String, scriptSucceeded: Bool) {
         let fallbackClause = includeOpenWindowFallback ? """
             if outList is "" then
                 try
                     if (count of Finder windows) > 0 then
                         set winTarget to target of front Finder window
-                        set outList to "WINDOW_TARGET::" & POSIX path of (winTarget as text)
+                        try
+                            set outList to "WINDOW_TARGET::" & (URL of winTarget)
+                        on error
+                            set outList to "WINDOW_TARGET::" & POSIX path of (winTarget as text)
+                        end try
                     end if
                 end try
             end if
@@ -81,10 +88,14 @@ final class SelectionCaptureService {
                 set theSelection to selection
                 repeat with itemRef in theSelection
                     try
-                        set outList to outList & POSIX path of (itemRef as text) & linefeed
+                        set outList to outList & (URL of itemRef) & linefeed
                     on error
                         try
-                            set outList to outList & POSIX path of (itemRef as alias) & linefeed
+                            set outList to outList & POSIX path of (itemRef as text) & linefeed
+                        on error
+                            try
+                                set outList to outList & POSIX path of (itemRef as alias) & linefeed
+                            end try
                         end try
                     end try
                 end repeat
@@ -113,12 +124,15 @@ final class SelectionCaptureService {
             if (try? proc.run()) != nil {
                 let data = out.fileHandleForReading.readDataToEndOfFile()
                 proc.waitUntilExit()
-                rawOutput = String(data: data, encoding: .utf8)
+                if proc.terminationStatus == 0 {
+                    rawOutput = String(data: data, encoding: .utf8)
+                }
             }
         }
 
-        guard let text = rawOutput, !text.isEmpty else {
-            return ([], "Đang chọn trong Finder")
+        let scriptSucceeded = (rawOutput != nil)
+        guard let text = rawOutput, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return ([], "Đang chọn trong Finder", scriptSucceeded)
         }
 
         var note = "Đang chọn trong Finder"
@@ -127,26 +141,38 @@ final class SelectionCaptureService {
         for line in text.components(separatedBy: .newlines) {
             var rawPath = line.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !rawPath.isEmpty else { continue }
+            var isDirHint = false
             if rawPath.hasPrefix("WINDOW_TARGET::") {
                 rawPath = String(rawPath.dropFirst("WINDOW_TARGET::".count))
                 note = "Thư mục đang mở trong Finder"
+                isDirHint = true
+            }
+            if rawPath.count > 1 && rawPath.hasSuffix("/") {
+                isDirHint = true
+            }
+            if rawPath.lowercased().hasPrefix("file://"), let fileURL = URL(string: rawPath) {
+                isDirHint = isDirHint || fileURL.hasDirectoryPath
+                rawPath = fileURL.path
             }
             let hasTrailingSlash = rawPath.count > 1 && rawPath.hasSuffix("/")
+            if hasTrailingSlash {
+                isDirHint = true
+            }
             let cleanPath = hasTrailingSlash ? String(rawPath.dropLast()) : rawPath
             guard !cleanPath.isEmpty else { continue }
 
             // Avoid blocking FileProvider RPCs on CloudStorage paths!
             if cleanPath.contains("/Library/CloudStorage/") {
-                urls.append(URL(fileURLWithPath: cleanPath, isDirectory: hasTrailingSlash))
+                urls.append(URL(fileURLWithPath: cleanPath, isDirectory: isDirHint))
             } else {
                 var isDir: ObjCBool = false
                 if FileManager.default.fileExists(atPath: cleanPath, isDirectory: &isDir) {
-                    urls.append(URL(fileURLWithPath: cleanPath, isDirectory: isDir.boolValue || hasTrailingSlash))
+                    urls.append(URL(fileURLWithPath: cleanPath, isDirectory: isDir.boolValue || isDirHint))
                 }
             }
         }
 
-        return (urls, note)
+        return (urls, note, scriptSucceeded)
     }
 
     private func readAXSelectedText() -> String? {

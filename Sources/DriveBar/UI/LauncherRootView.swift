@@ -127,19 +127,23 @@ private struct SearchModeContentView: View {
                         Text(driveService.rebuildProgressText ?? "Đang đồng bộ...")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(Color.primary.opacity(0.06), in: Capsule())
+                    .fixedSize(horizontal: true, vertical: false)
                 }
 
                 let badge = viewModel.currentSearchModeBadge
                 Text(badge.label)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(badge.color)
+                    .lineLimit(1)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 4)
                     .background(badge.color.opacity(0.14), in: Capsule())
+                    .fixedSize(horizontal: true, vertical: false)
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 14)
@@ -162,7 +166,7 @@ private struct SearchModeContentView: View {
                                 },
                                 onOpenActions: {
                                     viewModel.selectedIndex = idx
-                                    viewModel.openUniversalActionsForSelectedSearchItem()
+                                    _ = viewModel.openUniversalActionsForSelectedSearchItem()
                                 }
                             )
                             .id(idx)
@@ -195,75 +199,91 @@ private struct SearchResultRowView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Button {
-                onPrimaryActivate?()
-            } label: {
-                HStack(spacing: 12) {
-                    FileOrSymbolIconView(path: item.path, fallbackSymbol: item.sfSymbolFallback ?? "folder.fill")
-                        .frame(width: 32, height: 32)
+            HStack(spacing: 12) {
+                FileOrSymbolIconView(path: item.path, fallbackSymbol: item.sfSymbolFallback ?? "folder.fill")
+                    .frame(width: 32, height: 32)
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Text(item.title)
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(isSelected ? Color.white : Color.primary)
-                                .lineLimit(1)
-
-                            if let badge = item.badge {
-                                Text(badge)
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundStyle(isSelected ? Color.white : Color.purple)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 1.5)
-                                    .background(
-                                        (isSelected ? Color.white.opacity(0.22) : Color.purple.opacity(0.13)),
-                                        in: Capsule()
-                                    )
-                            }
-                        }
-
-                        Text(dynamicSubtitle)
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(isSelected ? Color.white.opacity(0.86) : Color.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(item.title)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(isSelected ? Color.white : Color.primary)
                             .lineLimit(1)
+
+                        if let badge = item.badge {
+                            Text(badge)
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(isSelected ? Color.white : Color.purple)
+                                .lineLimit(1)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1.5)
+                                .background(
+                                    (isSelected ? Color.white.opacity(0.22) : Color.purple.opacity(0.13)),
+                                    in: Capsule()
+                                )
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
                     }
 
-                    Spacer(minLength: 8)
+                    Text(dynamicSubtitle)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(isSelected ? Color.white.opacity(0.86) : Color.secondary)
+                        .lineLimit(1)
                 }
-                .contentShape(Rectangle())
+
+                Spacer(minLength: 8)
             }
-            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                onPrimaryActivate?()
+            }
 
             if isSelected {
                 HStack(spacing: 6) {
                     if item.path != nil, let onOpenActions {
-                        Button {
-                            onOpenActions()
-                        } label: {
-                            Text("⇥ Actions")
-                                .font(.system(size: 10.5, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.92))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.white.opacity(0.18), in: RoundedRectangle(cornerRadius: 5))
-                        }
-                        .buttonStyle(.plain)
-                        .help("Mở Universal Actions & Convert sang Markdown (Tab)")
+                        Text("→ Actions")
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.95))
+                            .lineLimit(1)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Color.white.opacity(0.22), in: RoundedRectangle(cornerRadius: 6))
+                            .fixedSize(horizontal: true, vertical: false)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                onOpenActions()
+                            }
+                            .help("Mở Universal Actions & Convert sang Markdown (Phím →, Tab hoặc ⌘/)")
                     }
 
-                    Button {
-                        onPrimaryActivate?()
-                    } label: {
-                        Text("↩")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(.white)
-                    }
-                    .buttonStyle(.plain)
+                    Text("↩")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            onPrimaryActivate?()
+                        }
                 }
             } else if index < 9 {
-                Text("⌘\(index + 1)")
-                    .font(.system(size: 11.5, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    if item.path != nil, let onOpenActions {
+                        Image(systemName: "bolt.horizontal.circle")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(.secondary.opacity(0.65))
+                            .padding(3)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                onOpenActions()
+                            }
+                            .help("Mở Universal Actions cho mục này")
+                    }
+                    Text("⌘\(index + 1)")
+                        .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
             }
         }
         .padding(.horizontal, 12)
@@ -277,7 +297,7 @@ private struct SearchResultRowView: View {
     private var dynamicSubtitle: String {
         guard isSelected, item.path != nil else { return item.subtitle }
         if activeModifiers.contains(.command) {
-            return "⌘↩ Mở vị trí trực tiếp trong Finder"
+            return "⌘↩ Mở vị trí trực tiếp trong Finder  •  ⌘/ Mở Universal Actions"
         }
         if activeModifiers.contains(.option) {
             return "⌥↩ Sao chép liên kết chia sẻ Google Drive vào Clipboard"
@@ -286,7 +306,7 @@ private struct SearchResultRowView: View {
             return "⌃↩ Mở trực tiếp trên trình duyệt Google Drive Web"
         }
         if activeModifiers.contains(.shift) {
-            return "⇧↩ Mở bảng Universal Actions (Convert to Markdown / AI / PDF...)"
+            return "⇧ (Thả phím Shift) Xem nhanh Quick Look  •  ⇧↩ Mở Universal Actions"
         }
         return item.subtitle
     }
@@ -299,16 +319,27 @@ private struct SearchFooterBar: View {
     let folderCount: Int
 
     var body: some View {
-        HStack(spacing: 11) {
-            Label("↩ Duyệt/Mở", systemImage: "return")
-            Label("⇥ Actions & MD", systemImage: "arrow.right.to.line")
+        HStack(spacing: 9) {
+            Label("↩ Mở", systemImage: "return")
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            Label("→/⇥ Actions", systemImage: "arrow.right.to.line")
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            Label("⇧ Quick Look", systemImage: "eye")
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
             Label("⌘↩ Finder", systemImage: "folder")
-            Label("⌥↩ Link GDrive", systemImage: "link")
-            Spacer()
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+
+            Spacer(minLength: 4)
 
             if folderCount > 0 {
                 Text("\(folderCount.formatted()) mục")
+                    .lineLimit(1)
                     .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: true, vertical: false)
             }
 
             if let ver = updater.availableVersion {
@@ -316,14 +347,16 @@ private struct SearchFooterBar: View {
                     LauncherPanelController.shared.hide()
                     updater.installAvailableUpdate()
                 } label: {
-                    Label("Cập nhật v\(ver)", systemImage: "arrow.down.circle.fill")
+                    Label("v\(ver)", systemImage: "arrow.down.circle.fill")
                         .font(.system(size: 10.5, weight: .semibold))
+                        .lineLimit(1)
                         .foregroundStyle(.white)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 2.5)
                         .background(Color.green, in: Capsule())
                 }
                 .buttonStyle(.plain)
+                .fixedSize(horizontal: true, vertical: false)
                 .help("Tự động tải và cập nhật phiên bản mới từ GitHub")
             }
 
@@ -333,27 +366,42 @@ private struct SearchFooterBar: View {
             } label: {
                 Label(settings.searchHotKey.readableDisplay, systemImage: "keyboard")
                     .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                    .lineLimit(1)
                     .foregroundStyle(.indigo)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2.5)
                     .background(Color.indigo.opacity(0.12), in: Capsule())
             }
             .buttonStyle(.plain)
+            .fixedSize(horizontal: true, vertical: false)
             .help("Bấm để tự thiết lập phím tắt mở DriveBar (Mặc định: ⌘Space)")
 
             Button {
-                LauncherPanelController.shared.hide()
-                HotKeyService.shared.openSettingsAndRecord(.universalAction)
+                if !viewModel.openUniversalActionsForSelectedSearchItem() {
+                    LauncherPanelController.shared.hide()
+                    HotKeyService.shared.openSettingsAndRecord(.universalAction)
+                }
             } label: {
                 Label("Action \(settings.universalActionHotKey.readableDisplay)", systemImage: "bolt.horizontal.circle")
                     .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                    .lineLimit(1)
                     .foregroundStyle(.teal)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2.5)
                     .background(Color.teal.opacity(0.13), in: Capsule())
             }
             .buttonStyle(.plain)
-            .help("Bấm để đổi phím tắt mở Universal Actions trên Finder (Mặc định: ⌘/)")
+            .fixedSize(horizontal: true, vertical: false)
+            .contextMenu {
+                Button("Mở Universal Actions cho mục đang chọn") {
+                    _ = viewModel.openUniversalActionsForSelectedSearchItem()
+                }
+                Button("Đổi phím tắt Universal Actions trên Finder (\(settings.universalActionHotKey.readableDisplay))...") {
+                    LauncherPanelController.shared.hide()
+                    HotKeyService.shared.openSettingsAndRecord(.universalAction)
+                }
+            }
+            .help("Bấm để mở Universal Actions cho mục đang chọn (Chuột phải để đổi phím tắt \(settings.universalActionHotKey.readableDisplay))")
 
             Button {
                 settings.showDockIcon.toggle()
@@ -363,12 +411,14 @@ private struct SearchFooterBar: View {
                     systemImage: settings.showDockIcon ? "menubar.rectangle" : "dock.arrow.up.rectangle"
                 )
                 .font(.system(size: 10.5, weight: .semibold))
+                .lineLimit(1)
                 .foregroundStyle(.purple)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 2.5)
                 .background(Color.purple.opacity(0.12), in: Capsule())
             }
             .buttonStyle(.plain)
+            .fixedSize(horizontal: true, vertical: false)
             .help(settings.showDockIcon ? "Ẩn biểu tượng DriveBar khỏi thanh Dock" : "Hiện biểu tượng DriveBar trên thanh Dock")
 
             Button {
@@ -381,11 +431,12 @@ private struct SearchFooterBar: View {
                     .padding(3)
             }
             .buttonStyle(.plain)
+            .fixedSize(horizontal: true, vertical: false)
             .help("Mở Cài đặt & Kiểm tra cập nhật tự động")
         }
         .font(.system(size: 10.5, weight: .medium))
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .background(Color.primary.opacity(0.03))
     }
@@ -473,8 +524,9 @@ private struct OpenWithPickerView: View {
 
                 Text("Mở '\(fileURL.lastPathComponent)' bằng ứng dụng:")
                     .font(.system(size: 14, weight: .semibold))
+                    .lineLimit(1)
                 Spacer()
-                Text("Esc để quay lại")
+                Text("↩ Mở  •  ← / Esc để quay lại")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -486,32 +538,34 @@ private struct OpenWithPickerView: View {
                 ScrollView {
                     VStack(spacing: 3) {
                         ForEach(Array(viewModel.openWithApps.enumerated()), id: \.offset) { idx, app in
-                            Button {
-                                viewModel.executeAtIndex(idx, modifiers: [])
-                            } label: {
-                                HStack(spacing: 10) {
-                                    Image(nsImage: NSWorkspace.shared.icon(forFile: app.url.path))
-                                        .resizable()
-                                        .frame(width: 26, height: 26)
-                                    Text(app.name)
-                                        .font(.system(size: 13.5, weight: .medium))
-                                        .foregroundStyle(idx == viewModel.selectedIndex ? .white : .primary)
-                                    Spacer()
-                                    if idx < 9 {
-                                        Text("⌘\(idx + 1)")
-                                            .font(.system(size: 11, design: .monospaced))
-                                            .foregroundStyle(idx == viewModel.selectedIndex ? .white.opacity(0.8) : .secondary)
-                                    }
+                            HStack(spacing: 10) {
+                                Image(nsImage: NSWorkspace.shared.icon(forFile: app.url.path))
+                                    .resizable()
+                                    .frame(width: 26, height: 26)
+                                Text(app.name)
+                                    .font(.system(size: 13.5, weight: .medium))
+                                    .foregroundStyle(idx == viewModel.selectedIndex ? .white : .primary)
+                                Spacer()
+                                if idx == viewModel.selectedIndex {
+                                    Text("↩")
+                                        .font(.system(size: 12.5, weight: .bold))
+                                        .foregroundStyle(.white)
+                                } else if idx < 9 {
+                                    Text("⌘\(idx + 1)")
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .foregroundStyle(.secondary)
                                 }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 7)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill(idx == viewModel.selectedIndex ? Color(red: 0.36, green: 0.16, blue: 0.62) : Color.clear)
-                                )
-                                .contentShape(Rectangle())
                             }
-                            .buttonStyle(.plain)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(idx == viewModel.selectedIndex ? Color(red: 0.36, green: 0.16, blue: 0.62) : Color.clear)
+                            )
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                viewModel.executeAtIndex(idx, modifiers: [])
+                            }
                             .id(idx)
                         }
                     }
@@ -534,22 +588,29 @@ private struct DestinationFolderPickerView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Image(systemName: "folder.badge.gearshape")
-                    .font(.system(size: 18))
-                    .foregroundStyle(.purple)
+                Button {
+                    viewModel.openUniversalActions(
+                        for: .files(sources),
+                        directExternalTrigger: viewModel.openedDirectlyInUniversalActions
+                    )
+                } label: {
+                    Label("Quay lại", systemImage: "chevron.left")
+                        .font(.system(size: 11.5, weight: .medium))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
 
-                NativeSearchInputField(
-                    text: $viewModel.destinationSearchText,
-                    placeholder: "\(operation.rawValue) Gõ tên thư mục Google Drive đích...",
-                    fontSize: 16,
-                    focusTrigger: viewModel.focusTrigger,
-                    selectAllOnFocus: false,
-                    onMoveSelection: { viewModel.moveSelection(delta: $0) },
-                    onSubmit: { viewModel.executeCurrentSelection(modifiers: $0) },
-                    onTab: {},
-                    onEscape: { viewModel.handleEscapeKey() }
-                )
-                .frame(maxWidth: .infinity, minHeight: 22, maxHeight: 24)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(operation.rawValue)
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(.purple)
+                    Text(sources.count == 1 ? sources[0].lastPathComponent : "\(sources.count) mục đã chọn")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer()
 
                 Text("\(sources.count) mục")
                     .font(.system(size: 11, weight: .semibold))
@@ -557,9 +618,47 @@ private struct DestinationFolderPickerView: View {
                     .padding(.vertical, 3)
                     .background(Color.purple.opacity(0.14), in: Capsule())
             }
-            .padding(14)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
 
-            Divider()
+            HStack(spacing: 10) {
+                Image(systemName: "folder.badge.gearshape")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.purple)
+
+                NativeSearchInputField(
+                    text: $viewModel.destinationSearchText,
+                    placeholder: "Gõ tìm thư mục Google Drive đích (hoặc nhấn Tab / → để duyệt cây thư mục con)...",
+                    fontSize: 15.5,
+                    focusTrigger: viewModel.focusTrigger,
+                    selectAllOnFocus: false,
+                    onMoveSelection: { viewModel.moveSelection(delta: $0) },
+                    onSubmit: { viewModel.executeCurrentSelection(modifiers: $0) },
+                    onTab: { viewModel.handleTabKey() },
+                    onEscape: { viewModel.handleEscapeKey() },
+                    onBackspaceAtBoundary: { viewModel.popParentFolderIfAtSlashBoundary() }
+                )
+                .frame(maxWidth: .infinity, minHeight: 22, maxHeight: 24)
+
+                if !viewModel.destinationSearchText.isEmpty {
+                    Button {
+                        viewModel.destinationSearchText = ""
+                        viewModel.triggerInputFocus(selectAll: false)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .padding(.horizontal, 16)
+            .padding(.bottom, 10)
+
+            Divider().opacity(0.45)
 
             ScrollViewReader { proxy in
                 ScrollView {
@@ -569,10 +668,12 @@ private struct DestinationFolderPickerView: View {
                                 item: folder,
                                 index: idx,
                                 isSelected: idx == viewModel.selectedIndex,
-                                activeModifiers: [],
+                                activeModifiers: viewModel.activeModifiers,
                                 onPrimaryActivate: {
-                                    viewModel.executeAtIndex(idx, modifiers: [])
-                                }
+                                    let mods = NSEvent.modifierFlags.cleanShortcutModifiers
+                                    viewModel.executeAtIndex(idx, modifiers: mods)
+                                },
+                                onOpenActions: nil
                             )
                             .id(idx)
                         }
@@ -584,6 +685,23 @@ private struct DestinationFolderPickerView: View {
                     proxy.scrollTo(newIdx)
                 }
             }
+
+            Divider().opacity(0.45)
+
+            HStack(spacing: 14) {
+                Label("↩ Thực hiện tại thư mục này", systemImage: "return")
+                Label("⇥ / → Duyệt thư mục con", systemImage: "arrow.right.to.line")
+                Label("⌘↩ Thực hiện & Mở Finder", systemImage: "folder")
+                Label("⇧ Quick Look", systemImage: "eye")
+                Spacer()
+                Text("⎋ Esc Quay lại")
+                    .foregroundStyle(.tertiary)
+            }
+            .font(.system(size: 10.5, weight: .medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Color.primary.opacity(0.03))
         }
     }
 }
@@ -594,8 +712,21 @@ struct FileOrSymbolIconView: View {
     let path: String?
     let fallbackSymbol: String
 
+    private var prefersDirectSymbol: Bool {
+        fallbackSymbol == "arrow.turn.left.up" ||
+        fallbackSymbol == "checkmark.circle.fill"
+    }
+
     var body: some View {
-        if let path {
+        if prefersDirectSymbol {
+            ZStack {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color.purple.opacity(0.14))
+                Image(systemName: fallbackSymbol)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Color.purple)
+            }
+        } else if let path {
             if path.contains("/Library/CloudStorage/") {
                 Image(nsImage: Self.fastCloudIcon(for: path, fallbackSymbol: fallbackSymbol))
                     .resizable()

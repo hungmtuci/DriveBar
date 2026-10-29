@@ -425,8 +425,12 @@ final class UniversalActionExecutor {
         // MARK: - 6. Share, Search & Trash
         case "file.share_sheet":
             guard let contentView = LauncherPanelController.shared.panelContentView else { return }
+            LauncherPanelController.shared.isSuppressingAutoHide = true
             let picker = NSSharingServicePicker(items: urls)
             picker.show(relativeTo: contentView.bounds, of: contentView, preferredEdge: .minY)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                LauncherPanelController.shared.isSuppressingAutoHide = false
+            }
 
         case "file.search_finder":
             LauncherPanelController.shared.hide()
@@ -436,31 +440,45 @@ final class UniversalActionExecutor {
             case .text(let t, _): q = t
             case .url(let u, _): q = u.host ?? u.absoluteString
             }
-            if let encoded = q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-               let spotURL = URL(string: "x-apple.systempreferences:com.apple.Spotlight-Settings.extension") {
-                _ = spotURL
-                _ = encoded
+            copyString(q)
+            Task.detached(priority: .userInitiated) {
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+                proc.arguments = ["-e", "tell application \"Finder\" to activate"]
+                try? proc.run()
             }
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            let escaped = q.replacingOccurrences(of: "\"", with: "\\\"")
-            proc.arguments = ["-e", "tell application \"Finder\" to activate"]
-            try? proc.run()
-            copyString(escaped)
+            FloatingToastController.shared.showSuccess(
+                title: "Đã mở Finder & Copy từ khóa tìm kiếm",
+                subtitle: "Nhấn ⌘F rồi ⌘V trong Finder để tìm '\(q)'",
+                symbol: "magnifyingglass.circle.fill"
+            )
 
         case "file.trash":
             LauncherPanelController.shared.hide()
-            var trashed = 0
-            for u in urls {
-                if (try? FileManager.default.trashItem(at: u, resultingItemURL: nil)) != nil {
-                    trashed += 1
+            let primaryLabel = target.primaryTitle
+            Task.detached(priority: .userInitiated) {
+                var trashed = 0
+                for u in urls {
+                    if (try? FileManager.default.trashItem(at: u, resultingItemURL: nil)) != nil {
+                        trashed += 1
+                    }
+                }
+                let finalTrashed = trashed
+                await MainActor.run {
+                    if finalTrashed > 0 {
+                        FloatingToastController.shared.showSuccess(
+                            title: "Đã chuyển \(finalTrashed) mục vào Thùng rác",
+                            subtitle: primaryLabel,
+                            symbol: "trash.fill"
+                        )
+                    } else {
+                        FloatingToastController.shared.showError(
+                            title: "Không thể chuyển vào Thùng rác",
+                            subtitle: primaryLabel
+                        )
+                    }
                 }
             }
-            FloatingToastController.shared.showSuccess(
-                title: "Đã chuyển \(trashed) mục vào Thùng rác",
-                subtitle: target.primaryTitle,
-                symbol: "trash.fill"
-            )
 
         // MARK: - 7. Text & URL Universal Actions
         case "text.clean_md_ai":
@@ -570,46 +588,88 @@ final class UniversalActionExecutor {
 
     // MARK: - Helpers
 
-    func performFileTransfer(operation: FileTransferOperation, sources: [URL], destinationFolder: URL) {
+    func performFileTransfer(
+        operation: FileTransferOperation,
+        sources: [URL],
+        destinationFolder: URL,
+        revealInFinder: Bool = false
+    ) {
         LauncherPanelController.shared.hide()
-        let fm = FileManager.default
-        var success = 0
-        var lastError: String?
-
-        for src in sources {
-            let dst = destinationFolder.appendingPathComponent(src.lastPathComponent)
-            if src.standardizedFileURL == dst.standardizedFileURL { continue }
-            do {
-                switch operation {
-                case .copy:
-                    try fm.copyItem(at: src, to: dst)
-                case .move:
-                    try fm.moveItem(at: src, to: dst)
-                case .copyReplace:
-                    if fm.fileExists(atPath: dst.path) {
-                        try fm.removeItem(at: dst)
-                    }
-                    try fm.copyItem(at: src, to: dst)
-                case .moveReplace:
-                    if fm.fileExists(atPath: dst.path) {
-                        try fm.removeItem(at: dst)
-                    }
-                    try fm.moveItem(at: src, to: dst)
-                }
-                success += 1
-            } catch {
-                lastError = error.localizedDescription
-            }
-        }
-
         GoogleDriveIndexService.shared.recordUsed(destinationFolder.path)
-        if success > 0 {
-            FloatingToastController.shared.showSuccess(
-                title: "Đã hoàn tất \(operation.rawValue) (\(success) mục)",
-                subtitle: "Đích: \(destinationFolder.lastPathComponent)"
-            )
-        } else if let lastError {
-            FloatingToastController.shared.showError(title: "Thao tác tệp thất bại", subtitle: lastError)
+
+        FloatingToastController.shared.showProgress(
+            title: "Đang thực hiện \(operation.rawValue)",
+            subtitle: "Đích: \(destinationFolder.lastPathComponent)"
+        )
+
+        Task.detached(priority: .userInitiated) {
+            let fm = FileManager.default
+            var success = 0
+            var producedURLs: [URL] = []
+            var lastError: String?
+
+            for src in sources {
+                let dst = destinationFolder.appendingPathComponent(src.lastPathComponent)
+                if src.standardizedFileURL == dst.standardizedFileURL {
+                    producedURLs.append(dst)
+                    success += 1
+                    continue
+                }
+
+                // Materialize online-only CloudStorage files before copying/moving
+                if src.path.contains("/Library/CloudStorage/") {
+                    var st = Darwin.stat()
+                    if Darwin.lstat(src.path, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG {
+                        if let fh = try? FileHandle(forReadingFrom: src) {
+                            _ = try? fh.read(upToCount: 4096)
+                            try? fh.close()
+                        }
+                    }
+                }
+
+                do {
+                    switch operation {
+                    case .copy:
+                        try fm.copyItem(at: src, to: dst)
+                    case .move:
+                        try fm.moveItem(at: src, to: dst)
+                    case .copyReplace:
+                        if fm.fileExists(atPath: dst.path) {
+                            try fm.removeItem(at: dst)
+                        }
+                        try fm.copyItem(at: src, to: dst)
+                    case .moveReplace:
+                        if fm.fileExists(atPath: dst.path) {
+                            try fm.removeItem(at: dst)
+                        }
+                        try fm.moveItem(at: src, to: dst)
+                    }
+                    producedURLs.append(dst)
+                    success += 1
+                } catch {
+                    lastError = error.localizedDescription
+                }
+            }
+
+            let finalSuccess = success
+            let finalProduced = producedURLs
+            let finalError = lastError
+            await MainActor.run {
+                if finalSuccess > 0 {
+                    FloatingToastController.shared.showSuccess(
+                        title: "Đã hoàn tất \(operation.rawValue) (\(finalSuccess) mục) ✓",
+                        subtitle: "Đích: \(destinationFolder.lastPathComponent)"
+                    )
+                    if revealInFinder && !finalProduced.isEmpty {
+                        NSWorkspace.shared.activateFileViewerSelecting(finalProduced)
+                    }
+                } else if let finalError {
+                    FloatingToastController.shared.showError(
+                        title: "Thao tác tệp thất bại",
+                        subtitle: finalError
+                    )
+                }
+            }
         }
     }
 

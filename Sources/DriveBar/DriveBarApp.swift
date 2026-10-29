@@ -14,7 +14,13 @@ final class DriveBarApplication: NSApplication {
         }
     }
 
-    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {}
+    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        MainActor.assumeIsolated {
+            if NSApp.isActive && LauncherPanelController.shared.isVisible {
+                LauncherPanelController.shared.restoreFocusFromAuxiliaryPanel()
+            }
+        }
+    }
 }
 
 @main
@@ -97,6 +103,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.applyDockPolicy()
 
         _ = GoogleDriveIndexService.shared
+        SyncAndLatchingService.shared.start()
         StatusBarController.shared.install()
 
         let hotKeys = HotKeyService.shared
@@ -125,8 +132,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    func applicationDidResignActive(_ notification: Notification) {
+        if LauncherPanelController.shared.isVisible && !LauncherPanelController.shared.isSuppressingAutoHide {
+            LauncherPanelController.shared.hide()
+        }
+    }
+
     func application(_ application: NSApplication, open urls: [URL]) {
-        let valid = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
+        let valid = urls.filter { $0.path.contains("/Library/CloudStorage/") || FileManager.default.fileExists(atPath: $0.path) }
         guard !valid.isEmpty else { return }
         LauncherViewModel.shared.openUniversalActions(
             for: .files(valid, sourceNote: "Mở trực tiếp / Kéo vào Dock"),
