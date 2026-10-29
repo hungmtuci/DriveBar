@@ -395,6 +395,30 @@ private struct SearchFooterBar: View {
             .help("Bấm để mở Universal Actions cho mục đang chọn (Chuột phải để đổi phím tắt \(settings.universalActionHotKey.readableDisplay))")
 
             Button {
+                LauncherPanelController.shared.hide()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
+                    WindowSwitcherController.shared.openPinnedFromMenuOrSearch()
+                }
+            } label: {
+                footerActionPill("Cửa sổ \(settings.windowSwitcherHotKey.readableDisplay)", monospaced: true)
+            }
+            .buttonStyle(.plain)
+            .fixedSize(horizontal: true, vertical: false)
+            .contextMenu {
+                Button("Mở Windows Preview ngay") {
+                    LauncherPanelController.shared.hide()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
+                        WindowSwitcherController.shared.openPinnedFromMenuOrSearch()
+                    }
+                }
+                Button("Thiết lập phím tắt & chế độ Windows Preview (\(settings.windowSwitcherHotKey.readableDisplay))...") {
+                    LauncherPanelController.shared.hide()
+                    HotKeyService.shared.openSettingsAndRecord(.windowSwitcher)
+                }
+            }
+            .help("Bấm để mở Windows Preview — Chuyển đổi & phóng to mọi cửa sổ đang chạy (Chuột phải để đổi phím tắt \(settings.windowSwitcherHotKey.readableDisplay))")
+
+            Button {
                 settings.showDockIcon.toggle()
             } label: {
                 footerActionPill(

@@ -9,12 +9,15 @@ final class HotKeyService: ObservableObject {
     enum RecordingTarget: Equatable {
         case search
         case universalAction
+        case windowSwitcher
+        case sameAppWindowSwitcher
     }
 
     @Published private(set) var recordingTarget: RecordingTarget?
     @Published private(set) var liveModifiersPreview: String = ""
     @Published private(set) var isSearchHotKeyActive: Bool = false
     @Published private(set) var isUniversalHotKeyActive: Bool = false
+    @Published private(set) var isWindowSwitcherCarbonFallbackActive: Bool = false
     @Published private(set) var registrationWarning: String?
 
     var onToggleSearch: (() -> Void)?
@@ -22,6 +25,8 @@ final class HotKeyService: ObservableObject {
 
     private var searchHotKeyRef: EventHotKeyRef?
     private var universalHotKeyRef: EventHotKeyRef?
+    private var windowSwitcherHotKeyRef: EventHotKeyRef?
+    private var sameAppHotKeyRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
     private var recordingKeyMonitor: Any?
     private var recordingFlagsMonitor: Any?
@@ -55,6 +60,14 @@ final class HotKeyService: ObservableObject {
                 } else if hotKeyID.id == 2 {
                     Task { @MainActor in
                         HotKeyService.shared.onTriggerUniversalAction?()
+                    }
+                } else if hotKeyID.id == 3 {
+                    Task { @MainActor in
+                        WindowSwitcherController.shared.handleCarbonHotKeyFallback(sameAppOnly: false)
+                    }
+                } else if hotKeyID.id == 4 {
+                    Task { @MainActor in
+                        WindowSwitcherController.shared.handleCarbonHotKeyFallback(sameAppOnly: true)
                     }
                 }
                 return noErr
@@ -100,6 +113,34 @@ final class HotKeyService: ObservableObject {
         )
         isUniversalHotKeyActive = (s2 == noErr)
 
+        // Carbon fallback when EventTap is not active yet and user selected a non-⌘Tab shortcut (e.g. ⌥Tab)
+        isWindowSwitcherCarbonFallbackActive = false
+        if !WindowSwitcherController.shared.isEventTapActive {
+            if settings.enableWindowSwitcher && settings.windowSwitcherHotKey != .commandTab {
+                let winID = EventHotKeyID(signature: OSType(0x44525642), id: 3)
+                let s3 = RegisterEventHotKey(
+                    settings.windowSwitcherHotKey.keyCode,
+                    settings.windowSwitcherHotKey.carbonModifiers,
+                    winID,
+                    GetApplicationEventTarget(),
+                    0,
+                    &windowSwitcherHotKeyRef
+                )
+                isWindowSwitcherCarbonFallbackActive = (s3 == noErr)
+            }
+            if settings.enableSameAppSwitcher && settings.sameAppSwitcherHotKey != .commandTab {
+                let sameID = EventHotKeyID(signature: OSType(0x44525642), id: 4)
+                _ = RegisterEventHotKey(
+                    settings.sameAppSwitcherHotKey.keyCode,
+                    settings.sameAppSwitcherHotKey.carbonModifiers,
+                    sameID,
+                    GetApplicationEventTarget(),
+                    0,
+                    &sameAppHotKeyRef
+                )
+            }
+        }
+
         var conflicts: [String] = []
         if !isSearchHotKeyActive {
             let disp = settings.searchHotKey.readableDisplay
@@ -127,12 +168,25 @@ final class HotKeyService: ObservableObject {
             UnregisterEventHotKey(ref)
             universalHotKeyRef = nil
         }
+        if let ref = windowSwitcherHotKeyRef {
+            UnregisterEventHotKey(ref)
+            windowSwitcherHotKeyRef = nil
+        }
+        if let ref = sameAppHotKeyRef {
+            UnregisterEventHotKey(ref)
+            sameAppHotKeyRef = nil
+        }
     }
 
     // MARK: - Open Settings & Immediately Record
 
     func openSettingsAndRecord(_ target: RecordingTarget) {
-        SettingsUIState.shared.selectedTab = .general
+        switch target {
+        case .search, .universalAction:
+            SettingsUIState.shared.selectedTab = .general
+        case .windowSwitcher, .sameAppWindowSwitcher:
+            SettingsUIState.shared.selectedTab = .windowSwitcher
+        }
         AppDelegate.shared?.openSettingsWindow()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
             self.startRecording(for: target)
@@ -259,6 +313,22 @@ final class HotKeyService: ObservableObject {
                     subtitle: "Chọn file hoặc văn bản rồi bấm \(newBinding.readableDisplay)"
                 )
             }
+
+        case .windowSwitcher:
+            AppSettings.shared.windowSwitcherHotKey = newBinding
+            AppSettings.shared.statusBannerMessage = "Đã thiết lập phím tắt Windows Preview: \(newBinding.readableDisplay)"
+            FloatingToastController.shared.showSuccess(
+                title: "Đã đổi phím tắt Windows Preview: \(newBinding.readableDisplay)",
+                subtitle: "Bấm \(newBinding.readableDisplay) để mở danh sách & phóng to cửa sổ đang chạy"
+            )
+
+        case .sameAppWindowSwitcher:
+            AppSettings.shared.sameAppSwitcherHotKey = newBinding
+            AppSettings.shared.statusBannerMessage = "Đã thiết lập phím tắt chuyển cửa sổ cùng ứng dụng: \(newBinding.readableDisplay)"
+            FloatingToastController.shared.showSuccess(
+                title: "Đã đổi phím tắt cửa sổ cùng ứng dụng: \(newBinding.readableDisplay)",
+                subtitle: "Bấm \(newBinding.readableDisplay) để chuyển nhanh giữa các cửa sổ của ứng dụng hiện tại"
+            )
         }
     }
 

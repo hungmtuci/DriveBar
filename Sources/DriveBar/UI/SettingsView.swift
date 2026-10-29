@@ -9,6 +9,7 @@ final class SettingsUIState: ObservableObject {
 
     enum Tab: String, CaseIterable {
         case general = "Phím tắt & Google Drive"
+        case windowSwitcher = "Windows Preview (⌘Tab)"
         case aiMarkdown = "Convert sang Markdown (AI)"
         case actions = "Universal Actions"
     }
@@ -16,6 +17,7 @@ final class SettingsUIState: ObservableObject {
     @Published var selectedTab: Tab = .general
     @Published var isDropTargeted: Bool = false
     @Published var axTrusted: Bool = AXIsProcessTrusted()
+    @Published var screenCaptureTrusted: Bool = CGPreflightScreenCaptureAccess()
     @Published var actionFilter: String = ""
 
     // Manual Custom Shortcut Builder State (avoids @State macro in CommandLineTools)
@@ -83,14 +85,14 @@ struct SettingsView: View {
                                 .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
                                 .foregroundStyle(.secondary)
                         }
-                        Text("Tìm kiếm nhanh Google Drive & Universal Actions tối ưu Markdown cho AI")
+                        Text("Google Drive • Windows Preview (⌘Tab) • Convert Markdown cho AI")
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
                     }
 
                     Spacer()
 
-                    // Quick Shortcut Recorder Badges in Header (Search & Finder Universal Actions)
+                    // Quick Shortcut Recorder Badges in Header
                     Button {
                         uiState.selectedTab = .general
                         hotKeyService.startRecording(for: .search)
@@ -101,7 +103,7 @@ struct SettingsView: View {
                                 : "Tìm: \(settings.searchHotKey.readableDisplay)",
                             systemImage: "command"
                         )
-                        .font(.system(size: 11.5, weight: .medium))
+                        .font(.system(size: 11, weight: .medium))
                     }
                     .buttonStyle(.bordered)
                     .tint(hotKeyService.recordingTarget == .search ? .orange : nil)
@@ -115,15 +117,32 @@ struct SettingsView: View {
                         Label(
                             hotKeyService.recordingTarget == .universalAction
                                 ? (hotKeyService.liveModifiersPreview.isEmpty ? "Nhấn phím..." : hotKeyService.liveModifiersPreview)
-                                : "Finder Action: \(settings.universalActionHotKey.readableDisplay)",
+                                : "Action: \(settings.universalActionHotKey.readableDisplay)",
                             systemImage: "bolt.horizontal"
                         )
-                        .font(.system(size: 11.5, weight: .medium))
+                        .font(.system(size: 11, weight: .medium))
                     }
                     .buttonStyle(.bordered)
                     .tint(hotKeyService.recordingTarget == .universalAction ? .orange : nil)
                     .controlSize(.small)
                     .help("Bấm để tự thiết lập phím tắt mở Universal Actions trên Finder (Mặc định: ⌘/)")
+
+                    Button {
+                        uiState.selectedTab = .windowSwitcher
+                        hotKeyService.startRecording(for: .windowSwitcher)
+                    } label: {
+                        Label(
+                            hotKeyService.recordingTarget == .windowSwitcher
+                                ? (hotKeyService.liveModifiersPreview.isEmpty ? "Nhấn phím..." : hotKeyService.liveModifiersPreview)
+                                : "Cửa sổ: \(settings.windowSwitcherHotKey.readableDisplay)",
+                            systemImage: "macwindow.on.rectangle"
+                        )
+                        .font(.system(size: 11, weight: .medium))
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(hotKeyService.recordingTarget == .windowSwitcher ? .orange : nil)
+                    .controlSize(.small)
+                    .help("Bấm để tự thiết lập phím tắt mở Windows Preview (Mặc định: ⌘⇥)")
 
                     // Quick Toggle Show/Hide on Dock Button
                     Button {
@@ -133,10 +152,10 @@ struct SettingsView: View {
                             : "Đã ẩn DriveBar khỏi thanh Dock (chỉ hiện gọn trên Menu Bar)."
                     } label: {
                         Label(
-                            settings.showDockIcon ? "Đang hiện trên Dock" : "Đang ẩn trên Dock",
+                            settings.showDockIcon ? "Hiện Dock" : "Ẩn Dock",
                             systemImage: settings.showDockIcon ? "dock.arrow.up.rectangle" : "menubar.rectangle"
                         )
-                        .font(.system(size: 11.5, weight: .semibold))
+                        .font(.system(size: 11, weight: .semibold))
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -193,6 +212,14 @@ struct SettingsView: View {
                         uiState: uiState,
                         axTrusted: $uiState.axTrusted
                     )
+                case .windowSwitcher:
+                    WindowSwitcherSettingsTab(
+                        settings: settings,
+                        hotKeyService: hotKeyService,
+                        switcherController: WindowSwitcherController.shared,
+                        switcherService: WindowSwitcherService.shared,
+                        uiState: uiState
+                    )
                 case .aiMarkdown:
                     AIMarkdownSettingsTab(settings: settings, isDropTargeted: $uiState.isDropTargeted)
                 case .actions:
@@ -204,6 +231,8 @@ struct SettingsView: View {
         .frame(width: 840, height: 640)
         .onAppear {
             uiState.axTrusted = AXIsProcessTrusted()
+            uiState.screenCaptureTrusted = CGPreflightScreenCaptureAccess()
+            WindowSwitcherService.shared.refreshPermissionStates()
             settings.refreshLaunchAtLoginStatus()
         }
     }
@@ -880,6 +909,462 @@ private struct GeneralSettingsTab: View {
             )
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Tab 1B: Windows Preview (⌘Tab Multi-Window, Multi-Space & Multi-Display Switcher)
+
+private struct WindowSwitcherSettingsTab: View {
+    @ObservedObject var settings: AppSettings
+    @ObservedObject var hotKeyService: HotKeyService
+    @ObservedObject var switcherController: WindowSwitcherController
+    @ObservedObject var switcherService: WindowSwitcherService
+    @ObservedObject var uiState: SettingsUIState
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                // 1. Hotkeys & Activation Card
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 12) {
+                        // A. Primary Window Switcher (Default: ⌘Tab)
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(alignment: .center, spacing: 10) {
+                                Toggle("", isOn: $settings.enableWindowSwitcher)
+                                    .labelsHidden()
+                                    .toggleStyle(.switch)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 8) {
+                                        Text("Chuyển đổi tất cả cửa sổ đang chạy (Windows Preview)")
+                                            .font(.system(size: 13, weight: .semibold))
+                                        switcherStatusBadge
+                                    }
+                                    Text("Mặc định: Command + Tab (⌘⇥) • Hiển thị từng cửa sổ riêng lẻ của mọi ứng dụng và phóng to nội dung trực tiếp")
+                                        .font(.system(size: 11.5))
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                Spacer()
+
+                                Button {
+                                    uiState.manualBuilderTarget = nil
+                                    if hotKeyService.recordingTarget == .windowSwitcher {
+                                        hotKeyService.stopRecording()
+                                        hotKeyService.registerAll()
+                                    } else {
+                                        hotKeyService.startRecording(for: .windowSwitcher)
+                                    }
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: hotKeyService.recordingTarget == .windowSwitcher ? "record.circle.fill" : "keyboard")
+                                        Text(recorderButtonTitle(for: .windowSwitcher, current: settings.windowSwitcherHotKey))
+                                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                    }
+                                    .frame(minWidth: 150)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(hotKeyService.recordingTarget == .windowSwitcher ? .orange : .accentColor)
+                                .disabled(!settings.enableWindowSwitcher)
+
+                                Button("Mặc định (⌘⇥)") {
+                                    hotKeyService.applyRecordedBinding(.defaultWindowSwitcher, for: .windowSwitcher)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(!settings.enableWindowSwitcher || (settings.windowSwitcherHotKey == .defaultWindowSwitcher && hotKeyService.recordingTarget == nil))
+                            }
+
+                            HStack(spacing: 6) {
+                                Text("Chọn nhanh:")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+
+                                presetChip(title: "⌘⇥ (Mặc định)", binding: .commandTab, current: settings.windowSwitcherHotKey, target: .windowSwitcher)
+                                presetChip(title: "⌥⇥ (Option + Tab)", binding: .optionTab, current: settings.windowSwitcherHotKey, target: .windowSwitcher)
+                                presetChip(title: "⌃⇥ (Control + Tab)", binding: .controlTab, current: settings.windowSwitcherHotKey, target: .windowSwitcher)
+
+                                Spacer()
+
+                                Button {
+                                    uiState.toggleManualBuilder(for: .windowSwitcher, current: settings.windowSwitcherHotKey)
+                                } label: {
+                                    Label(
+                                        uiState.manualBuilderTarget == .windowSwitcher ? "Ẩn ghép phím" : "Tự ghép phím thủ công",
+                                        systemImage: uiState.manualBuilderTarget == .windowSwitcher ? "chevron.up" : "slider.horizontal.3"
+                                    )
+                                    .font(.system(size: 11, weight: .medium))
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.mini)
+                                .disabled(!settings.enableWindowSwitcher)
+                            }
+
+                            if uiState.manualBuilderTarget == .windowSwitcher {
+                                manualShortcutBuilderRow(for: .windowSwitcher)
+                            }
+                        }
+
+                        Divider()
+
+                        // B. Same-App Window Switcher (Default: ⌘`)
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(alignment: .center, spacing: 10) {
+                                Toggle("", isOn: $settings.enableSameAppSwitcher)
+                                    .labelsHidden()
+                                    .toggleStyle(.switch)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Chuyển nhanh giữa các cửa sổ của CÙNG 1 ứng dụng đang mở")
+                                        .font(.system(size: 13, weight: .semibold))
+                                    Text("Mặc định: Command + ` (⌘`) • Thuận tiện khi mở nhiều cửa sổ Word, Excel, Finder hoặc Chrome cùng lúc")
+                                        .font(.system(size: 11.5))
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                Spacer()
+
+                                Button {
+                                    uiState.manualBuilderTarget = nil
+                                    if hotKeyService.recordingTarget == .sameAppWindowSwitcher {
+                                        hotKeyService.stopRecording()
+                                        hotKeyService.registerAll()
+                                    } else {
+                                        hotKeyService.startRecording(for: .sameAppWindowSwitcher)
+                                    }
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: hotKeyService.recordingTarget == .sameAppWindowSwitcher ? "record.circle.fill" : "keyboard")
+                                        Text(recorderButtonTitle(for: .sameAppWindowSwitcher, current: settings.sameAppSwitcherHotKey))
+                                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                    }
+                                    .frame(minWidth: 150)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(hotKeyService.recordingTarget == .sameAppWindowSwitcher ? .orange : .accentColor)
+                                .disabled(!settings.enableSameAppSwitcher)
+
+                                Button("Mặc định (⌘`)") {
+                                    hotKeyService.applyRecordedBinding(.defaultSameAppSwitcher, for: .sameAppWindowSwitcher)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(!settings.enableSameAppSwitcher || (settings.sameAppSwitcherHotKey == .defaultSameAppSwitcher && hotKeyService.recordingTarget == nil))
+                            }
+
+                            HStack(spacing: 6) {
+                                Text("Chọn nhanh:")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+
+                                presetChip(title: "⌘` (Mặc định)", binding: .commandGrave, current: settings.sameAppSwitcherHotKey, target: .sameAppWindowSwitcher)
+                                presetChip(title: "⌥` (Option + `)", binding: .optionGrave, current: settings.sameAppSwitcherHotKey, target: .sameAppWindowSwitcher)
+
+                                Spacer()
+
+                                Button {
+                                    uiState.toggleManualBuilder(for: .sameAppWindowSwitcher, current: settings.sameAppSwitcherHotKey)
+                                } label: {
+                                    Label(
+                                        uiState.manualBuilderTarget == .sameAppWindowSwitcher ? "Ẩn ghép phím" : "Tự ghép phím thủ công",
+                                        systemImage: uiState.manualBuilderTarget == .sameAppWindowSwitcher ? "chevron.up" : "slider.horizontal.3"
+                                    )
+                                    .font(.system(size: 11, weight: .medium))
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.mini)
+                                .disabled(!settings.enableSameAppSwitcher)
+                            }
+
+                            if uiState.manualBuilderTarget == .sameAppWindowSwitcher {
+                                manualShortcutBuilderRow(for: .sameAppWindowSwitcher)
+                            }
+                        }
+                    }
+                    .padding(8)
+                } label: {
+                    HStack {
+                        Label("Phím tắt Kích hoạt Windows Preview (⌘Tab & ⌘`)", systemImage: "macwindow.on.rectangle")
+                            .font(.system(size: 13, weight: .semibold))
+                        Spacer()
+                        Button {
+                            switcherController.openPinnedFromMenuOrSearch()
+                        } label: {
+                            Label("Mở thử Windows Preview ngay", systemImage: "rectangle.grid.1x2")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    }
+                }
+
+                // 2. Display Scope, Live Zoom & Minimized/Hidden Window Visibility
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 11) {
+                        HStack(spacing: 12) {
+                            Text("Phạm vi hiển thị cửa sổ:")
+                                .font(.system(size: 12.5, weight: .medium))
+                            Picker("", selection: $settings.windowSwitcherScope) {
+                                ForEach(WindowSwitcherScope.allCases, id: \.self) { scope in
+                                    Text(scope.rawValue).tag(scope)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                        }
+
+                        Divider()
+
+                        Toggle(
+                            "Phóng to nội dung cửa sổ đang chọn (hiển thị khung xem trước độ phân giải cao phía trên thanh chọn)",
+                            isOn: $settings.windowSwitcherShowZoomPreview
+                        )
+                        .font(.system(size: 12.5, weight: .medium))
+
+                        Toggle(
+                            "Hiển thị các cửa sổ đang thu nhỏ dưới thanh Dock (Minimize — tự động khôi phục khi chọn)",
+                            isOn: $settings.windowSwitcherShowMinimized
+                        )
+                        .font(.system(size: 12.5, weight: .medium))
+
+                        Toggle(
+                            "Hiển thị cửa sổ của ứng dụng đang ẩn (⌘H — tự động hiện lại ứng dụng khi chọn)",
+                            isOn: $settings.windowSwitcherShowHiddenApps
+                        )
+                        .font(.system(size: 12.5, weight: .medium))
+
+                        Toggle(
+                            "Hiển thị cả các ứng dụng đang chạy nhưng chưa mở cửa sổ nào",
+                            isOn: $settings.windowSwitcherShowWindowlessApps
+                        )
+                        .font(.system(size: 12.5, weight: .medium))
+                    }
+                    .padding(8)
+                } label: {
+                    Label("Chế độ Hiển thị, Phóng to Nội dung & Lọc Cửa sổ (Minimize / Desktop / Màn hình)", systemImage: "sparkles.tv")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+
+                // 3. System Permissions Required for ⌘Tab Override & Live Window Thumbnails
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 10) {
+                            Image(systemName: switcherService.hasAccessibilityPermission ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
+                                .font(.system(size: 18))
+                                .foregroundStyle(switcherService.hasAccessibilityPermission ? .green : .orange)
+                                .frame(width: 24)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Quyền Accessibility (Trợ năng) — Bắt phím ⌘Tab & Nhảy chính xác đến từng cửa sổ")
+                                    .font(.system(size: 12.5, weight: .semibold))
+                                Text(switcherService.hasAccessibilityPermission
+                                     ? "Đã cấp quyền: Hỗ trợ giữ ⌘ + Tab di chuyển lần lượt, nhả ⌘ nhảy ngay tới đúng cửa sổ con hoặc Desktop khác."
+                                     : "Cần cấp quyền để ghi đè ⌘Tab mặc định của macOS và kích hoạt chính xác cửa sổ con khi 1 ứng dụng mở nhiều cửa sổ.")
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Spacer()
+
+                            if !switcherService.hasAccessibilityPermission {
+                                Button("Cấp quyền Accessibility...") {
+                                    switcherService.promptAccessibilityPermission()
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                            }
+                        }
+
+                        Divider()
+
+                        HStack(spacing: 10) {
+                            Image(systemName: switcherService.hasScreenRecordingPermission ? "checkmark.rectangle.stack.fill" : "rectangle.dashed.badge.record")
+                                .font(.system(size: 18))
+                                .foregroundStyle(switcherService.hasScreenRecordingPermission ? .green : .orange)
+                                .frame(width: 24)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Quyền Ghi màn hình (Screen Recording) — Chụp ảnh nội dung trực tiếp của từng cửa sổ")
+                                    .font(.system(size: 12.5, weight: .semibold))
+                                Text(switcherService.hasScreenRecordingPermission
+                                     ? "Đã cấp quyền: Hiển thị ảnh xem trước sắc nét và phóng to nội dung trực tiếp cho mọi cửa sổ trên các màn hình."
+                                     : "Tùy chọn khuyến nghị: Cấp quyền để xem trước ảnh chụp nội dung thực tế của từng cửa sổ (nếu chưa cấp vẫn hiện biểu tượng & tên cửa sổ).")
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Spacer()
+
+                            if !switcherService.hasScreenRecordingPermission {
+                                Button("Cấp quyền Ghi màn hình...") {
+                                    switcherService.promptScreenRecordingPermission()
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                            }
+                        }
+
+                        HStack {
+                            Text("Sau khi bật quyền trong Cài đặt hệ thống macOS, bấm Làm mới để kích hoạt ngay không cần khởi động lại.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Làm mới trạng thái quyền") {
+                                switcherService.refreshPermissionStates()
+                                switcherController.refreshEventTapState()
+                                hotKeyService.registerAll()
+                                uiState.axTrusted = switcherService.hasAccessibilityPermission
+                                uiState.screenCaptureTrusted = switcherService.hasScreenRecordingPermission
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                    }
+                    .padding(8)
+                } label: {
+                    Label("Quyền Hệ thống cho Windows Preview", systemImage: "lock.shield")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+
+                // 4. Quick Keyboard Reference Inside Windows Preview
+                GroupBox {
+                    HStack(alignment: .top, spacing: 24) {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("• Giữ ⌘ + bấm Tab / ⇧Tab (hoặc `): Di chuyển lần lượt, nhả ⌘ để chọn.")
+                            Text("• Phím mũi tên ← → ↑ ↓ + Enter: Điều hướng tự do & nhảy tới cửa sổ.")
+                            Text("• Di chuột & Click: Xem phóng to tức thì và nhảy đến cửa sổ.")
+                        }
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("• Space: Ẩn / hiện khung phóng to nội dung phía trên.")
+                            Text("• Phím W / M / H / Q: Đóng cửa sổ (W), Minimize (M), Ẩn App (H), Thoát App (Q).")
+                            Text("• Phím 1 / 2 / 3 / 4: Đổi nhanh Màn hình (1), Minimize (2), App ẩn (3), Cùng App (4).")
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .padding(8)
+                } label: {
+                    Label("Phím Thao tác Nhanh ngay trong màn hình Windows Preview", systemImage: "keyboard")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+            }
+            .padding(20)
+        }
+        .onAppear {
+            switcherService.refreshPermissionStates()
+            switcherController.refreshEventTapState()
+        }
+    }
+
+    @ViewBuilder
+    private var switcherStatusBadge: some View {
+        if !settings.enableWindowSwitcher {
+            statusCapsule(title: "Đang tắt", color: .secondary)
+        } else if switcherController.isEventTapActive {
+            statusCapsule(title: "Đang hoạt động", color: .green)
+        } else if hotKeyService.isWindowSwitcherCarbonFallbackActive {
+            statusCapsule(title: "Chế độ phím tắt", color: .green)
+        } else {
+            statusCapsule(title: "Cần quyền Accessibility", color: .orange)
+        }
+    }
+
+    private func statusCapsule(title: String, color: Color) -> some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(color)
+                .frame(width: 6, height: 6)
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(color)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(color.opacity(0.12), in: Capsule())
+    }
+
+    private func recorderButtonTitle(for target: HotKeyService.RecordingTarget, current: HotKeyBinding) -> String {
+        guard hotKeyService.recordingTarget == target else {
+            return "\(current.readableDisplay)  •  Đổi"
+        }
+        if !hotKeyService.liveModifiersPreview.isEmpty {
+            return hotKeyService.liveModifiersPreview
+        }
+        return "Nhấn phím... (Esc hủy)"
+    }
+
+    private func presetChip(
+        title: String,
+        binding: HotKeyBinding,
+        current: HotKeyBinding,
+        target: HotKeyService.RecordingTarget
+    ) -> some View {
+        let isSelected = (current == binding)
+        return Button {
+            uiState.manualBuilderTarget = nil
+            hotKeyService.applyRecordedBinding(binding, for: target)
+        } label: {
+            Text(title)
+                .font(.system(size: 10.5, weight: isSelected ? .semibold : .regular, design: .monospaced))
+                .foregroundStyle(isSelected ? Color.white : Color.primary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(
+                    isSelected ? Color.accentColor : Color.primary.opacity(0.06),
+                    in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func manualShortcutBuilderRow(for target: HotKeyService.RecordingTarget) -> some View {
+        HStack(spacing: 10) {
+            Text("Giữ phím:")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            Toggle("⌘ Command", isOn: $uiState.manualCmd)
+                .toggleStyle(.checkbox)
+                .font(.system(size: 11.5, weight: .semibold))
+            Toggle("⌥ Option", isOn: $uiState.manualOpt)
+                .toggleStyle(.checkbox)
+                .font(.system(size: 11.5, weight: .semibold))
+            Toggle("⌃ Control", isOn: $uiState.manualCtrl)
+                .toggleStyle(.checkbox)
+                .font(.system(size: 11.5, weight: .semibold))
+            Toggle("⇧ Shift", isOn: $uiState.manualShift)
+                .toggleStyle(.checkbox)
+                .font(.system(size: 11.5, weight: .semibold))
+
+            Text("+")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.secondary)
+
+            Picker("", selection: $uiState.manualKeyCode) {
+                ForEach(HotKeyBinding.selectableKeys, id: \.keyCode) { item in
+                    Text(item.label).tag(item.keyCode)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 155)
+            .controlSize(.small)
+
+            Spacer()
+
+            Button("Áp dụng") {
+                if let built = uiState.constructedManualBinding {
+                    hotKeyService.applyRecordedBinding(built, for: target)
+                    uiState.manualBuilderTarget = nil
+                } else {
+                    NSSound.beep()
+                    settings.statusBannerMessage = "Vui lòng tick ít nhất 1 phím bổ trợ (⌘, ⌥, ⌃, ⇧) hoặc chọn phím chức năng F1–F12."
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 

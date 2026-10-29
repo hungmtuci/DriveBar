@@ -70,6 +70,15 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         openUA.target = self
         menu.addItem(openUA)
 
+        let openWinPreview = NSMenuItem(
+            title: "Windows Preview — Chuyển nhanh cửa sổ (\(settings.windowSwitcherHotKey.readableDisplay))",
+            action: #selector(openWindowsPreviewAction),
+            keyEquivalent: ""
+        )
+        openWinPreview.image = NSImage(systemSymbolName: "macwindow.on.rectangle", accessibilityDescription: nil)
+        openWinPreview.target = self
+        menu.addItem(openWinPreview)
+
         let quickConvertMD = NSMenuItem(
             title: "Convert mục đang chọn trong Finder sang Markdown (.md + Copy)",
             action: #selector(convertFinderSelectionToMD),
@@ -114,7 +123,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         // Quick Shortcut Customization Submenu
         let shortcutParent = NSMenuItem(
-            title: "Thiết lập Phím tắt (Tìm: \(settings.searchHotKey.readableDisplay) • Action: \(settings.universalActionHotKey.readableDisplay))",
+            title: "Thiết lập Phím tắt (Tìm: \(settings.searchHotKey.readableDisplay) • Action: \(settings.universalActionHotKey.readableDisplay) • Cửa sổ: \(settings.windowSwitcherHotKey.readableDisplay))",
             action: nil,
             keyEquivalent: ""
         )
@@ -177,8 +186,44 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         shortcutMenu.addItem(.separator())
 
+        let recordWinItem = NSMenuItem(
+            title: "Tự bấm thiết lập phím tắt Windows Preview (\(settings.windowSwitcherHotKey.readableDisplay))...",
+            action: #selector(recordWindowSwitcherShortcutAction),
+            keyEquivalent: ""
+        )
+        recordWinItem.target = self
+        shortcutMenu.addItem(recordWinItem)
+
+        let winPresets: [(String, HotKeyBinding)] = [
+            ("⌘⇥ — Mặc định Windows Preview (Command + Tab)", .commandTab),
+            ("⌥⇥ (Option + Tab)", .optionTab),
+            ("⌃⇥ (Control + Tab)", .controlTab)
+        ]
+        for (idx, wPreset) in winPresets.enumerated() {
+            let wItem = NSMenuItem(
+                title: wPreset.0,
+                action: #selector(selectWindowSwitcherPresetShortcut(_:)),
+                keyEquivalent: ""
+            )
+            wItem.tag = idx
+            wItem.state = (settings.windowSwitcherHotKey == wPreset.1) ? .on : .off
+            wItem.target = self
+            shortcutMenu.addItem(wItem)
+        }
+
+        let toggleMinItem = NSMenuItem(
+            title: "Hiển thị cửa sổ đang Minimize trong Windows Preview",
+            action: #selector(toggleWindowSwitcherMinimizedAction),
+            keyEquivalent: ""
+        )
+        toggleMinItem.state = settings.windowSwitcherShowMinimized ? .on : .off
+        toggleMinItem.target = self
+        shortcutMenu.addItem(toggleMinItem)
+
+        shortcutMenu.addItem(.separator())
+
         let resetHotkeysItem = NSMenuItem(
-            title: "Khôi phục mặc định (⌘Space & ⌘/)",
+            title: "Khôi phục mặc định (⌘Space • ⌘/ • ⌘⇥)",
             action: #selector(resetDefaultShortcutsAction),
             keyEquivalent: ""
         )
@@ -240,7 +285,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(checkItem)
 
         let rebuildTitle = drive.isRebuildingFolders
-            ? "⏳ \(drive.rebuildProgressText ?? "Đang quét lại Cache Google Drive...")"
+            ? (drive.rebuildProgressText ?? "Đang quét lại Cache Google Drive...")
             : "Quét lại Cache Google Drive ngay"
         let rebuildItem = NSMenuItem(title: rebuildTitle, action: #selector(rebuildCacheAction), keyEquivalent: "")
         rebuildItem.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)
@@ -266,6 +311,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     @objc private func openUniversalAction() {
         LauncherPanelController.shared.triggerUniversalActionsOnSelection()
+    }
+
+    @objc private func openWindowsPreviewAction() {
+        WindowSwitcherController.shared.openPinnedFromMenuOrSearch()
     }
 
     @objc private func convertFinderSelectionToMD() {
@@ -304,6 +353,20 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         HotKeyService.shared.openSettingsAndRecord(.universalAction)
     }
 
+    @objc private func recordWindowSwitcherShortcutAction() {
+        HotKeyService.shared.openSettingsAndRecord(.windowSwitcher)
+    }
+
+    @objc private func selectWindowSwitcherPresetShortcut(_ sender: NSMenuItem) {
+        let presets: [HotKeyBinding] = [.commandTab, .optionTab, .controlTab]
+        guard sender.tag >= 0 && sender.tag < presets.count else { return }
+        HotKeyService.shared.applyRecordedBinding(presets[sender.tag], for: .windowSwitcher)
+    }
+
+    @objc private func toggleWindowSwitcherMinimizedAction() {
+        AppSettings.shared.windowSwitcherShowMinimized.toggle()
+    }
+
     @objc private func selectSearchPresetShortcut(_ sender: NSMenuItem) {
         let presets: [HotKeyBinding] = [.commandSpace, .optionSpace, .controlSpace, .commandShiftSpace]
         guard sender.tag >= 0 && sender.tag < presets.count else { return }
@@ -320,7 +383,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         AppSettings.shared.resetShortcutsToDefault()
         FloatingToastController.shared.showSuccess(
             title: "Đã khôi phục phím tắt mặc định",
-            subtitle: "Tìm kiếm: ⌘Space  •  Universal Actions (Finder): ⌘/"
+            subtitle: "Tìm: ⌘Space  •  Finder: ⌘/  •  Windows: ⌘⇥"
         )
     }
 

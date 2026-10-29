@@ -7,8 +7,8 @@ cd "$PROJECT_DIR"
 
 APP_NAME="DriveBar"
 BUNDLE_ID="com.hunglx.DriveBar"
-VERSION="1.2.6"
-BUILD_NUMBER="9"
+VERSION="1.3.0"
+BUILD_NUMBER="10"
 APP_BUNDLE="$PROJECT_DIR/$APP_NAME.app"
 ROOT_APP_BUNDLE="$ROOT_WORKSPACE_DIR/$APP_NAME.app"
 DIST_DIR="$PROJECT_DIR/dist"
@@ -151,6 +151,8 @@ cat > "$STAGE_CONTENTS/Info.plist" <<EOF
     <true/>
     <key>NSAppleEventsUsageDescription</key>
     <string>DriveBar cần quyền tương tác với Finder để lấy danh sách tệp đang chọn cho Universal Actions và Convert sang Markdown.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>DriveBar sử dụng quyền Ghi màn hình để chụp ảnh xem trước và phóng to nội dung trực tiếp của các cửa sổ đang chạy trong Windows Preview (⌘Tab).</string>
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>

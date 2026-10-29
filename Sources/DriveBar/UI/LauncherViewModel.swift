@@ -550,6 +550,34 @@ final class LauncherViewModel: ObservableObject {
             return
         }
 
+        if ["//win", "//windows", "//tab", "//preview"].contains(effectiveQuery.lowercased()) {
+            let curWin = AppSettings.shared.windowSwitcherHotKey.readableDisplay
+            searchResults = [
+                SearchResultItem(
+                    id: "cmd:open-win-switcher",
+                    title: "Mở Windows Preview — Chuyển đổi & phóng to cửa sổ đang chạy (\(curWin))",
+                    subtitle: "Hiển thị tất cả cửa sổ các ứng dụng đang mở trên mọi Desktop & Màn hình",
+                    path: nil,
+                    isDirectory: false,
+                    kind: .systemCommand(id: "open-window-switcher"),
+                    badge: curWin,
+                    sfSymbolFallback: "macwindow.on.rectangle"
+                ),
+                SearchResultItem(
+                    id: "cmd:record-win-hotkey",
+                    title: "Thiết lập phím tắt & chế độ hiển thị Windows Preview...",
+                    subtitle: "Đổi phím tắt (\(curWin) / ⌥⇥ / tùy chọn), bật/tắt cửa sổ Minimize và phạm vi màn hình",
+                    path: nil,
+                    isDirectory: false,
+                    kind: .systemCommand(id: "record-win-hotkey"),
+                    badge: "Cài đặt",
+                    sfSymbolFallback: "slider.horizontal.3"
+                )
+            ]
+            selectedIndex = 0
+            return
+        }
+
         if ["//hotkey", "//shortcut", "//phimtat"].contains(effectiveQuery.lowercased()) {
             searchResults = Self.hotkeyQuickItems()
             selectedIndex = 0
@@ -710,6 +738,22 @@ final class LauncherViewModel: ObservableObject {
         isSharedMode: Bool
     ) {
         let normQ = GoogleDriveIndexService.removeAccents(effectiveQuery).lowercased()
+        if normQ.contains("windows preview") || normQ.contains("chuyen cua so") || normQ == "cmd tab" {
+            let curWin = AppSettings.shared.windowSwitcherHotKey.readableDisplay
+            results.insert(
+                SearchResultItem(
+                    id: "cmd:open-win-inline",
+                    title: "Mở Windows Preview — Xem & chuyển nhanh mọi cửa sổ (\(curWin))",
+                    subtitle: "Hỗ trợ đa cửa sổ cùng ứng dụng, đa Desktop/Màn hình & phóng to nội dung trực tiếp",
+                    path: nil,
+                    isDirectory: false,
+                    kind: .systemCommand(id: "open-window-switcher"),
+                    badge: curWin,
+                    sfSymbolFallback: "macwindow.on.rectangle"
+                ),
+                at: 0
+            )
+        }
         if normQ.contains("phim tat") || normQ == "hotkey" || normQ == "shortcut" {
             results.insert(contentsOf: Self.hotkeyQuickItems(), at: 0)
         }
@@ -1203,6 +1247,14 @@ final class LauncherViewModel: ObservableObject {
                     title: "Đã làm sạch lịch sử gần đây",
                     subtitle: "Google Drive Search"
                 )
+            } else if cmd == "open-window-switcher" {
+                LauncherPanelController.shared.hide()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    WindowSwitcherController.shared.openPinnedFromMenuOrSearch()
+                }
+            } else if cmd == "record-win-hotkey" {
+                LauncherPanelController.shared.hide()
+                HotKeyService.shared.openSettingsAndRecord(.windowSwitcher)
             } else if cmd == "record-hotkey" {
                 LauncherPanelController.shared.hide()
                 HotKeyService.shared.openSettingsAndRecord(.search)
@@ -1343,7 +1395,18 @@ final class LauncherViewModel: ObservableObject {
     private static func hotkeyQuickItems() -> [SearchResultItem] {
         let curSearch = AppSettings.shared.searchHotKey.readableDisplay
         let curUA = AppSettings.shared.universalActionHotKey.readableDisplay
+        let curWin = AppSettings.shared.windowSwitcherHotKey.readableDisplay
         return [
+            SearchResultItem(
+                id: "cmd:record-win-hotkey",
+                title: "Tự thiết lập Phím tắt Windows Preview — Chuyển cửa sổ (Đang dùng: \(curWin))",
+                subtitle: "Mặc định: ⌘⇥ (Command + Tab) • Phóng to nội dung & chuyển nhanh mọi cửa sổ đang chạy",
+                path: nil,
+                isDirectory: false,
+                kind: .systemCommand(id: "record-win-hotkey"),
+                badge: "Windows Preview",
+                sfSymbolFallback: "macwindow.on.rectangle"
+            ),
             SearchResultItem(
                 id: "cmd:record-ua-hotkey",
                 title: "Tự thiết lập Phím tắt mở Universal Actions trên Finder (Đang dùng: \(curUA))",

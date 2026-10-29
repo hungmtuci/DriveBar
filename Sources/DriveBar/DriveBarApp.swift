@@ -57,6 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "Cài đặt DriveBar...", action: #selector(openSettingsWindow), keyEquivalent: ",").target = self
         appMenu.addItem(withTitle: "Mở Thanh Tìm Kiếm", action: #selector(toggleLauncherFromMenu), keyEquivalent: "f").target = self
+        appMenu.addItem(withTitle: "Mở Windows Preview (Chuyển cửa sổ)", action: #selector(openWindowSwitcherFromMenu), keyEquivalent: "").target = self
         appMenu.addItem(withTitle: "Kiểm tra cập nhật từ GitHub...", action: #selector(checkUpdatesFromMenu), keyEquivalent: "").target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Ẩn DriveBar", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
@@ -105,6 +106,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = GoogleDriveIndexService.shared
         SyncAndLatchingService.shared.start()
         StatusBarController.shared.install()
+
+        _ = WindowSwitcherService.shared
+        WindowSwitcherController.shared.start()
 
         let hotKeys = HotKeyService.shared
         hotKeys.onToggleSearch = {
@@ -173,6 +177,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         LauncherPanelController.shared.toggleSearchPanel()
     }
 
+    @objc func openWindowSwitcherFromMenu() {
+        WindowSwitcherController.shared.openPinnedFromMenuOrSearch()
+    }
+
     @objc func checkUpdatesFromMenu() {
         openSettingsWindow()
         UpdateCheckerService.shared.checkForUpdatesManually()
@@ -180,6 +188,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func openSettingsWindow() {
         LauncherPanelController.shared.hide()
+        WindowSwitcherController.shared.dismissWithoutActivating()
 
         if settingsWindow == nil {
             let win = NSWindow(

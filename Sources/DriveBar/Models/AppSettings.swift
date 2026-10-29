@@ -33,6 +33,77 @@ final class AppSettings: ObservableObject {
         static let didMigrateCmdSpaceV121 = "drivebar.didMigrateCmdSpaceV121"
         static let didMigrateCmdSlashV123 = "drivebar.didMigrateCmdSlashV123"
         static let localSettingsUpdatedAt = "drivebar.localSettingsUpdatedAt"
+        static let enableWindowSwitcher = "drivebar.enableWindowSwitcher"
+        static let windowSwitcherHotKey = "drivebar.windowSwitcherHotKey"
+        static let enableSameAppSwitcher = "drivebar.enableSameAppSwitcher"
+        static let sameAppSwitcherHotKey = "drivebar.sameAppSwitcherHotKey"
+        static let windowSwitcherShowMinimized = "drivebar.windowSwitcherShowMinimized"
+        static let windowSwitcherShowHiddenApps = "drivebar.windowSwitcherShowHiddenApps"
+        static let windowSwitcherShowWindowlessApps = "drivebar.windowSwitcherShowWindowlessApps"
+        static let windowSwitcherShowZoomPreview = "drivebar.windowSwitcherShowZoomPreview"
+        static let windowSwitcherScope = "drivebar.windowSwitcherScope"
+    }
+
+    @Published var enableWindowSwitcher: Bool {
+        didSet {
+            defaults.set(enableWindowSwitcher, forKey: Keys.enableWindowSwitcher)
+            WindowSwitcherController.shared.refreshEventTapState()
+            HotKeyService.shared.registerAll()
+        }
+    }
+
+    @Published var windowSwitcherHotKey: HotKeyBinding {
+        didSet {
+            saveCodable(windowSwitcherHotKey, forKey: Keys.windowSwitcherHotKey)
+            WindowSwitcherController.shared.refreshEventTapState()
+            HotKeyService.shared.registerAll()
+        }
+    }
+
+    @Published var enableSameAppSwitcher: Bool {
+        didSet {
+            defaults.set(enableSameAppSwitcher, forKey: Keys.enableSameAppSwitcher)
+            WindowSwitcherController.shared.refreshEventTapState()
+            HotKeyService.shared.registerAll()
+        }
+    }
+
+    @Published var sameAppSwitcherHotKey: HotKeyBinding {
+        didSet {
+            saveCodable(sameAppSwitcherHotKey, forKey: Keys.sameAppSwitcherHotKey)
+            WindowSwitcherController.shared.refreshEventTapState()
+            HotKeyService.shared.registerAll()
+        }
+    }
+
+    @Published var windowSwitcherShowMinimized: Bool {
+        didSet {
+            defaults.set(windowSwitcherShowMinimized, forKey: Keys.windowSwitcherShowMinimized)
+        }
+    }
+
+    @Published var windowSwitcherShowHiddenApps: Bool {
+        didSet {
+            defaults.set(windowSwitcherShowHiddenApps, forKey: Keys.windowSwitcherShowHiddenApps)
+        }
+    }
+
+    @Published var windowSwitcherShowWindowlessApps: Bool {
+        didSet {
+            defaults.set(windowSwitcherShowWindowlessApps, forKey: Keys.windowSwitcherShowWindowlessApps)
+        }
+    }
+
+    @Published var windowSwitcherShowZoomPreview: Bool {
+        didSet {
+            defaults.set(windowSwitcherShowZoomPreview, forKey: Keys.windowSwitcherShowZoomPreview)
+        }
+    }
+
+    @Published var windowSwitcherScope: WindowSwitcherScope {
+        didSet {
+            defaults.set(windowSwitcherScope.rawValue, forKey: Keys.windowSwitcherScope)
+        }
     }
 
     @Published var searchHotKey: HotKeyBinding {
@@ -208,6 +279,31 @@ final class AppSettings: ObservableObject {
             }
         }
 
+        self.enableWindowSwitcher = defaults.object(forKey: Keys.enableWindowSwitcher) as? Bool ?? true
+        if let data = defaults.data(forKey: Keys.windowSwitcherHotKey),
+           let decoded = try? JSONDecoder().decode(HotKeyBinding.self, from: data) {
+            self.windowSwitcherHotKey = decoded
+        } else {
+            self.windowSwitcherHotKey = .defaultWindowSwitcher
+        }
+        self.enableSameAppSwitcher = defaults.object(forKey: Keys.enableSameAppSwitcher) as? Bool ?? true
+        if let data = defaults.data(forKey: Keys.sameAppSwitcherHotKey),
+           let decoded = try? JSONDecoder().decode(HotKeyBinding.self, from: data) {
+            self.sameAppSwitcherHotKey = decoded
+        } else {
+            self.sameAppSwitcherHotKey = .defaultSameAppSwitcher
+        }
+        self.windowSwitcherShowMinimized = defaults.object(forKey: Keys.windowSwitcherShowMinimized) as? Bool ?? true
+        self.windowSwitcherShowHiddenApps = defaults.object(forKey: Keys.windowSwitcherShowHiddenApps) as? Bool ?? true
+        self.windowSwitcherShowWindowlessApps = defaults.object(forKey: Keys.windowSwitcherShowWindowlessApps) as? Bool ?? false
+        self.windowSwitcherShowZoomPreview = defaults.object(forKey: Keys.windowSwitcherShowZoomPreview) as? Bool ?? true
+        if let rawScope = defaults.string(forKey: Keys.windowSwitcherScope),
+           let parsedScope = WindowSwitcherScope(rawValue: rawScope) {
+            self.windowSwitcherScope = parsedScope
+        } else {
+            self.windowSwitcherScope = .allSpacesAndDisplays
+        }
+
         let savedDisabled = defaults.stringArray(forKey: Keys.disabledActionIDs) ?? []
         self.disabledActionIDs = Set(savedDisabled)
 
@@ -277,7 +373,9 @@ final class AppSettings: ObservableObject {
     func resetShortcutsToDefault() {
         searchHotKey = .defaultSearch
         universalActionHotKey = .defaultUniversalAction
-        statusBannerMessage = "Đã khôi phục phím tắt mặc định: \(searchHotKey.readableDisplay) & \(universalActionHotKey.readableDisplay)"
+        windowSwitcherHotKey = .defaultWindowSwitcher
+        sameAppSwitcherHotKey = .defaultSameAppSwitcher
+        statusBannerMessage = "Đã khôi phục phím tắt mặc định: Tìm kiếm \(searchHotKey.readableDisplay) • Finder \(universalActionHotKey.readableDisplay) • Windows \(windowSwitcherHotKey.readableDisplay)"
     }
 
     var isFirstLaunch: Bool {

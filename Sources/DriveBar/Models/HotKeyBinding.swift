@@ -67,6 +67,37 @@ struct HotKeyBinding: Codable, Equatable, Hashable, Sendable {
         carbonModifiers: UInt32(cmdKey | shiftKey)
     )
 
+    /// Default Windows Preview switcher shortcut: ⌘⇥ (Command + Tab)
+    static let defaultWindowSwitcher = HotKeyBinding(
+        keyCode: UInt32(kVK_Tab),
+        carbonModifiers: UInt32(cmdKey)
+    )
+
+    static let commandTab = defaultWindowSwitcher
+
+    static let optionTab = HotKeyBinding(
+        keyCode: UInt32(kVK_Tab),
+        carbonModifiers: UInt32(optionKey)
+    )
+
+    static let controlTab = HotKeyBinding(
+        keyCode: UInt32(kVK_Tab),
+        carbonModifiers: UInt32(controlKey)
+    )
+
+    /// Default Same-App Window Switcher shortcut: ⌘` (Command + `)
+    static let defaultSameAppSwitcher = HotKeyBinding(
+        keyCode: UInt32(kVK_ANSI_Grave),
+        carbonModifiers: UInt32(cmdKey)
+    )
+
+    static let commandGrave = defaultSameAppSwitcher
+
+    static let optionGrave = HotKeyBinding(
+        keyCode: UInt32(kVK_ANSI_Grave),
+        carbonModifiers: UInt32(optionKey)
+    )
+
     var hasCommand: Bool { (carbonModifiers & UInt32(cmdKey)) != 0 }
     var hasOption: Bool { (carbonModifiers & UInt32(optionKey)) != 0 }
     var hasControl: Bool { (carbonModifiers & UInt32(controlKey)) != 0 }
