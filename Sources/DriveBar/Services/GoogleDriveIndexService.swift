@@ -169,9 +169,10 @@ final class GoogleDriveIndexService: ObservableObject {
         }
         guard !candidateRoots.isEmpty else { return }
 
+        let rootsSnapshot = candidateRoots
         let queue = driveFSQueue
         queue.async {
-            let validPaths = candidateRoots.filter { FileManager.default.fileExists(atPath: $0) }
+            let validPaths = rootsSnapshot.filter { FileManager.default.fileExists(atPath: $0) }
             guard !validPaths.isEmpty else { return }
             let cfPaths = validPaths as CFArray
 
@@ -193,9 +194,10 @@ final class GoogleDriveIndexService: ObservableObject {
                     }
                 }
                 guard !dirCandidates.isEmpty else { return }
+                let capturedCandidates = dirCandidates
 
                 Task { @MainActor in
-                    GoogleDriveIndexService.shared.enqueueIncrementalFolderEvents(dirCandidates)
+                    GoogleDriveIndexService.shared.enqueueIncrementalFolderEvents(capturedCandidates)
                 }
             }
 

@@ -728,7 +728,7 @@ final class MarkdownConverterService: ObservableObject {
         req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) DriveBar/1.2", forHTTPHeaderField: "User-Agent")
 
         let sem = DispatchSemaphore(value: 0)
-        var fetchedText: String?
+        let box = SyncBox<String>()
 
         let task = URLSession.shared.dataTask(with: req) { data, response, _ in
             defer { sem.signal() }
@@ -744,11 +744,11 @@ final class MarkdownConverterService: ObservableObject {
             if lowerPrefix.contains("<!doctype html") || lowerPrefix.contains("<html") {
                 return
             }
-            fetchedText = str
+            box.value = str
         }
         task.resume()
         _ = sem.wait(timeout: .now() + 11)
-        return fetchedText
+        return box.value
     }
 
     // MARK: - Web URL -> Clean AI Markdown Worker
@@ -845,16 +845,20 @@ final class MarkdownConverterService: ObservableObject {
             req.setValue(v, forHTTPHeaderField: k)
         }
         let sem = DispatchSemaphore(value: 0)
-        var result: (Data, Int)?
+        let box = SyncBox<(Data, Int)>()
         let task = URLSession.shared.dataTask(with: req) { data, resp, _ in
             defer { sem.signal() }
             if let data, let http = resp as? HTTPURLResponse {
-                result = (data, http.statusCode)
+                box.value = (data, http.statusCode)
             }
         }
         task.resume()
         _ = sem.wait(timeout: .now() + timeout + 1.0)
-        return result
+        return box.value
+    }
+
+    private final class SyncBox<T>: @unchecked Sendable {
+        var value: T?
     }
 
     private nonisolated static func extractHTMLTitle(from html: String) -> String? {

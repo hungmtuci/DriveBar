@@ -3,10 +3,10 @@ import AppKit
 import QuickLookUI
 
 @MainActor
-final class QuickLookCoordinator: NSObject, @preconcurrency QLPreviewPanelDataSource, QLPreviewPanelDelegate {
+final class QuickLookCoordinator: NSObject, QLPreviewPanelDataSource, QLPreviewPanelDelegate {
     static let shared = QuickLookCoordinator()
 
-    private var previewURLs: [URL] = []
+    nonisolated(unsafe) private var previewURLs: [URL] = []
 
     private override init() {
         super.init()
@@ -32,11 +32,11 @@ final class QuickLookCoordinator: NSObject, @preconcurrency QLPreviewPanelDataSo
         panel.makeKeyAndOrderFront(nil)
     }
 
-    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
+    nonisolated func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
         previewURLs.count
     }
 
-    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> (any QLPreviewItem)! {
+    nonisolated func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> (any QLPreviewItem)! {
         guard index >= 0 && index < previewURLs.count else { return nil }
         return previewURLs[index] as NSURL
     }
