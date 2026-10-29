@@ -131,6 +131,7 @@ enum ResultItemKind: Equatable {
     case aiQuickCommand(action: String)
     case webURLQuickConvert(url: URL, preview: Bool)
     case clipboardItem(id: String)
+    case contactItem(id: String)
     case calculatorResult(expression: String, rawValue: String, formattedValue: String)
     case infoBanner
 }
@@ -165,4 +166,5 @@ enum LauncherScreenMode: Equatable {
     case destinationPicker(operation: FileTransferOperation, sources: [URL])
     case batchRename(urls: [URL], previousTarget: ActionTarget)
     case markdownPreview(title: String, sourceURL: URL, savedMDURL: URL?, markdown: String, estimatedTokens: Int, engineUsed: String)
+    case contactDetail(contactID: String, previousQuery: String, previousSelectedIndex: Int)
 }

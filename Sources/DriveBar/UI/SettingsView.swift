@@ -2,15 +2,17 @@ import SwiftUI
 import AppKit
 import ApplicationServices
 import Carbon
+import Contacts
 
 @MainActor
 final class SettingsUIState: ObservableObject {
     static let shared = SettingsUIState()
 
     enum Tab: String, CaseIterable {
-        case general = "Phím tắt & Google Drive"
-        case windowSwitcher = "Windows Preview (⌘Tab)"
-        case aiMarkdown = "Convert sang Markdown (AI)"
+        case general = "Phím tắt & Drive"
+        case windowSwitcher = "Windows Preview"
+        case systemAndContacts = "Hệ thống & Danh bạ"
+        case aiMarkdown = "Convert Markdown"
         case actions = "Universal Actions"
     }
 
@@ -19,6 +21,7 @@ final class SettingsUIState: ObservableObject {
     @Published var axTrusted: Bool = AXIsProcessTrusted()
     @Published var screenCaptureTrusted: Bool = CGPreflightScreenCaptureAccess()
     @Published var actionFilter: String = ""
+    @Published var systemCommandFilter: String = ""
 
     // Manual Custom Shortcut Builder State (avoids @State macro in CommandLineTools)
     @Published var manualBuilderTarget: HotKeyService.RecordingTarget?
@@ -218,6 +221,11 @@ struct SettingsView: View {
                         hotKeyService: hotKeyService,
                         switcherController: WindowSwitcherController.shared,
                         switcherService: WindowSwitcherService.shared,
+                        uiState: uiState
+                    )
+                case .systemAndContacts:
+                    SystemAndContactsSettingsTab(
+                        settings: settings,
                         uiState: uiState
                     )
                 case .aiMarkdown:
@@ -614,21 +622,29 @@ private struct GeneralSettingsTab: View {
                         .font(.system(size: 13, weight: .semibold))
                 }
 
-                // 3.2. Clipboard History (`c `), Pinned Favorites (`⌘D`) & Quick Prefixes (`ff `, `s `, Math)
+                // 3.2. Contacts (`c `), Clipboard History (`cb `), Pinned Favorites (`⌘D`) & Quick Prefixes (`ff `, `s `, Math)
                 GroupBox {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack(spacing: 12) {
                             Toggle(
-                                "Tự động lưu Lịch sử Clipboard thông minh (Văn bản, URL, Tệp & Ảnh chụp — gõ 'c ' để tìm & dán ngay)",
+                                "Tự động lưu Lịch sử Clipboard thông minh (Văn bản, URL, Tệp & Ảnh chụp — gõ 'cb ' để tìm & dán ngay)",
                                 isOn: $settings.enableClipboardHistory
                             )
                             .font(.system(size: 12.5, weight: .medium))
 
                             Spacer()
 
-                            Button("Mở Clipboard ('c ')") {
+                            Button("Danh bạ ('c ')") {
                                 LauncherViewModel.shared.prepareForSearchLaunch()
                                 LauncherViewModel.shared.searchText = "c "
+                                LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+
+                            Button("Clipboard ('cb ')") {
+                                LauncherViewModel.shared.prepareForSearchLaunch()
+                                LauncherViewModel.shared.searchText = "cb "
                                 LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
                             }
                             .buttonStyle(.bordered)
@@ -661,13 +677,13 @@ private struct GeneralSettingsTab: View {
                             }
                         }
 
-                        Text("• Cú pháp tìm nhanh: **ff ** (Tệp tin) • **a ** (Ứng dụng) • **c ** (Clipboard) • **s ** (Lệnh hệ thống) • **ocr** (OCR ảnh Clipboard) • gõ phép tính trực tiếp (**15% * 2400000**, **sqrt(144)**).")
+                        Text("• Cú pháp tìm nhanh: **c ** (Danh bạ không dấu) • **cb ** (Clipboard) • **a ** (Ứng dụng) • **ff ** (Tệp tin) • **s ** (Lệnh hệ thống) • **ocr** (OCR ảnh Clipboard) • phép tính trực tiếp (**15% * 2400000**).")
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                     }
                     .padding(8)
                 } label: {
-                    Label("Lịch sử Clipboard, Mục Đã Ghim (⌘D), Tìm Tệp (ff) & Máy Tính Nhanh", systemImage: "doc.on.clipboard")
+                    Label("Tra cứu Danh bạ (c), Lịch sử Clipboard (cb), Mục Đã Ghim (⌘D) & Máy Tính Nhanh", systemImage: "doc.on.clipboard")
                         .font(.system(size: 13, weight: .semibold))
                 }
 
@@ -1707,6 +1723,234 @@ private struct GuideBlock: View {
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+// MARK: - Tab 2B: Alfred-Parity System Commands (`s `) & Contacts Lookup (`c `)
+
+private struct SystemAndContactsSettingsTab: View {
+    @ObservedObject var settings: AppSettings
+    @ObservedObject var uiState: SettingsUIState
+    @ObservedObject private var contactsService = ContactsSearchService.shared
+
+    var body: some View {
+        VStack(spacing: 14) {
+            // 1. Contacts Lookup (`c `) Card
+            GroupBox {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 12) {
+                        Image(systemName: contactsService.isAuthorized ? "person.crop.circle.badge.checkmark" : "person.crop.circle")
+                            .font(.system(size: 21))
+                            .foregroundStyle(contactsService.isAuthorized ? .green : .secondary)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 8) {
+                                Text("Tra cứu Danh bạ macOS bằng Tiếng Việt không dấu ('c ')")
+                                    .font(.system(size: 13, weight: .semibold))
+                                contactsStatusPill
+                            }
+                            Text(contactsStatusDescription)
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer()
+
+                        if contactsService.isAuthorized {
+                            Button("Làm mới Danh bạ") {
+                                contactsService.reloadContacts(force: true)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(contactsService.isLoading)
+                        } else if contactsService.authorizationStatus == .notDetermined {
+                            Button("Cấp quyền Danh bạ...") {
+                                contactsService.requestAccessIfNeeded()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                        } else {
+                            Button("Mở Cài đặt Quyền riêng tư...") {
+                                contactsService.openContactsPrivacySettings()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                        }
+
+                        Button {
+                            LauncherViewModel.shared.prepareForSearchLaunch()
+                            LauncherViewModel.shared.searchText = "c "
+                            LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
+                        } label: {
+                            Label("Mở Danh bạ ('c ')", systemImage: "magnifyingglass")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    }
+
+                    Text("• Gõ **c nguyen hung** (không dấu), **c nxh** (viết tắt) hoặc **c 0912** (SĐT) → nhấn **Enter (↩)** xem chi tiết → dùng **↑↓** / Click chọn SĐT, Email, Địa chỉ, Cơ quan rồi nhấn **↩** để Copy (**⌘C** Copy & giữ mở, **⌥↩** Copy & Dán ngay, **⇧** phóng to chữ).")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(8)
+            } label: {
+                Label("Danh bạ macOS — Tìm Tiếng Việt Không Dấu & Sao chép Chi tiết ('c ')", systemImage: "person.text.rectangle")
+                    .font(.system(size: 13, weight: .semibold))
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 14)
+
+            // 2. Alfred System Commands Checklist & Confirmation Toggles
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 10) {
+                    Label("Lệnh Hệ thống chuẩn Alfred (Gõ trực tiếp từ khóa hoặc 's <từ khóa>')", systemImage: "terminal")
+                        .font(.system(size: 13, weight: .semibold))
+
+                    Spacer()
+
+                    Button("Mở Lệnh Hệ thống ('s ')") {
+                        LauncherViewModel.shared.prepareForSearchLaunch()
+                        LauncherViewModel.shared.searchText = "s "
+                        LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    TextField("Tìm lệnh (vd: lock, quit, eject, trash)...", text: $uiState.systemCommandFilter)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 240)
+                }
+
+                List {
+                    ForEach(SystemUtilityCategory.allCases, id: \.self) { cat in
+                        let filter = GoogleDriveIndexService.removeAccents(uiState.systemCommandFilter)
+                            .lowercased()
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        let cmds = InstantUtilityService.allSystemCommands.filter { cmd in
+                            guard cmd.category == cat else { return false }
+                            guard !filter.isEmpty else { return true }
+                            let hay = GoogleDriveIndexService.removeAccents(
+                                "\(cmd.primaryKeyword) \(cmd.title) \(cmd.subtitle) \(cmd.keywords.joined(separator: " "))"
+                            ).lowercased()
+                            return hay.contains(filter)
+                        }
+                        if !cmds.isEmpty {
+                            Section(cat.rawValue) {
+                                ForEach(cmds) { cmd in
+                                    HStack(spacing: 10) {
+                                        Toggle("", isOn: Binding(
+                                            get: { settings.isSystemCommandEnabled(cmd.id) },
+                                            set: { settings.setSystemCommandEnabled(cmd.id, enabled: $0) }
+                                        ))
+                                        .labelsHidden()
+
+                                        Image(systemName: cmd.sfSymbol)
+                                            .font(.system(size: 13.5, weight: .medium))
+                                            .foregroundStyle(.secondary)
+                                            .frame(width: 20)
+
+                                        VStack(alignment: .leading, spacing: 1.5) {
+                                            HStack(spacing: 7) {
+                                                Text(cmd.title)
+                                                    .font(.system(size: 12.5, weight: .medium))
+                                                Text(cmd.primaryKeyword)
+                                                    .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                                                    .foregroundStyle(.secondary)
+                                                    .padding(.horizontal, 6)
+                                                    .padding(.vertical, 1)
+                                                    .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                                            }
+                                            Text(cmd.subtitle)
+                                                .font(.system(size: 11))
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                        }
+
+                                        Spacer()
+
+                                        if cmd.supportsConfirmation {
+                                            Toggle("Hỏi xác nhận", isOn: Binding(
+                                                get: { settings.requiresSystemCommandConfirmation(cmd.id) },
+                                                set: { settings.setSystemCommandConfirmation(cmd.id, confirm: $0) }
+                                            ))
+                                            .toggleStyle(.checkbox)
+                                            .font(.system(size: 11.5))
+                                            .foregroundStyle(.secondary)
+                                            .disabled(!settings.isSystemCommandEnabled(cmd.id))
+                                            .help("Hiển thị hộp thoại xác nhận trước khi thực thi (giữ phím ⌥ khi nhấn Enter để bỏ qua nhanh)")
+                                        }
+                                    }
+                                    .padding(.vertical, 2)
+                                }
+                            }
+                        }
+                    }
+                }
+                .listStyle(.bordered(alternatesRowBackgrounds: true))
+
+                HStack {
+                    Text("Gõ trực tiếp từ khóa (lock, sleep, sleepdisplays, screensaver, trash, emptytrash, volup, voldown, mute, hide, quit, quitall, forcequit, eject, ejectall, logout, restart, shutdown) hoặc gõ 's ' để duyệt.")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+
+                    Spacer()
+
+                    Button("Khôi phục mặc định") {
+                        settings.resetSystemCommandsToDefault()
+                        settings.statusBannerMessage = "Đã bật toàn bộ Lệnh Hệ thống và khôi phục chế độ hỏi xác nhận mặc định."
+                    }
+                    .controlSize(.small)
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 14)
+        }
+        .onAppear {
+            contactsService.refreshAuthorizationStatus()
+            if contactsService.isAuthorized {
+                contactsService.reloadContacts(force: false)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var contactsStatusPill: some View {
+        if contactsService.isAuthorized {
+            HStack(spacing: 4) {
+                Circle().fill(Color.green).frame(width: 6, height: 6)
+                Text("Đã kết nối (\(contactsService.contacts.count) liên hệ)")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.green)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.green.opacity(0.12), in: Capsule())
+        } else if contactsService.authorizationStatus == .notDetermined {
+            Text("Chưa cấp quyền")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.primary.opacity(0.06), in: Capsule())
+        } else {
+            Text("Bị từ chối quyền")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.orange)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.orange.opacity(0.12), in: Capsule())
+        }
+    }
+
+    private var contactsStatusDescription: String {
+        if contactsService.isAuthorized {
+            return "Đang đồng bộ trực tiếp với ứng dụng Danh bạ macOS • Tự động cập nhật ngay khi thêm/sửa liên hệ."
+        } else if contactsService.authorizationStatus == .notDetermined {
+            return "Bấm 'Cấp quyền Danh bạ...' hoặc gõ 'c ' trong thanh tìm kiếm để cho phép DriveBar tra cứu liên hệ."
+        } else {
+            return "Vui lòng mở System Settings → Privacy & Security → Contacts và bật công tắc cho phép DriveBar."
         }
     }
 }

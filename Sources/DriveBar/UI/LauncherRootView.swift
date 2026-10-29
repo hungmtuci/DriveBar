@@ -40,6 +40,9 @@ struct LauncherRootView: View {
                     estimatedTokens: tokens,
                     engineUsed: engine
                 )
+
+            case .contactDetail(let contactID, _, _):
+                ContactDetailView(viewModel: viewModel, contactID: contactID)
             }
         }
         .frame(width: 760, height: 500)
@@ -96,7 +99,7 @@ private struct SearchModeContentView: View {
 
                 NativeSearchInputField(
                     text: $viewModel.searchText,
-                    placeholder: "Tìm thư mục, tệp & ứng dụng ('a ' app, 'ff ' tệp, 'c ' clipboard, 's ' lệnh)...",
+                    placeholder: "Tìm thư mục, tệp & ứng dụng ('c ' danh bạ, 'cb ' clipboard, 'a ' app, 'ff ' tệp, 's ' lệnh)...",
                     fontSize: 18,
                     focusTrigger: viewModel.focusTrigger,
                     selectAllOnFocus: viewModel.selectAllOnFocus,
@@ -210,12 +213,22 @@ private struct SearchResultRowView: View {
     var body: some View {
         HStack(spacing: 11) {
             HStack(spacing: 11) {
-                FileOrSymbolIconView(
-                    path: item.path,
-                    fallbackSymbol: item.sfSymbolFallback ?? "folder.fill",
-                    isRowSelected: isSelected
-                )
-                .frame(width: 28, height: 28)
+                if case .contactItem(let contactID) = item.kind {
+                    ContactAvatarView(
+                        contactID: contactID,
+                        initials: ContactsSearchService.shared.contact(withID: contactID)?.initials ?? "?",
+                        size: 28,
+                        isRowSelected: isSelected
+                    )
+                    .frame(width: 28, height: 28)
+                } else {
+                    FileOrSymbolIconView(
+                        path: item.path,
+                        fallbackSymbol: item.sfSymbolFallback ?? "folder.fill",
+                        isRowSelected: isSelected
+                    )
+                    .frame(width: 28, height: 28)
+                }
 
                 VStack(alignment: .leading, spacing: 1.5) {
                     HStack(spacing: 6) {
@@ -270,15 +283,30 @@ private struct SearchResultRowView: View {
                             .help("Mở Universal Actions & Convert sang Markdown (Phím →, Tab hoặc ⌘/)")
                     }
 
-                    Text("↩")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.9))
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 2)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            onPrimaryActivate?()
-                        }
+                    if case .contactItem = item.kind {
+                        Text("Chi tiết ↩")
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.95))
+                            .lineLimit(1)
+                            .padding(.horizontal, 6.5)
+                            .padding(.vertical, 2.5)
+                            .background(Color.white.opacity(0.18), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                            .fixedSize(horizontal: true, vertical: false)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                onPrimaryActivate?()
+                            }
+                    } else {
+                        Text("↩")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.9))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 2)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                onPrimaryActivate?()
+                            }
+                    }
                 }
             } else if index < 9 {
                 HStack(spacing: 6) {
@@ -309,16 +337,33 @@ private struct SearchResultRowView: View {
     }
 
     private var supportsUniversalActions: Bool {
-        if item.path != nil { return true }
         switch item.kind {
+        case .systemCommand, .contactItem, .calculatorResult, .infoBanner:
+            return false
         case .clipboardItem, .webURLQuickConvert:
             return true
         default:
-            return false
+            return item.path != nil
         }
     }
 
     private var dynamicSubtitle: String {
+        if isSelected, case .contactItem(let contactID) = item.kind {
+            if activeModifiers.contains(.option),
+               let rec = ContactsSearchService.shared.contact(withID: contactID) {
+                return "⌥↩ Sao chép nhanh \(rec.primaryQuickCopyLabel): \(rec.primaryQuickCopyValue)"
+            }
+            if activeModifiers.contains(.command) {
+                return "⌘↩ Mở liên hệ này trong ứng dụng Danh bạ macOS"
+            }
+            if activeModifiers.contains(.shift) {
+                return "⇧ (Thả phím Shift) Phóng to chữ Large Type"
+            }
+            return item.subtitle
+        }
+        if case .systemCommand = item.kind {
+            return item.subtitle
+        }
         if isSelected, case .clipboardItem = item.kind {
             if activeModifiers.contains(.option) {
                 return "⌥↩ Chỉ sao chép lại vào Clipboard (không tự dán)"

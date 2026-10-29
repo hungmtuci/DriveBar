@@ -7,12 +7,21 @@ final class LargeTypeOverlayController {
 
     private var window: NSPanel?
     private var localKeyMonitor: Any?
+    private var shouldRestoreLauncherFocus: Bool = false
 
     private init() {}
 
-    func show(text: String) {
-        dismiss()
+    var isVisible: Bool {
+        window?.isVisible ?? false
+    }
+
+    func show(text: String, restoreLauncherFocusOnClose: Bool = false) {
+        dismiss(restoreFocus: false)
         guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+        shouldRestoreLauncherFocus = restoreLauncherFocusOnClose
+        if restoreLauncherFocusOnClose {
+            LauncherPanelController.shared.isSuppressingAutoHide = true
+        }
         let frame = screen.visibleFrame
         let width = min(max(frame.width * 0.78, 560), 1280)
         let height = min(max(frame.height * 0.45, 240), 580)
@@ -48,13 +57,20 @@ final class LargeTypeOverlayController {
         }
     }
 
-    func dismiss() {
+    func dismiss(restoreFocus: Bool = true) {
         if let mon = localKeyMonitor {
             NSEvent.removeMonitor(mon)
             localKeyMonitor = nil
         }
         window?.orderOut(nil)
         window = nil
+        let needRestore = shouldRestoreLauncherFocus && restoreFocus
+        shouldRestoreLauncherFocus = false
+        if needRestore && LauncherPanelController.shared.isVisible {
+            LauncherPanelController.shared.restoreFocusFromAuxiliaryPanel()
+        } else {
+            LauncherPanelController.shared.isSuppressingAutoHide = false
+        }
     }
 }
 

@@ -40,10 +40,17 @@ final class LauncherViewModel: ObservableObject {
         }
     }
 
+    @Published var contactDetailFilterText: String = "" {
+        didSet {
+            refreshFilteredContactDetailFields()
+        }
+    }
+
     @Published private(set) var searchResults: [SearchResultItem] = []
     @Published private(set) var filteredActions: [UniversalActionDefinition] = []
     @Published private(set) var openWithApps: [(name: String, url: URL)] = []
     @Published private(set) var destinationFolders: [SearchResultItem] = []
+    @Published private(set) var filteredContactDetailFields: [ContactDetailField] = []
 
     @Published var selectedIndex: Int = 0
     @Published var activeModifiers: NSEvent.ModifierFlags = []
@@ -86,8 +93,10 @@ final class LauncherViewModel: ObservableObject {
             let lowerTrimmed = trimmed.lowercased()
             let lowerLive = live.lowercased()
 
-            // Synchronous modes (`c`, `s`, `ai`, `ocr`, `http`, `//`) are already populated by `searchText = live`.
+            // Synchronous modes (`c`, `cb`, `clip`, `s`, `ai`, `ocr`, `http`, `//`) are already populated by `searchText = live`.
             if lowerTrimmed == "c" || lowerLive.hasPrefix("c ") ||
+               lowerTrimmed == "cb" || lowerLive.hasPrefix("cb ") ||
+               lowerTrimmed == "clip" || lowerLive.hasPrefix("clip ") ||
                lowerTrimmed == "s" || lowerLive.hasPrefix("s ") ||
                lowerTrimmed == "ai" || lowerLive.hasPrefix("ai ") ||
                lowerTrimmed == "ocr" ||
@@ -182,6 +191,8 @@ final class LauncherViewModel: ObservableObject {
             }
         case .universalActions:
             if actionFilterText != live { actionFilterText = live }
+        case .contactDetail:
+            if contactDetailFilterText != live { contactDetailFilterText = live }
         case .destinationPicker:
             guard destinationSearchText != live else { return }
             destinationSearchText = live
@@ -243,6 +254,13 @@ final class LauncherViewModel: ObservableObject {
             openUniversalActions(for: prevTarget, directExternalTrigger: openedDirectlyInUniversalActions)
         case .markdownPreview(_, let src, _, _, _, _):
             openUniversalActions(for: .files([src]), directExternalTrigger: openedDirectlyInUniversalActions)
+        case .contactDetail:
+            if !contactDetailFilterText.isEmpty {
+                contactDetailFilterText = ""
+                triggerInputFocus(selectAll: false)
+            } else {
+                returnFromContactDetail()
+            }
         }
     }
 
@@ -256,6 +274,8 @@ final class LauncherViewModel: ObservableObject {
             }
         case .destinationPicker:
             _ = drillIntoSelectedDestinationFolder()
+        case .contactDetail:
+            returnFromContactDetail()
         default:
             break
         }
@@ -390,6 +410,84 @@ final class LauncherViewModel: ObservableObject {
         }
     }
 
+    func openContactDetail(contactID: String) {
+        let prevQuery = searchText
+        let prevIdx = selectedIndex
+        ContactsSearchService.shared.recordContactOpened(contactID)
+        ContactsSearchService.shared.lastCopiedFieldID = nil
+        contactDetailFilterText = ""
+        screenMode = .contactDetail(contactID: contactID, previousQuery: prevQuery, previousSelectedIndex: prevIdx)
+        refreshFilteredContactDetailFields()
+        triggerInputFocus(selectAll: false)
+        if LauncherPanelController.shared.isVisible {
+            DispatchQueue.main.async {
+                LauncherPanelController.shared.restoreFocusFromAuxiliaryPanel()
+            }
+        }
+    }
+
+    func returnFromContactDetail() {
+        guard case .contactDetail(_, let prevQuery, let prevIdx) = screenMode else {
+            returnToSearchMode()
+            return
+        }
+        screenMode = .search
+        if searchText != prevQuery {
+            searchText = prevQuery
+        } else {
+            refreshSearchResults()
+        }
+        selectedIndex = min(max(0, prevIdx), max(0, searchResults.count - 1))
+        triggerInputFocus(selectAll: false)
+        if LauncherPanelController.shared.isVisible {
+            DispatchQueue.main.async {
+                LauncherPanelController.shared.restoreFocusFromAuxiliaryPanel()
+            }
+        }
+    }
+
+    func refreshFilteredContactDetailFields() {
+        guard case .contactDetail(let contactID, _, _) = screenMode,
+              let rec = ContactsSearchService.shared.contact(withID: contactID) else {
+            filteredContactDetailFields = []
+            return
+        }
+        let qNorm = GoogleDriveIndexService.removeAccents(contactDetailFilterText)
+            .lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !qNorm.isEmpty else {
+            filteredContactDetailFields = rec.fields
+            selectedIndex = 0
+            return
+        }
+        let tokens = qNorm.split(separator: " ").map(String.init).filter { !$0.isEmpty }
+        filteredContactDetailFields = rec.fields.filter { f in
+            var alias = ""
+            if f.id.hasPrefix("phone:") { alias = "sdt phone dien thoai mobile so" }
+            else if f.id.hasPrefix("email:") { alias = "email mail thu" }
+            else if f.id.hasPrefix("addr:") { alias = "dia chi address map" }
+            else if f.id.hasPrefix("org:") { alias = "co quan cong ty chuc vu org company" }
+            else if f.id.hasPrefix("name:") { alias = "ho ten name" }
+            let hay = GoogleDriveIndexService.removeAccents("\(f.categoryLabel) \(f.displayValue) \(alias)").lowercased()
+            return tokens.allSatisfy { hay.contains($0) }
+        }
+        selectedIndex = 0
+    }
+
+    func refreshContactsResultsIfNeeded() {
+        switch screenMode {
+        case .search:
+            let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if trimmed == "c" || searchText.lowercased().hasPrefix("c ") {
+                refreshSearchResults()
+            }
+        case .contactDetail:
+            refreshFilteredContactDetailFields()
+        default:
+            break
+        }
+    }
+
     // MARK: - Active Search Mode Pill Label
 
     var currentSearchModeBadge: (label: String, color: Color) {
@@ -409,6 +507,9 @@ final class LauncherViewModel: ObservableObject {
             return ("Tệp tin", .secondary)
         }
         if lowerTrimmed == "c" || lowerRaw.hasPrefix("c ") {
+            return ("Danh bạ", .secondary)
+        }
+        if lowerTrimmed == "cb" || lowerRaw.hasPrefix("cb ") || lowerTrimmed == "clip" || lowerRaw.hasPrefix("clip ") {
             return ("Clipboard", .secondary)
         }
         if lowerTrimmed == "s" || lowerRaw.hasPrefix("s ") {
@@ -642,11 +743,27 @@ final class LauncherViewModel: ObservableObject {
             return
         }
 
-        // 3.2. Clipboard History Mode (`c` or `c <từ khóa>`)
+        // 3.2. Contacts Lookup Mode (`c` or `c <từ khóa>`) — Vietnamese accent-insensitive!
         if trimmed.lowercased() == "c" || raw.lowercased().hasPrefix("c ") {
-            let clipQuery = trimmed.lowercased() == "c"
+            let contactQuery = trimmed.lowercased() == "c"
                 ? ""
                 : String(raw.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+            searchResults = ContactsSearchService.shared.searchResultItems(query: contactQuery, limit: 60)
+            selectedIndex = 0
+            return
+        }
+
+        // 3.3. Clipboard History Mode (`cb` / `cb <từ khóa>` or `clip` / `clip <từ khóa>`)
+        if trimmed.lowercased() == "cb" || raw.lowercased().hasPrefix("cb ") ||
+           trimmed.lowercased() == "clip" || raw.lowercased().hasPrefix("clip ") {
+            let clipQuery: String
+            if raw.lowercased().hasPrefix("clip ") {
+                clipQuery = String(raw.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+            } else if raw.lowercased().hasPrefix("cb ") {
+                clipQuery = String(raw.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+            } else {
+                clipQuery = ""
+            }
             searchResults = ClipboardHistoryService.shared.searchResultItems(query: clipQuery, limit: 60)
             selectedIndex = 0
             return
@@ -900,7 +1017,7 @@ final class LauncherViewModel: ObservableObject {
                 SearchResultItem(
                     id: "no-gdrive",
                     title: "Không tìm thấy thư mục Google Drive trong ~/Library/CloudStorage",
-                    subtitle: "Gõ 'a ' tìm ứng dụng, 'c ' lịch sử Clipboard, 's ' lệnh hệ thống, hoặc dùng Universal Actions (\(AppSettings.shared.universalActionHotKey.readableDisplay))",
+                    subtitle: "Gõ 'c ' tìm Danh bạ, 'cb ' lịch sử Clipboard, 'a ' ứng dụng, 's ' lệnh hệ thống, hoặc dùng Universal Actions (\(AppSettings.shared.universalActionHotKey.readableDisplay))",
                     path: nil,
                     isDirectory: false,
                     kind: .infoBanner,
@@ -919,15 +1036,22 @@ final class LauncherViewModel: ObservableObject {
             return
         }
 
-        // Instant 0ms Math Calculator feedback while background search queue evaluates folders/files
-        if let liveMath = InstantUtilityService.evaluateMathExpression(effectiveQuery) {
-            let calcItem = Self.makeCalculatorResultItem(liveMath)
+        // Instant 0ms Math Calculator & Alfred System Commands feedback while background search queue evaluates folders/files
+        let instantSysItems = InstantUtilityService.searchSystemCommands(query: effectiveQuery, isExplicitSystemMode: false)
+        let liveMath = InstantUtilityService.evaluateMathExpression(effectiveQuery)
+        if !instantSysItems.isEmpty || liveMath != nil {
             var current = searchResults.filter {
                 if case .calculatorResult = $0.kind { return false }
+                if case .systemCommand = $0.kind { return false }
                 if case .infoBanner = $0.kind { return false }
                 return true
             }
-            current.insert(calcItem, at: 0)
+            if !instantSysItems.isEmpty {
+                current.insert(contentsOf: instantSysItems, at: 0)
+            }
+            if let liveMath {
+                current.insert(Self.makeCalculatorResultItem(liveMath), at: 0)
+            }
             searchResults = current
             selectedIndex = 0
         }
@@ -1470,6 +1594,7 @@ final class LauncherViewModel: ObservableObject {
         case .universalActions: return filteredActions.count
         case .openWithPicker: return openWithApps.count
         case .destinationPicker: return destinationFolders.count
+        case .contactDetail: return filteredContactDetailFields.count
         case .batchRename: return 0
         case .markdownPreview: return 0
         }
@@ -1483,6 +1608,35 @@ final class LauncherViewModel: ObservableObject {
     }
 
     func toggleQuickLookForCurrentContext() {
+        if LargeTypeOverlayController.shared.isVisible {
+            LargeTypeOverlayController.shared.dismiss(restoreFocus: true)
+            return
+        }
+        if case .contactDetail(let contactID, _, _) = screenMode {
+            guard selectedIndex >= 0 && selectedIndex < filteredContactDetailFields.count else {
+                NSSound.beep()
+                return
+            }
+            let field = filteredContactDetailFields[selectedIndex]
+            let contactName = ContactsSearchService.shared.contact(withID: contactID)?.displayName ?? ""
+            let header = contactName.isEmpty ? field.categoryLabel : "\(contactName) — \(field.categoryLabel)"
+            LargeTypeOverlayController.shared.show(
+                text: "\(header)\n\(field.displayValue)",
+                restoreLauncherFocusOnClose: true
+            )
+            return
+        }
+        if case .search = screenMode,
+           selectedIndex >= 0 && selectedIndex < searchResults.count,
+           case .contactItem(let contactID) = searchResults[selectedIndex].kind,
+           let rec = ContactsSearchService.shared.contact(withID: contactID) {
+            LargeTypeOverlayController.shared.show(
+                text: "\(rec.displayName)\n\(rec.primaryQuickCopyValue)",
+                restoreLauncherFocusOnClose: true
+            )
+            return
+        }
+
         let urls = currentQuickLookURLs()
         guard !urls.isEmpty else {
             if QuickLookCoordinator.shared.isQuickLookVisible {
@@ -1526,6 +1680,8 @@ final class LauncherViewModel: ObservableObject {
             return urls
         case .markdownPreview(_, let srcURL, let savedMDURL, _, _, _):
             return [savedMDURL ?? srcURL]
+        case .contactDetail:
+            return []
         }
     }
 
@@ -1581,7 +1737,42 @@ final class LauncherViewModel: ObservableObject {
                 title: "Đã sao chép Markdown vào Clipboard",
                 subtitle: "Sẵn sàng nhấn ⌘V vào AI"
             )
+
+        case .contactDetail(let contactID, _, _):
+            guard selectedIndex >= 0 && selectedIndex < filteredContactDetailFields.count else { return }
+            let field = filteredContactDetailFields[selectedIndex]
+            let contactName = ContactsSearchService.shared.contact(withID: contactID)?.displayName ?? ""
+            if cleanMods.contains(.command), let actionURL = field.actionURL {
+                LauncherPanelController.shared.hide()
+                _ = NSWorkspace.shared.open(actionURL)
+                return
+            }
+            ContactsSearchService.shared.copyField(
+                field,
+                contactName: contactName,
+                closeLauncher: true,
+                autoPaste: cleanMods.contains(.option),
+                previousApp: LauncherPanelController.shared.previousFrontApp
+            )
         }
+    }
+
+    @discardableResult
+    func copySelectedContactDetailFieldKeepOpen() -> Bool {
+        guard case .contactDetail(let contactID, _, _) = screenMode,
+              selectedIndex >= 0 && selectedIndex < filteredContactDetailFields.count else {
+            return false
+        }
+        let field = filteredContactDetailFields[selectedIndex]
+        let contactName = ContactsSearchService.shared.contact(withID: contactID)?.displayName ?? ""
+        ContactsSearchService.shared.copyField(
+            field,
+            contactName: contactName,
+            closeLauncher: false,
+            autoPaste: false,
+            previousApp: LauncherPanelController.shared.previousFrontApp
+        )
+        return true
     }
 
     @discardableResult
@@ -1611,6 +1802,13 @@ final class LauncherViewModel: ObservableObject {
                 return true
             }
         }
+        if case .contactItem(let contactID) = item.kind {
+            openContactDetail(contactID: contactID)
+            return true
+        }
+        if case .systemCommand = item.kind {
+            return false
+        }
         if let path = item.path {
             openUniversalActions(
                 for: .files([URL(fileURLWithPath: path, isDirectory: item.isDirectory)]),
@@ -1634,6 +1832,7 @@ final class LauncherViewModel: ObservableObject {
               selectedIndex >= 0 && selectedIndex < searchResults.count else { return false }
         let item = searchResults[selectedIndex]
         if case .clipboardItem = item.kind { return false }
+        if case .systemCommand = item.kind { return false }
         guard let path = item.path else { return false }
 
         let nowPinned = AppSettings.shared.togglePin(path)
@@ -1717,6 +1916,25 @@ final class LauncherViewModel: ObservableObject {
                 subtitle: "\(expr) = \(prettyVal)",
                 symbol: "function"
             )
+
+        case .contactItem(let contactID):
+            if modifiers.contains(.command) {
+                ContactsSearchService.shared.openInContactsApp(contactID: contactID)
+                return
+            }
+            if modifiers.contains(.option),
+               let rec = ContactsSearchService.shared.contact(withID: contactID),
+               let primaryField = rec.fields.first {
+                ContactsSearchService.shared.copyField(
+                    primaryField,
+                    contactName: rec.displayName,
+                    closeLauncher: true,
+                    autoPaste: false,
+                    previousApp: LauncherPanelController.shared.previousFrontApp
+                )
+                return
+            }
+            openContactDetail(contactID: contactID)
 
         case .clipboardItem(let clipID):
             guard let entry = ClipboardHistoryService.shared.entry(withID: clipID) else { return }

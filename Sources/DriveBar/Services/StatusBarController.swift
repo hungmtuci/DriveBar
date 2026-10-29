@@ -79,14 +79,32 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         openWinPreview.target = self
         menu.addItem(openWinPreview)
 
+        let openContactsItem = NSMenuItem(
+            title: "Tra cứu Danh bạ — Tiếng Việt không dấu ('c ')",
+            action: #selector(openContactsLookupAction),
+            keyEquivalent: ""
+        )
+        openContactsItem.image = NSImage(systemSymbolName: "person.crop.circle", accessibilityDescription: nil)
+        openContactsItem.target = self
+        menu.addItem(openContactsItem)
+
         let openClipHist = NSMenuItem(
-            title: "Lịch sử Clipboard ('c ' — \(ClipboardHistoryService.shared.entries.count) mục)",
+            title: "Lịch sử Clipboard ('cb ' — \(ClipboardHistoryService.shared.entries.count) mục)",
             action: #selector(openClipboardHistoryAction),
             keyEquivalent: ""
         )
         openClipHist.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: nil)
         openClipHist.target = self
         menu.addItem(openClipHist)
+
+        let openSysCmdItem = NSMenuItem(
+            title: "Lệnh Hệ thống macOS ('s ' — Khóa, Sleep, Quit, Eject...)",
+            action: #selector(openSystemCommandsAction),
+            keyEquivalent: ""
+        )
+        openSysCmdItem.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: nil)
+        openSysCmdItem.target = self
+        menu.addItem(openSysCmdItem)
 
         let ocrClipItem = NSMenuItem(
             title: "OCR Ảnh trong Clipboard sang Markdown (Tiếng Việt + Anh)",
@@ -335,9 +353,21 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         WindowSwitcherController.shared.openPinnedFromMenuOrSearch()
     }
 
-    @objc private func openClipboardHistoryAction() {
+    @objc private func openContactsLookupAction() {
         LauncherViewModel.shared.prepareForSearchLaunch()
         LauncherViewModel.shared.searchText = "c "
+        LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
+    }
+
+    @objc private func openClipboardHistoryAction() {
+        LauncherViewModel.shared.prepareForSearchLaunch()
+        LauncherViewModel.shared.searchText = "cb "
+        LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
+    }
+
+    @objc private func openSystemCommandsAction() {
+        LauncherViewModel.shared.prepareForSearchLaunch()
+        LauncherViewModel.shared.searchText = "s "
         LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
     }
 

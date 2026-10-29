@@ -27,7 +27,8 @@ let package = Package(
                 .linkedFramework("PDFKit"),
                 .linkedFramework("Vision"),
                 .linkedFramework("UserNotifications"),
-                .linkedFramework("ScreenCaptureKit")
+                .linkedFramework("ScreenCaptureKit"),
+                .linkedFramework("Contacts")
             ]
         )
     ]

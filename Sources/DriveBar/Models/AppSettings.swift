@@ -45,7 +45,18 @@ final class AppSettings: ObservableObject {
         static let windowSwitcherReleaseToActivate = "drivebar.windowSwitcherReleaseToActivate"
         static let pinnedPaths = "drivebar.pinnedPaths"
         static let enableClipboardHistory = "drivebar.enableClipboardHistory"
+        static let disabledSystemCommandIDs = "drivebar.disabledSystemCommandIDs"
+        static let confirmSystemCommandIDs = "drivebar.confirmSystemCommandIDs"
     }
+
+    static let defaultConfirmSystemCommandIDs: Set<String> = [
+        "sys.empty_trash",
+        "sys.logout",
+        "sys.restart",
+        "sys.shutdown",
+        "sys.quit_all",
+        "sys.force_quit"
+    ]
 
     @Published var enableWindowSwitcher: Bool {
         didSet {
@@ -136,6 +147,20 @@ final class AppSettings: ObservableObject {
     @Published var disabledActionIDs: Set<String> {
         didSet {
             defaults.set(Array(disabledActionIDs), forKey: Keys.disabledActionIDs)
+            notifyPortableSettingsChanged()
+        }
+    }
+
+    @Published var disabledSystemCommandIDs: Set<String> {
+        didSet {
+            defaults.set(Array(disabledSystemCommandIDs), forKey: Keys.disabledSystemCommandIDs)
+            notifyPortableSettingsChanged()
+        }
+    }
+
+    @Published var confirmSystemCommandIDs: Set<String> {
+        didSet {
+            defaults.set(Array(confirmSystemCommandIDs), forKey: Keys.confirmSystemCommandIDs)
             notifyPortableSettingsChanged()
         }
     }
@@ -334,6 +359,15 @@ final class AppSettings: ObservableObject {
         let savedDisabled = defaults.stringArray(forKey: Keys.disabledActionIDs) ?? []
         self.disabledActionIDs = Set(savedDisabled)
 
+        let savedDisabledSys = defaults.stringArray(forKey: Keys.disabledSystemCommandIDs) ?? []
+        self.disabledSystemCommandIDs = Set(savedDisabledSys)
+
+        if let savedConfirmSys = defaults.stringArray(forKey: Keys.confirmSystemCommandIDs) {
+            self.confirmSystemCommandIDs = Set(savedConfirmSys)
+        } else {
+            self.confirmSystemCommandIDs = Self.defaultConfirmSystemCommandIDs
+        }
+
         self.autoCopyMarkdownToClipboard = defaults.object(forKey: Keys.autoCopyMarkdown) as? Bool ?? true
         self.saveMarkdownBesideSource = defaults.object(forKey: Keys.saveMarkdownBesideSource) as? Bool ?? true
         self.enableVisionOCR = defaults.object(forKey: Keys.enableVisionOCR) as? Bool ?? true
@@ -425,6 +459,35 @@ final class AppSettings: ObservableObject {
         } else {
             disabledActionIDs.insert(id)
         }
+    }
+
+    func isSystemCommandEnabled(_ id: String) -> Bool {
+        !disabledSystemCommandIDs.contains(id)
+    }
+
+    func setSystemCommandEnabled(_ id: String, enabled: Bool) {
+        if enabled {
+            disabledSystemCommandIDs.remove(id)
+        } else {
+            disabledSystemCommandIDs.insert(id)
+        }
+    }
+
+    func requiresSystemCommandConfirmation(_ id: String) -> Bool {
+        confirmSystemCommandIDs.contains(id)
+    }
+
+    func setSystemCommandConfirmation(_ id: String, confirm: Bool) {
+        if confirm {
+            confirmSystemCommandIDs.insert(id)
+        } else {
+            confirmSystemCommandIDs.remove(id)
+        }
+    }
+
+    func resetSystemCommandsToDefault() {
+        disabledSystemCommandIDs.removeAll()
+        confirmSystemCommandIDs = Self.defaultConfirmSystemCommandIDs
     }
 
     func isPinned(_ path: String) -> Bool {

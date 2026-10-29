@@ -58,7 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(withTitle: "Cài đặt DriveBar...", action: #selector(openSettingsWindow), keyEquivalent: ",").target = self
         appMenu.addItem(withTitle: "Mở Thanh Tìm Kiếm", action: #selector(toggleLauncherFromMenu), keyEquivalent: "f").target = self
         appMenu.addItem(withTitle: "Mở Windows Preview (Chuyển cửa sổ)", action: #selector(openWindowSwitcherFromMenu), keyEquivalent: "").target = self
-        appMenu.addItem(withTitle: "Mở Lịch sử Clipboard ('c ')", action: #selector(openClipboardHistoryFromMenu), keyEquivalent: "").target = self
+        appMenu.addItem(withTitle: "Tra cứu Danh bạ ('c ')", action: #selector(openContactsFromMenu), keyEquivalent: "").target = self
+        appMenu.addItem(withTitle: "Mở Lịch sử Clipboard ('cb ')", action: #selector(openClipboardHistoryFromMenu), keyEquivalent: "").target = self
+        appMenu.addItem(withTitle: "Mở Lệnh Hệ thống ('s ')", action: #selector(openSystemCommandsFromMenu), keyEquivalent: "").target = self
         appMenu.addItem(withTitle: "Kiểm tra cập nhật từ GitHub...", action: #selector(checkUpdatesFromMenu), keyEquivalent: "").target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Ẩn DriveBar", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
@@ -107,6 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = GoogleDriveIndexService.shared
         SyncAndLatchingService.shared.start()
         ClipboardHistoryService.shared.start()
+        ContactsSearchService.shared.preloadIfAuthorized()
         StatusBarController.shared.install()
 
         _ = WindowSwitcherService.shared
@@ -190,9 +193,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         WindowSwitcherController.shared.openPinnedFromMenuOrSearch()
     }
 
-    @objc func openClipboardHistoryFromMenu() {
+    @objc func openContactsFromMenu() {
         LauncherViewModel.shared.prepareForSearchLaunch()
         LauncherViewModel.shared.searchText = "c "
+        LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
+    }
+
+    @objc func openClipboardHistoryFromMenu() {
+        LauncherViewModel.shared.prepareForSearchLaunch()
+        LauncherViewModel.shared.searchText = "cb "
+        LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
+    }
+
+    @objc func openSystemCommandsFromMenu() {
+        LauncherViewModel.shared.prepareForSearchLaunch()
+        LauncherViewModel.shared.searchText = "s "
         LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
     }
 

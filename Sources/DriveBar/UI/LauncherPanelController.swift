@@ -49,9 +49,12 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
 
     func toggleSearchPanel() {
         if isVisible {
-            if case .search = LauncherViewModel.shared.screenMode {
+            switch LauncherViewModel.shared.screenMode {
+            case .search, .contactDetail:
                 hide()
                 return
+            default:
+                break
             }
         }
         LauncherViewModel.shared.prepareForSearchLaunch()
@@ -163,6 +166,9 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
         screenshotGraceUntil = 0
         if QuickLookCoordinator.shared.isQuickLookVisible {
             QuickLookCoordinator.shared.closeQuickLook(restoreLauncherFocus: false)
+        }
+        if LargeTypeOverlayController.shared.isVisible {
+            LargeTypeOverlayController.shared.dismiss(restoreFocus: false)
         }
         removeKeyboardMonitors()
         LauncherViewModel.shared.activeModifiers = []
@@ -304,6 +310,7 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
                 case .search: return LauncherViewModel.shared.searchText == live
                 case .universalActions: return LauncherViewModel.shared.actionFilterText == live
                 case .destinationPicker: return LauncherViewModel.shared.destinationSearchText == live
+                case .contactDetail: return LauncherViewModel.shared.contactDetailFilterText == live
                 default: return true
                 }
             }()
@@ -334,8 +341,12 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
         }
         screenshotGraceUntil = 0
 
-        // 1. Escape handling (close Quick Look first if open!)
+        // 1. Escape handling (close Large Type / Quick Look first if open!)
         if code == kVK_Escape {
+            if LargeTypeOverlayController.shared.isVisible {
+                LargeTypeOverlayController.shared.dismiss(restoreFocus: true)
+                return true
+            }
             if QuickLookCoordinator.shared.isQuickLookVisible {
                 QuickLookCoordinator.shared.closeQuickLook(restoreLauncherFocus: true)
                 return true
@@ -366,6 +377,20 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
         // 2.5. Pin / Unpin Favorite in Search Mode: ⌘D
         if flags == .command && code == kVK_ANSI_D, case .search = vm.screenMode {
             if vm.togglePinForSelectedItem() {
+                return true
+            }
+        }
+
+        // 2.6. Contact Detail shortcuts: ⌘C (copy field & keep open), ⌘O (open in Contacts.app)
+        if case .contactDetail(let contactID, _, _) = vm.screenMode {
+            if flags == .command && code == kVK_ANSI_C {
+                let selectedLen = (panel?.firstResponder as? NSTextView)?.selectedRange().length ?? 0
+                if selectedLen == 0 && vm.copySelectedContactDetailFieldKeepOpen() {
+                    return true
+                }
+            }
+            if flags == .command && code == kVK_ANSI_O {
+                ContactsSearchService.shared.openInContactsApp(contactID: contactID)
                 return true
             }
         }
@@ -482,6 +507,11 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
                     if isCursorAtEnd && vm.drillIntoSelectedDestinationFolder() {
                         return true
                     }
+                case .contactDetail:
+                    if vm.contactDetailFilterText.isEmpty || isCursorAtEnd {
+                        vm.executeCurrentSelection(modifiers: [])
+                        return true
+                    }
                 default:
                     break
                 }
@@ -501,6 +531,11 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
                 case .openWithPicker(_, let prevTarget):
                     vm.openUniversalActions(for: prevTarget, directExternalTrigger: vm.openedDirectlyInUniversalActions)
                     return true
+                case .contactDetail:
+                    if vm.contactDetailFilterText.isEmpty {
+                        vm.returnFromContactDetail()
+                        return true
+                    }
                 default:
                     break
                 }

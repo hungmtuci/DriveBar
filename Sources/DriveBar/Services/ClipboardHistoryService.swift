@@ -292,7 +292,7 @@ final class ClipboardHistoryService: ObservableObject {
         }
     }
 
-    // MARK: - Search & Build Result Items (`c` / `c + từ khóa`)
+    // MARK: - Search & Build Result Items (`cb` / `clip` + từ khóa)
 
     func searchResultItems(query: String, limit: Int = 50) -> [SearchResultItem] {
         let qNorm = GoogleDriveIndexService.removeAccents(query)

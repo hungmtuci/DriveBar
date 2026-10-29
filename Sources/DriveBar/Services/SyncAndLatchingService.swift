@@ -24,6 +24,8 @@ struct PortableSyncSettingsPayload: Codable, Sendable {
     var enableActionLatching: Bool
     var enableClipboardHistory: Bool?
     var pinnedPaths: [String]?
+    var disabledSystemCommandIDs: [String]?
+    var confirmSystemCommandIDs: [String]?
 }
 
 @MainActor
@@ -212,7 +214,9 @@ final class SyncAndLatchingService: ObservableObject {
             includeMacAppsInSearch: s.includeMacAppsInSearch,
             enableActionLatching: s.enableActionLatching,
             enableClipboardHistory: s.enableClipboardHistory,
-            pinnedPaths: GoogleDriveIndexService.shared.exportPortablePathList(s.pinnedPaths)
+            pinnedPaths: GoogleDriveIndexService.shared.exportPortablePathList(s.pinnedPaths),
+            disabledSystemCommandIDs: Array(s.disabledSystemCommandIDs).sorted(),
+            confirmSystemCommandIDs: Array(s.confirmSystemCommandIDs).sorted()
         )
         let targetFile = "\(expandedSyncDir)/portable_settings.json"
         isWritingSyncFiles = true
@@ -282,6 +286,18 @@ final class SyncAndLatchingService: ObservableObject {
             let resolved = GoogleDriveIndexService.shared.resolvePortablePathList(remotePinned)
             if s.pinnedPaths != resolved {
                 s.pinnedPaths = resolved
+            }
+        }
+        if let remoteDisabledSys = remote.disabledSystemCommandIDs {
+            let set = Set(remoteDisabledSys)
+            if s.disabledSystemCommandIDs != set {
+                s.disabledSystemCommandIDs = set
+            }
+        }
+        if let remoteConfirmSys = remote.confirmSystemCommandIDs {
+            let set = Set(remoteConfirmSys)
+            if s.confirmSystemCommandIDs != set {
+                s.confirmSystemCommandIDs = set
             }
         }
     }
