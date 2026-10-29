@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 struct LauncherRootView: View {
     @ObservedObject var viewModel: LauncherViewModel
@@ -500,15 +501,36 @@ struct FileOrSymbolIconView: View {
     let fallbackSymbol: String
 
     var body: some View {
-        if let path, FileManager.default.fileExists(atPath: path) {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: path))
-                .resizable()
-                .interpolation(.high)
+        if let path {
+            if path.contains("/Library/CloudStorage/") {
+                Image(nsImage: Self.fastCloudIcon(for: path, fallbackSymbol: fallbackSymbol))
+                    .resizable()
+                    .interpolation(.high)
+            } else if FileManager.default.fileExists(atPath: path) {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: path))
+                    .resizable()
+                    .interpolation(.high)
+            } else {
+                Image(systemName: fallbackSymbol)
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(Color.purple)
+            }
         } else {
             Image(systemName: fallbackSymbol)
                 .font(.system(size: 20, weight: .medium))
                 .foregroundStyle(Color.purple)
         }
+    }
+
+    private static func fastCloudIcon(for path: String, fallbackSymbol: String) -> NSImage {
+        if fallbackSymbol.contains("folder") || fallbackSymbol.contains("externaldrive") {
+            return NSWorkspace.shared.icon(for: .folder)
+        }
+        let ext = (path as NSString).pathExtension.lowercased()
+        if !ext.isEmpty, let utType = UTType(filenameExtension: ext) {
+            return NSWorkspace.shared.icon(for: utType)
+        }
+        return NSWorkspace.shared.icon(for: .data)
     }
 }
 

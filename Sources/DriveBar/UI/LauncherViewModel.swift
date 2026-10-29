@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import AppKit
 import QuickLookThumbnailing
+import Darwin
 
 @MainActor
 final class LauncherViewModel: ObservableObject {
@@ -100,7 +101,10 @@ final class LauncherViewModel: ObservableObject {
     // MARK: - Active Search Mode Pill Label
 
     var currentSearchModeBadge: (label: String, color: Color) {
-        let trimmed = searchText.trimmingCharacters(in: .whitespaces)
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.lowercased().hasPrefix("http://") || trimmed.lowercased().hasPrefix("https://") {
+            return ("Web → AI MD", .purple)
+        }
         if searchText.hasPrefix("/") || searchText.hasPrefix("~/") {
             return ("Duyệt thư mục", .blue)
         }
@@ -121,7 +125,37 @@ final class LauncherViewModel: ObservableObject {
     func refreshSearchResults() {
         let drive = GoogleDriveIndexService.shared
         let raw = searchText
-        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // 0. Direct Web URL pasted/typed into Search Bar -> Instant Convert Web URL to Markdown!
+        if (trimmed.lowercased().hasPrefix("http://") || trimmed.lowercased().hasPrefix("https://")),
+           !trimmed.contains(" "),
+           let webURL = URL(string: trimmed) {
+            searchResults = [
+                SearchResultItem(
+                    id: "urlmd:copy:\(trimmed)",
+                    title: "Convert Web URL to Markdown (Copy vào Clipboard)",
+                    subtitle: "Lọc sạch bài viết / Google Docs / GitHub từ \(webURL.host ?? "URL") → Chuẩn AI (⌥↩ lưu file .md ra Desktop)",
+                    path: nil,
+                    isDirectory: false,
+                    kind: .webURLQuickConvert(url: webURL, preview: false),
+                    badge: "AI • URL",
+                    sfSymbolFallback: "globe.desk.fill"
+                ),
+                SearchResultItem(
+                    id: "urlmd:preview:\(trimmed)",
+                    title: "Convert Web URL & Xem trước trong AI Inspector",
+                    subtitle: "Đếm số Token ước tính và xem trực tiếp văn bản Markdown đã làm sạch",
+                    path: nil,
+                    isDirectory: false,
+                    kind: .webURLQuickConvert(url: webURL, preview: true),
+                    badge: "Preview",
+                    sfSymbolFallback: "doc.viewfinder.fill"
+                )
+            ]
+            selectedIndex = 0
+            return
+        }
 
         // 1. Check `gda <path>`
         if raw.lowercased().hasPrefix("gda ") {
@@ -385,12 +419,17 @@ final class LauncherViewModel: ObservableObject {
             return def.matches(target: target, isInsideGoogleDrive: inGDrive)
         }
 
+        let latcher = SyncAndLatchingService.shared
         let q = GoogleDriveIndexService.removeAccents(actionFilterText)
             .lowercased()
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         if q.isEmpty {
-            filteredActions = candidates.sorted { $0.priority > $1.priority }
+            filteredActions = candidates.sorted { a, b in
+                let scoreA = a.priority + latcher.latchBoost(for: a.id, target: target)
+                let scoreB = b.priority + latcher.latchBoost(for: b.id, target: target)
+                return scoreA > scoreB
+            }
         } else {
             let tokens = q.split(separator: " ").map(String.init)
             var scored: [(score: Int, def: UniversalActionDefinition)] = []
@@ -404,7 +443,7 @@ final class LauncherViewModel: ObservableObject {
                 }
                 guard allMatched else { continue }
 
-                var sc = def.priority / 10
+                var sc = (def.priority / 10) + (latcher.latchBoost(for: def.id, target: target) / 3)
                 if titleNorm.hasPrefix(q) { sc += 500 }
                 else if titleNorm.contains(q) { sc += 300 }
                 else if kwNorm.contains(q) { sc += 150 }
@@ -466,15 +505,15 @@ final class LauncherViewModel: ObservableObject {
         }
 
         let fm = FileManager.default
-        if let attrs = try? fm.attributesOfItem(atPath: firstURL.path) {
-            if let size = attrs[.size] as? Int64 {
-                previewFileSizeText = ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+        var stBuf = Darwin.stat()
+        if Darwin.lstat(firstURL.path, &stBuf) == 0 {
+            if (stBuf.st_mode & S_IFMT) != S_IFDIR {
+                previewFileSizeText = ByteCountFormatter.string(fromByteCount: Int64(stBuf.st_size), countStyle: .file)
             }
-            if let mod = attrs[.modificationDate] as? Date {
-                let df = DateFormatter()
-                df.dateFormat = "dd/MM/yyyy HH:mm"
-                previewModifiedText = df.string(from: mod)
-            }
+            let mod = Date(timeIntervalSince1970: TimeInterval(stBuf.st_mtimespec.tv_sec))
+            let df = DateFormatter()
+            df.dateFormat = "dd/MM/yyyy HH:mm"
+            previewModifiedText = df.string(from: mod)
         }
 
         var isDir: ObjCBool = false
@@ -581,6 +620,17 @@ final class LauncherViewModel: ObservableObject {
         switch item.kind {
         case .infoBanner:
             return
+
+        case .webURLQuickConvert(let webURL, let preview):
+            let actID = preview ? "ai.url_preview_md" : "ai.url_to_md"
+            if let def = UniversalActionCatalog.all.first(where: { $0.id == actID }) {
+                UniversalActionExecutor.shared.execute(
+                    action: def,
+                    target: .url(webURL, sourceNote: "Thanh tìm kiếm"),
+                    modifierFlags: modifiers,
+                    viewModel: self
+                )
+            }
 
         case .systemCommand(let cmd):
             if cmd == "rebuild" {

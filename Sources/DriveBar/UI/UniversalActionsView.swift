@@ -104,7 +104,8 @@ struct UniversalActionsView: View {
                                     UniversalActionRowView(
                                         action: action,
                                         index: idx,
-                                        isSelected: idx == viewModel.selectedIndex
+                                        isSelected: idx == viewModel.selectedIndex,
+                                        isLatchedFavorite: SyncAndLatchingService.shared.isFrequentlyUsed(actionID: action.id, target: target)
                                     )
                                     .id(idx)
                                     .contentShape(Rectangle())
@@ -181,6 +182,7 @@ private struct UniversalActionRowView: View {
     let action: UniversalActionDefinition
     let index: Int
     let isSelected: Bool
+    let isLatchedFavorite: Bool
 
     var body: some View {
         HStack(spacing: 10) {
@@ -201,13 +203,20 @@ private struct UniversalActionRowView: View {
                         .foregroundStyle(isSelected ? Color.white : Color.primary)
                         .lineLimit(1)
 
-                    if action.id == "ai.convert_md" {
+                    if action.id == "ai.convert_md" || action.id == "ai.url_to_md" {
                         Text("AI Ready")
                             .font(.system(size: 9.5, weight: .bold))
                             .foregroundStyle(isSelected ? Color.white : Color.purple)
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
                             .background((isSelected ? Color.white.opacity(0.24) : Color.purple.opacity(0.14)), in: Capsule())
+                    } else if isLatchedFavorite {
+                        Text("★ Hay dùng")
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .foregroundStyle(isSelected ? Color.white : Color.orange)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background((isSelected ? Color.white.opacity(0.22) : Color.orange.opacity(0.14)), in: Capsule())
                     }
                 }
 
@@ -342,16 +351,39 @@ private struct UniversalActionRightPreviewPane: View {
 
             case .url(let u, _):
                 VStack(spacing: 10) {
-                    Image(systemName: "safari.fill")
-                        .font(.system(size: 42))
-                        .foregroundStyle(.blue)
+                    Image(systemName: "globe.desk.fill")
+                        .font(.system(size: 38))
+                        .foregroundStyle(.purple)
                     Text(u.host ?? "URL")
                         .font(.system(size: 13, weight: .semibold))
                     Text(u.absoluteString)
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
-                        .lineLimit(5)
+                        .lineLimit(4)
+
+                    Divider().padding(.vertical, 2)
+                    Text("Hỗ trợ lọc bài viết Web, Google Docs & GitHub sang Markdown sạch cho AI.")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+
+                    if let urlDef = UniversalActionCatalog.all.first(where: { $0.id == "ai.url_to_md" }) {
+                        Button {
+                            UniversalActionExecutor.shared.execute(
+                                action: urlDef,
+                                target: target,
+                                modifierFlags: [],
+                                viewModel: viewModel
+                            )
+                        } label: {
+                            Label("Copy Markdown", systemImage: "sparkles")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.purple)
+                        .controlSize(.small)
+                    }
                 }
                 .padding(16)
                 .frame(maxHeight: .infinity)

@@ -92,6 +92,7 @@ enum ResultItemKind: Equatable {
     case parentFolder(path: String)
     case systemCommand(id: String)
     case aiQuickCommand(action: String)
+    case webURLQuickConvert(url: URL, preview: Bool)
     case infoBanner
 }
 

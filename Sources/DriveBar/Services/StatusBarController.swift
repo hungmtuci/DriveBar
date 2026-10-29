@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import UniformTypeIdentifiers
 
 @MainActor
 final class StatusBarController: NSObject, NSMenuDelegate {
@@ -102,7 +103,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                     keyEquivalent: ""
                 )
                 item.representedObject = path
-                item.image = NSWorkspace.shared.icon(forFile: path)
+                item.image = NSWorkspace.shared.icon(for: .folder)
                 item.image?.size = NSSize(width: 16, height: 16)
                 item.target = self
                 menu.addItem(item)

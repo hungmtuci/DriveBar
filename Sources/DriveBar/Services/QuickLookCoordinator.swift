@@ -3,7 +3,7 @@ import AppKit
 import QuickLookUI
 
 @MainActor
-final class QuickLookCoordinator: NSObject, @preconcurrency QLPreviewPanelDataSource, @preconcurrency QLPreviewPanelDelegate {
+final class QuickLookCoordinator: NSObject, @preconcurrency QLPreviewPanelDataSource, QLPreviewPanelDelegate {
     static let shared = QuickLookCoordinator()
 
     private var previewURLs: [URL] = []

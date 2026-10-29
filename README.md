@@ -13,6 +13,16 @@
 
 ---
 
+## ✨ Điểm mới trong v1.2.0
+
+- **Real-time `FSEvents` & Đa tài khoản Google Drive:** Tự động cập nhật chỉ mục ngay tức thì khi tạo mới, đổi tên hoặc xóa thư mục trên Finder mà không cần chờ quét lại 90.000 mục; hỗ trợ gộp hoặc chọn riêng từng tài khoản `GoogleDrive-*`.
+- **Convert trực tiếp `.gdoc`, `.gsheet`, `.gslides` & Đường dẫn Web (`URL`) sang Markdown:** Tự trích `doc_id` xuất Markdown / bảng biểu CSV cho file Google Workspace trực tuyến; dán link hoặc bôi đen URL bất kỳ nhấn `⌘⇧A` để lọc sạch bài viết Web / GitHub sang Markdown chuẩn AI.
+- **Khung cấu trúc XML `<documents><document>` & Smart Chunking (`H1/H2`):** Tối ưu ngữ cảnh nhiều tài liệu cho Claude / Gemini và tự chia nhỏ tài liệu siêu dài thành thư mục `_Chunks/` kèm `00_INDEX.md`.
+- **Báo tiến trình tải file *Online-Only* từ Cloud:** Tự phát hiện cờ `SF_DATALESS` trên APFS CloudStorage và hiển thị tiến trình tải về trước khi chạy OCR/Convert.
+- **Đồng bộ P2P qua `~/Sync/` (Syncthing) & Học thói quen Action Latching:** Đồng bộ lịch sử thư mục mở gần đây (`⌘1–⌘9`), cài đặt và thứ tự Universal Actions hay dùng giữa **iMac** và **MacBook Pro** (tự ánh xạ đường dẫn tương đối giữa các tên user macOS khác nhau) + CI/CD GitHub Actions tự động đóng gói Release.
+
+---
+
 ## ⌨️ Phím tắt Toàn cục (Mặc định không xung đột Alfred 5)
 
 | Phím tắt (Đổi tuỳ ý trong Cài đặt) | Chức năng |

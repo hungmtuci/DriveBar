@@ -19,11 +19,14 @@ final class DriveBarApplication: NSApplication {
 
 @main
 enum DriveBarMain {
+    @MainActor private static var retainedDelegate: AppDelegate?
+
     static func main() {
         let app = DriveBarApplication.shared
-        let delegate = AppDelegate()
-        app.delegate = delegate
         MainActor.assumeIsolated {
+            let delegate = AppDelegate()
+            retainedDelegate = delegate
+            app.delegate = delegate
             delegate.installMainMenu()
         }
         app.run()

@@ -129,6 +129,7 @@ struct SettingsView: View {
                         driveService: driveService,
                         hotKeyService: hotKeyService,
                         updater: updater,
+                        syncService: SyncAndLatchingService.shared,
                         axTrusted: $uiState.axTrusted
                     )
                 case .aiMarkdown:
@@ -205,6 +206,7 @@ private struct GeneralSettingsTab: View {
     @ObservedObject var driveService: GoogleDriveIndexService
     @ObservedObject var hotKeyService: HotKeyService
     @ObservedObject var updater: UpdateCheckerService
+    @ObservedObject var syncService: SyncAndLatchingService
     @Binding var axTrusted: Bool
 
     var body: some View {
@@ -332,7 +334,7 @@ private struct GeneralSettingsTab: View {
                         .font(.system(size: 13, weight: .semibold))
                 }
 
-                // 3. Google Drive Index Section
+                // 3. Google Drive Index Section (Real-time FSEvents + Multi-Account)
                 GroupBox {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
@@ -340,9 +342,19 @@ private struct GeneralSettingsTab: View {
                                 .foregroundStyle(driveService.accountRoot != nil ? .green : .orange)
                                 .font(.system(size: 20))
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(driveService.accountRoot ?? "Chưa tìm thấy thư mục Google Drive")
-                                    .font(.system(size: 12.5, weight: .semibold))
-                                    .lineLimit(1)
+                                HStack(spacing: 8) {
+                                    Text(driveService.accountRoot ?? "Chưa tìm thấy thư mục Google Drive")
+                                        .font(.system(size: 12.5, weight: .semibold))
+                                        .lineLimit(1)
+                                    if driveService.isRealtimeWatcherActive {
+                                        Text("⚡ Real-time FSEvents")
+                                            .font(.system(size: 10, weight: .bold))
+                                            .foregroundStyle(.green)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(Color.green.opacity(0.14), in: Capsule())
+                                    }
+                                }
                                 HStack(spacing: 14) {
                                     Text("My Drive: **\(driveService.folderCount.formatted())** thư mục")
                                     Text("Shared Drives & Shortcuts: **\(driveService.sharedCount.formatted())** mục")
@@ -354,6 +366,24 @@ private struct GeneralSettingsTab: View {
                                 .font(.system(size: 11.5))
                             }
                             Spacer()
+                        }
+
+                        HStack(spacing: 16) {
+                            Toggle("Tự động cập nhật tức thời bằng FSEvents khi tạo/đổi tên thư mục", isOn: $settings.enableRealtimeFSEvents)
+                                .font(.system(size: 12))
+
+                            Spacer()
+
+                            if !driveService.availableAccounts.isEmpty {
+                                Picker("Tài khoản:", selection: $settings.selectedDriveAccountFilter) {
+                                    Text("Tất cả (\(driveService.availableAccounts.count))").tag("ALL")
+                                    ForEach(driveService.availableAccounts) { acc in
+                                        Text(acc.email).tag(acc.email)
+                                    }
+                                }
+                                .frame(maxWidth: 260)
+                                .controlSize(.small)
+                            }
                         }
 
                         HStack(spacing: 10) {
@@ -385,7 +415,65 @@ private struct GeneralSettingsTab: View {
                     }
                     .padding(8)
                 } label: {
-                    Label("Chỉ mục Tìm kiếm Siêu tốc Google Drive", systemImage: "externaldrive.fill.badge.icloud")
+                    Label("Chỉ mục Tìm kiếm Siêu tốc Google Drive (Real-time & Đa tài khoản)", systemImage: "externaldrive.fill.badge.icloud")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+
+                // 3.5. Syncthing P2P Sync & Action Latching
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Toggle("Đồng bộ Lịch sử gần đây, Cài đặt & Thói quen qua Syncthing P2P (iMac ↔ MacBook Pro)", isOn: $settings.enableSyncthingSync)
+                                .font(.system(size: 12.5, weight: .medium))
+                            Spacer()
+                            Button("Đồng bộ ngay") {
+                                syncService.syncNow()
+                                settings.statusBannerMessage = "Đã đồng bộ dữ liệu thành công với \(settings.syncthingFolderPath)."
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(!settings.enableSyncthingSync)
+                        }
+
+                        if settings.enableSyncthingSync {
+                            HStack(spacing: 8) {
+                                Text("Thư mục Sync:")
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(.secondary)
+                                TextField("~/Sync/Alfred/DriveBar", text: $settings.syncthingFolderPath)
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.system(size: 11.5, design: .monospaced))
+                                Button("Mở thư mục") {
+                                    let p = syncService.expandedSyncDir
+                                    try? FileManager.default.createDirectory(atPath: p, withIntermediateDirectories: true)
+                                    NSWorkspace.shared.open(URL(fileURLWithPath: p))
+                                }
+                                .controlSize(.small)
+                            }
+
+                            Text("✓ Đã ánh xạ đường dẫn tương đối thông minh (tự khớp user `hunglx` trên iMac & `hunglexuan` trên MacBook Pro) • Đang đồng bộ \(syncService.syncedRecordCount) mục lịch sử.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Divider()
+
+                        HStack {
+                            Toggle("Học thói quen dùng Universal Action (Action Latching — tự đẩy Action hay chọn lên đầu theo đuôi file)", isOn: $settings.enableActionLatching)
+                                .font(.system(size: 12))
+                            Spacer()
+                            if syncService.learnedActionCount > 0 {
+                                Button("Đặt lại (\(syncService.learnedActionCount))") {
+                                    syncService.resetActionLatching()
+                                    settings.statusBannerMessage = "Đã đặt lại thứ tự học thói quen Universal Actions."
+                                }
+                                .controlSize(.small)
+                            }
+                        }
+                    }
+                    .padding(8)
+                } label: {
+                    Label("Đồng bộ P2P (Syncthing) & Học Thói Quen Thông Minh", systemImage: "arrow.triangle.2.circlepath.icloud.fill")
                         .font(.system(size: 13, weight: .semibold))
                 }
 
@@ -548,6 +636,20 @@ private struct AIMarkdownSettingsTab: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Toggle("Xuất tệp <tên_file>.md nằm ngay cạnh tệp gốc khi bấm 'Convert to Markdown'", isOn: $settings.saveMarkdownBesideSource)
                         Toggle("Tự động Copy toàn bộ nội dung Markdown vào Clipboard (sẵn sàng ⌘V ngay vào Claude / ChatGPT / Gemini)", isOn: $settings.autoCopyMarkdownToClipboard)
+                        Toggle("Bọc thẻ cấu trúc XML <documents><document index=\"...\"> khi gộp hoặc chọn nhiều file cùng lúc", isOn: $settings.wrapMultiFilesInXMLTags)
+                        HStack(spacing: 12) {
+                            Toggle("Tự động chia nhỏ tài liệu siêu dài (Smart Chunking theo H1/H2 → _Chunks/)", isOn: $settings.enableSmartChunking)
+                            Spacer()
+                            if settings.enableSmartChunking {
+                                Picker("Ngưỡng mỗi phần:", selection: $settings.smartChunkMaxTokens) {
+                                    Text("15.000 tokens").tag(15_000)
+                                    Text("25.000 tokens").tag(25_000)
+                                    Text("40.000 tokens").tag(40_000)
+                                }
+                                .frame(width: 220)
+                                .controlSize(.small)
+                            }
+                        }
                         Toggle("Tự động kích hoạt Apple Vision OCR (Tiếng Việt + Tiếng Anh) khi PDF scan hoặc Ảnh không có lớp chữ", isOn: $settings.enableVisionOCR)
                         Toggle("Tối ưu hóa dữ liệu cho AI đọc (Chuẩn hóa Unicode NFC Tiếng Việt, xóa ký tự ẩn & gộp dòng trắng thừa để giảm ~15-25% Token)", isOn: $settings.optimizeMarkdownTokens)
                         Toggle("Chèn khối YAML Frontmatter (tên file gốc, định dạng, thời gian) ở đầu file Markdown", isOn: $settings.includeMetadataHeader)
@@ -569,6 +671,11 @@ private struct AIMarkdownSettingsTab: View {
                             title: "LibreOffice Headless (.doc, .xls, .ppt, .rtf → PDF/MD)",
                             ready: diag.libreOfficeReady,
                             detail: diag.sofficePath ?? "Chưa cài LibreOffice — Tự động dùng macOS textutil AST"
+                        )
+                        EngineRow(
+                            title: "Google Workspace (.gdoc/.gsheet/.gslides) & Web URL AI Reader",
+                            ready: true,
+                            detail: "Tích hợp trực tiếp luồng xuất Markdown / CSV bảng biểu & lọc bài viết Web sạch"
                         )
                         EngineRow(
                             title: "Apple Vision Neural OCR (Tiếng Việt vi-VN & en-US)",

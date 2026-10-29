@@ -19,6 +19,7 @@ final class UniversalActionExecutor {
         for u in urls {
             GoogleDriveIndexService.shared.recordUsed(u.path)
         }
+        SyncAndLatchingService.shared.recordActionUsed(actionID: action.id, target: target)
 
         switch action.id {
         // MARK: - 1. AI & Markdown Conversion Actions
@@ -27,11 +28,15 @@ final class UniversalActionExecutor {
             let saveBeside = optionHeld ? false : AppSettings.shared.saveMarkdownBesideSource
             let copyClip = optionHeld ? true : AppSettings.shared.autoCopyMarkdownToClipboard
             LauncherPanelController.shared.hide()
-            runMarkdownConversion(urls: urls, saveBeside: saveBeside, copyClipboard: copyClip, forceOCR: false)
+            runMarkdownConversion(urls: urls, saveBeside: saveBeside, copyClipboard: copyClip, forceOCR: false, forceXMLWrap: false)
 
         case "ai.copy_md":
             LauncherPanelController.shared.hide()
-            runMarkdownConversion(urls: urls, saveBeside: false, copyClipboard: true, forceOCR: false)
+            runMarkdownConversion(urls: urls, saveBeside: false, copyClipboard: true, forceOCR: false, forceXMLWrap: false)
+
+        case "ai.wrap_xml_clipboard":
+            LauncherPanelController.shared.hide()
+            runMarkdownConversion(urls: urls, saveBeside: false, copyClipboard: true, forceOCR: false, forceXMLWrap: true)
 
         case "ai.ocr_md":
             LauncherPanelController.shared.hide()
@@ -39,8 +44,86 @@ final class UniversalActionExecutor {
                 urls: urls,
                 saveBeside: AppSettings.shared.saveMarkdownBesideSource,
                 copyClipboard: AppSettings.shared.autoCopyMarkdownToClipboard,
-                forceOCR: true
+                forceOCR: true,
+                forceXMLWrap: false
             )
+
+        case "ai.chunk_md":
+            LauncherPanelController.shared.hide()
+            FloatingToastController.shared.showProgress(
+                title: "Đang chia nhỏ tài liệu theo Chương/Mục (H1/H2)...",
+                subtitle: target.primaryTitle
+            )
+            Task { @MainActor in
+                do {
+                    let res = try await MarkdownConverterService.shared.convertAndSplitIntoAIChunks(urls: urls)
+                    if let first = res.first {
+                        let cCount = res.reduce(0) { $0 + $1.chunkCount }
+                        FloatingToastController.shared.showSuccess(
+                            title: "Đã tách thành \(cCount) phần trong _Chunks/ ✓",
+                            subtitle: "Kèm chỉ mục 00_INDEX.md • Tổng ~\(first.estimatedTokens.formatted()) tokens",
+                            symbol: "rectangle.split.3x1.fill"
+                        )
+                        if let dir = first.chunkDirectoryURL {
+                            NSWorkspace.shared.activateFileViewerSelecting([dir])
+                        }
+                    }
+                } catch {
+                    FloatingToastController.shared.showError(
+                        title: "Lỗi chia nhỏ tài liệu",
+                        subtitle: error.localizedDescription
+                    )
+                }
+            }
+
+        case "ai.url_to_md", "ai.url_preview_md":
+            let webURL: URL? = {
+                switch target {
+                case .url(let u, _): return u
+                case .text(let s, _): return URL(string: s.trimmingCharacters(in: .whitespacesAndNewlines))
+                default: return nil
+                }
+            }()
+            guard let webURL else { return }
+            let wantPreview = (action.id == "ai.url_preview_md") || modifierFlags.contains(.command)
+            let saveDesktop = modifierFlags.contains(.option)
+            if !wantPreview {
+                LauncherPanelController.shared.hide()
+            }
+            FloatingToastController.shared.showProgress(
+                title: "🌐 Đang trích xuất nội dung Web sang Markdown...",
+                subtitle: webURL.host ?? webURL.absoluteString
+            )
+            Task { @MainActor in
+                do {
+                    let item = try await MarkdownConverterService.shared.convertWebURLToMarkdown(
+                        url: webURL,
+                        saveToDownloadsOrDesktop: saveDesktop,
+                        copyToClipboard: true
+                    )
+                    FloatingToastController.shared.showSuccess(
+                        title: saveDesktop ? "Đã lưu .md ra Desktop & Copy vào Clipboard ✓" : "Đã Copy Markdown trang Web vào Clipboard ✓",
+                        subtitle: "\(item.engineUsed) • ~\(item.estimatedTokens.formatted()) tokens",
+                        symbol: "globe.desk.fill"
+                    )
+                    if wantPreview {
+                        viewModel.screenMode = .markdownPreview(
+                            title: webURL.host ?? "Web Markdown",
+                            sourceURL: webURL,
+                            savedMDURL: item.savedMarkdownURL,
+                            markdown: item.markdown,
+                            estimatedTokens: item.estimatedTokens,
+                            engineUsed: item.engineUsed
+                        )
+                        LauncherPanelController.shared.showAndFocus()
+                    }
+                } catch {
+                    FloatingToastController.shared.showError(
+                        title: "Không đọc được nội dung trang Web",
+                        subtitle: error.localizedDescription
+                    )
+                }
+            }
 
         case "ai.preview_md":
             guard let first = urls.first else { return }
@@ -511,7 +594,13 @@ final class UniversalActionExecutor {
         }
     }
 
-    private func runMarkdownConversion(urls: [URL], saveBeside: Bool, copyClipboard: Bool, forceOCR: Bool) {
+    private func runMarkdownConversion(
+        urls: [URL],
+        saveBeside: Bool,
+        copyClipboard: Bool,
+        forceOCR: Bool,
+        forceXMLWrap: Bool
+    ) {
         guard !urls.isEmpty else { return }
         let titleLabel = urls.count == 1 ? urls[0].lastPathComponent : "\(urls.count) tệp tài liệu"
         FloatingToastController.shared.showProgress(
@@ -525,13 +614,17 @@ final class UniversalActionExecutor {
                     urls: urls,
                     saveBesideSource: saveBeside,
                     copyToClipboard: copyClipboard,
-                    forceOCR: forceOCR
+                    forceOCR: forceOCR,
+                    forceXMLWrap: forceXMLWrap
                 )
                 let totalTokens = results.reduce(0) { $0 + $1.estimatedTokens }
+                let totalChunks = results.reduce(0) { $0 + $1.chunkCount }
                 let engine = results.first?.engineUsed ?? "AI Engine"
 
                 let mainMsg: String
-                if saveBeside && copyClipboard {
+                if forceXMLWrap {
+                    mainMsg = "Đã Copy cấu trúc XML <documents> vào Clipboard ✓"
+                } else if saveBeside && copyClipboard {
                     let mdName = results.first?.savedMarkdownURL?.lastPathComponent ?? ".md"
                     mainMsg = results.count == 1
                         ? "Đã tạo \(mdName) & Copy vào Clipboard ✓"
@@ -542,9 +635,10 @@ final class UniversalActionExecutor {
                     mainMsg = "Đã xuất \(results.count) file Markdown ✓"
                 }
 
+                let chunkNote = totalChunks > 0 ? " • Tách \(totalChunks) phần _Chunks/" : ""
                 FloatingToastController.shared.showSuccess(
                     title: mainMsg,
-                    subtitle: "\(engine) • ~\(totalTokens.formatted()) tokens tối ưu cho AI",
+                    subtitle: "\(engine) • ~\(totalTokens.formatted()) tokens\(chunkNote)",
                     symbol: "doc.text.magnifyingglass"
                 )
             } catch {
