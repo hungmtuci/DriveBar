@@ -222,12 +222,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if settingsWindow == nil {
             let win = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 840, height: 640),
-                styleMask: [.titled, .closable, .miniaturizable],
+                contentRect: NSRect(x: 0, y: 0, width: 860, height: 620),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
             )
-            win.title = "Cài đặt & Quản lý DriveBar"
+            win.title = "Cài đặt DriveBar"
+            win.titleVisibility = .hidden
+            win.titlebarAppearsTransparent = true
+            win.minSize = NSSize(width: 780, height: 540)
             win.isReleasedWhenClosed = false
             win.center()
             win.contentView = NSHostingView(rootView: SettingsView())

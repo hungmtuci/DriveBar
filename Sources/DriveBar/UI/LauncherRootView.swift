@@ -447,37 +447,6 @@ private struct SearchFooterBar: View {
 
             Button {
                 LauncherPanelController.shared.hide()
-                HotKeyService.shared.openSettingsAndRecord(.search)
-            } label: {
-                footerActionPill(settings.searchHotKey.readableDisplay, monospaced: true)
-            }
-            .buttonStyle(.plain)
-            .fixedSize(horizontal: true, vertical: false)
-            .help("Bấm để tự thiết lập phím tắt mở DriveBar (Mặc định: ⌘Space)")
-
-            Button {
-                if !viewModel.openUniversalActionsForSelectedSearchItem() {
-                    LauncherPanelController.shared.hide()
-                    HotKeyService.shared.openSettingsAndRecord(.universalAction)
-                }
-            } label: {
-                footerActionPill("Action \(settings.universalActionHotKey.readableDisplay)", monospaced: true)
-            }
-            .buttonStyle(.plain)
-            .fixedSize(horizontal: true, vertical: false)
-            .contextMenu {
-                Button("Mở Universal Actions cho mục đang chọn") {
-                    _ = viewModel.openUniversalActionsForSelectedSearchItem()
-                }
-                Button("Đổi phím tắt Universal Actions trên Finder (\(settings.universalActionHotKey.readableDisplay))...") {
-                    LauncherPanelController.shared.hide()
-                    HotKeyService.shared.openSettingsAndRecord(.universalAction)
-                }
-            }
-            .help("Bấm để mở Universal Actions cho mục đang chọn (Chuột phải để đổi phím tắt \(settings.universalActionHotKey.readableDisplay))")
-
-            Button {
-                LauncherPanelController.shared.hide()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
                     WindowSwitcherController.shared.openPinnedFromMenuOrSearch()
                 }
@@ -493,41 +462,53 @@ private struct SearchFooterBar: View {
                         WindowSwitcherController.shared.openPinnedFromMenuOrSearch()
                     }
                 }
-                Button("Thiết lập phím tắt & chế độ Windows Preview (\(settings.windowSwitcherHotKey.readableDisplay))...") {
+                Button("Cài đặt Windows Preview (\(settings.windowSwitcherHotKey.readableDisplay))...") {
                     LauncherPanelController.shared.hide()
                     HotKeyService.shared.openSettingsAndRecord(.windowSwitcher)
                 }
             }
-            .help("Bấm để mở Windows Preview — Chuyển đổi & phóng to mọi cửa sổ đang chạy (Chuột phải để đổi phím tắt \(settings.windowSwitcherHotKey.readableDisplay))")
-
-            Button {
-                settings.showDockIcon.toggle()
-            } label: {
-                footerActionPill(
-                    settings.showDockIcon ? "Ẩn Dock" : "Hiện Dock",
-                    monospaced: false
-                )
-            }
-            .buttonStyle(.plain)
-            .fixedSize(horizontal: true, vertical: false)
-            .help(settings.showDockIcon ? "Ẩn biểu tượng DriveBar khỏi thanh Dock" : "Hiện biểu tượng DriveBar trên thanh Dock")
+            .help("Mở Windows Preview (Chuột phải để đổi phím tắt \(settings.windowSwitcherHotKey.readableDisplay))")
 
             Button {
                 LauncherPanelController.shared.hide()
                 AppDelegate.shared?.openSettingsWindow()
             } label: {
                 Image(systemName: "gearshape")
-                    .font(.system(size: 12))
+                    .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(.secondary)
-                    .padding(3)
+                    .padding(4)
             }
             .buttonStyle(.plain)
             .fixedSize(horizontal: true, vertical: false)
-            .help("Mở Cài đặt & Kiểm tra cập nhật tự động")
+            .contextMenu {
+                Button("Cài đặt DriveBar (⌘,)...") {
+                    LauncherPanelController.shared.hide()
+                    AppDelegate.shared?.openSettingsWindow()
+                }
+                Divider()
+                Button("Đổi phím tắt Tìm kiếm (\(settings.searchHotKey.readableDisplay))...") {
+                    LauncherPanelController.shared.hide()
+                    HotKeyService.shared.openSettingsAndRecord(.search)
+                }
+                Button("Đổi phím tắt Universal Actions (\(settings.universalActionHotKey.readableDisplay))...") {
+                    LauncherPanelController.shared.hide()
+                    HotKeyService.shared.openSettingsAndRecord(.universalAction)
+                }
+                Divider()
+                Button(settings.showDockIcon ? "Ẩn khỏi thanh Dock" : "Hiện trên thanh Dock") {
+                    settings.showDockIcon.toggle()
+                }
+                Button("Kiểm tra cập nhật...") {
+                    LauncherPanelController.shared.hide()
+                    AppDelegate.shared?.openSettingsWindow()
+                    UpdateCheckerService.shared.checkForUpdatesManually()
+                }
+            }
+            .help("Cài đặt DriveBar (⌘,) • Chuột phải để truy cập nhanh phím tắt & thanh Dock")
         }
         .font(.system(size: 10.5, weight: .regular))
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
         .padding(.vertical, 7.5)
         .background(Color.primary.opacity(0.02))
     }

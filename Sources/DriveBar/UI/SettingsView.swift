@@ -4,16 +4,49 @@ import ApplicationServices
 import Carbon
 import Contacts
 
+// MARK: - Settings UI State (ObservableObject)
+
 @MainActor
 final class SettingsUIState: ObservableObject {
     static let shared = SettingsUIState()
 
-    enum Tab: String, CaseIterable {
-        case general = "Phím tắt & Drive"
+    enum Tab: String, CaseIterable, Identifiable {
+        case general = "Cài đặt chung"
+        case googleDrive = "Google Drive & Đồng bộ"
         case windowSwitcher = "Windows Preview"
         case systemAndContacts = "Hệ thống & Danh bạ"
         case aiMarkdown = "Convert Markdown"
         case actions = "Universal Actions"
+
+        var id: String { rawValue }
+
+        var sfSymbol: String {
+            switch self {
+            case .general: return "gearshape"
+            case .googleDrive: return "icloud"
+            case .windowSwitcher: return "macwindow.on.rectangle"
+            case .systemAndContacts: return "terminal"
+            case .aiMarkdown: return "doc.text"
+            case .actions: return "bolt.horizontal"
+            }
+        }
+
+        var pageSubtitle: String {
+            switch self {
+            case .general:
+                return "Khởi động, thanh Dock, phím tắt toàn cục và lịch sử Clipboard"
+            case .googleDrive:
+                return "Chỉ mục tìm kiếm tức thời Google Drive và đồng bộ đa thiết bị"
+            case .windowSwitcher:
+                return "Chuyển đổi và xem trước trực tiếp các cửa sổ đang mở trên mọi màn hình"
+            case .systemAndContacts:
+                return "Tra cứu Danh bạ không dấu ('c ') và điều khiển hệ thống macOS ('s ')"
+            case .aiMarkdown:
+                return "Tùy chọn chuyển đổi tài liệu sang Markdown tối ưu cho LLM"
+            case .actions:
+                return "Quản lý danh mục hành động nhanh trên tệp tin, thư mục và văn bản"
+            }
+        }
     }
 
     @Published var selectedTab: Tab = .general
@@ -23,7 +56,7 @@ final class SettingsUIState: ObservableObject {
     @Published var actionFilter: String = ""
     @Published var systemCommandFilter: String = ""
 
-    // Manual Custom Shortcut Builder State (avoids @State macro in CommandLineTools)
+    // Manual Custom Shortcut Builder State
     @Published var manualBuilderTarget: HotKeyService.RecordingTarget?
     @Published var manualCmd: Bool = true
     @Published var manualOpt: Bool = false
@@ -60,6 +93,8 @@ final class SettingsUIState: ObservableObject {
     }
 }
 
+// MARK: - Root Settings Window View (Authentic macOS System Settings Two-Column Layout)
+
 struct SettingsView: View {
     @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var driveService = GoogleDriveIndexService.shared
@@ -68,175 +103,30 @@ struct SettingsView: View {
     @ObservedObject private var uiState = SettingsUIState.shared
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Top Header Banner with Quick Dock Toggle & 1-Click Auto-Update Button
-            VStack(spacing: 12) {
-                HStack(spacing: 14) {
-                    Image(nsImage: NSApp.applicationIconImage)
-                        .resizable()
-                        .interpolation(.high)
-                        .frame(width: 44, height: 44)
+        HStack(spacing: 0) {
+            // Left Sidebar (macOS Frosted Sidebar extending behind traffic lights)
+            sidebarColumn
+                .frame(width: 222)
+                .background(
+                    VisualEffectFrostView(material: .sidebar, blendingMode: .behindWindow)
+                        .ignoresSafeArea()
+                )
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 8) {
-                            Text("DriveBar")
-                                .font(.system(size: 16, weight: .semibold))
-                            Text("v\(updater.currentVersion)")
-                                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 2)
-                                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-                                .foregroundStyle(.secondary)
-                        }
-                        Text("Google Drive • Windows Preview (⌘Tab) • Convert Markdown cho AI")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                    }
+            // Vertical Hairline Divider
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor))
+                .frame(width: 1)
+                .ignoresSafeArea()
 
-                    Spacer()
-
-                    // Quick Shortcut Recorder Badges in Header
-                    Button {
-                        uiState.selectedTab = .general
-                        hotKeyService.startRecording(for: .search)
-                    } label: {
-                        Label(
-                            hotKeyService.recordingTarget == .search
-                                ? (hotKeyService.liveModifiersPreview.isEmpty ? "Nhấn phím..." : hotKeyService.liveModifiersPreview)
-                                : "Tìm: \(settings.searchHotKey.readableDisplay)",
-                            systemImage: "command"
-                        )
-                        .font(.system(size: 11, weight: .medium))
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(hotKeyService.recordingTarget == .search ? .orange : nil)
-                    .controlSize(.small)
-                    .help("Bấm để tự thiết lập phím tắt gọi nhanh DriveBar (Mặc định: ⌘Space)")
-
-                    Button {
-                        uiState.selectedTab = .general
-                        hotKeyService.startRecording(for: .universalAction)
-                    } label: {
-                        Label(
-                            hotKeyService.recordingTarget == .universalAction
-                                ? (hotKeyService.liveModifiersPreview.isEmpty ? "Nhấn phím..." : hotKeyService.liveModifiersPreview)
-                                : "Action: \(settings.universalActionHotKey.readableDisplay)",
-                            systemImage: "bolt.horizontal"
-                        )
-                        .font(.system(size: 11, weight: .medium))
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(hotKeyService.recordingTarget == .universalAction ? .orange : nil)
-                    .controlSize(.small)
-                    .help("Bấm để tự thiết lập phím tắt mở Universal Actions trên Finder (Mặc định: ⌘/)")
-
-                    Button {
-                        uiState.selectedTab = .windowSwitcher
-                        hotKeyService.startRecording(for: .windowSwitcher)
-                    } label: {
-                        Label(
-                            hotKeyService.recordingTarget == .windowSwitcher
-                                ? (hotKeyService.liveModifiersPreview.isEmpty ? "Nhấn phím..." : hotKeyService.liveModifiersPreview)
-                                : "Cửa sổ: \(settings.windowSwitcherHotKey.readableDisplay)",
-                            systemImage: "macwindow.on.rectangle"
-                        )
-                        .font(.system(size: 11, weight: .medium))
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(hotKeyService.recordingTarget == .windowSwitcher ? .orange : nil)
-                    .controlSize(.small)
-                    .help("Bấm để tự thiết lập phím tắt mở Windows Preview (Mặc định: ⌘⇥)")
-
-                    // Quick Toggle Show/Hide on Dock Button
-                    Button {
-                        settings.showDockIcon.toggle()
-                        settings.statusBannerMessage = settings.showDockIcon
-                            ? "Đã hiện biểu tượng DriveBar trên thanh Dock."
-                            : "Đã ẩn DriveBar khỏi thanh Dock (chỉ hiện gọn trên Menu Bar)."
-                    } label: {
-                        Label(
-                            settings.showDockIcon ? "Hiện Dock" : "Ẩn Dock",
-                            systemImage: settings.showDockIcon ? "dock.arrow.up.rectangle" : "menubar.rectangle"
-                        )
-                        .font(.system(size: 11, weight: .semibold))
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-
-                    // Quick 1-Click Auto-Update Button
-                    headerUpdateButton
-                }
-
-                Picker("", selection: $uiState.selectedTab) {
-                    ForEach(SettingsUIState.Tab.allCases, id: \.self) { t in
-                        Text(t.rawValue).tag(t)
-                    }
-                }
-                .pickerStyle(.segmented)
-            }
-            .padding(.horizontal, 22)
-            .padding(.vertical, 14)
-            .background(Color.primary.opacity(0.03))
-
-            Divider()
-
-            if let banner = settings.statusBannerMessage {
-                HStack(spacing: 8) {
-                    Image(systemName: "info.circle.fill")
-                        .foregroundStyle(.secondary)
-                    Text(banner)
-                        .font(.system(size: 12, weight: .regular))
-                    Spacer()
-                    Button {
-                        settings.statusBannerMessage = nil
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 10, weight: .semibold))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 8)
-                .background(Color.primary.opacity(0.04))
-                Divider()
-            }
-
-            // Tab Body
-            Group {
-                switch uiState.selectedTab {
-                case .general:
-                    GeneralSettingsTab(
-                        settings: settings,
-                        driveService: driveService,
-                        hotKeyService: hotKeyService,
-                        updater: updater,
-                        syncService: SyncAndLatchingService.shared,
-                        uiState: uiState,
-                        axTrusted: $uiState.axTrusted
-                    )
-                case .windowSwitcher:
-                    WindowSwitcherSettingsTab(
-                        settings: settings,
-                        hotKeyService: hotKeyService,
-                        switcherController: WindowSwitcherController.shared,
-                        switcherService: WindowSwitcherService.shared,
-                        uiState: uiState
-                    )
-                case .systemAndContacts:
-                    SystemAndContactsSettingsTab(
-                        settings: settings,
-                        uiState: uiState
-                    )
-                case .aiMarkdown:
-                    AIMarkdownSettingsTab(settings: settings, isDropTargeted: $uiState.isDropTargeted)
-                case .actions:
-                    UniversalActionsChecklistTab(settings: settings, uiState: uiState)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Right Detail Pane
+            detailColumn
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(
+                    Color(nsColor: .windowBackgroundColor)
+                        .ignoresSafeArea()
+                )
         }
-        .frame(width: 840, height: 640)
+        .frame(minWidth: 780, idealWidth: 860, maxWidth: .infinity, minHeight: 540, idealHeight: 620, maxHeight: .infinity)
         .onAppear {
             uiState.axTrusted = AXIsProcessTrusted()
             uiState.screenCaptureTrusted = CGPreflightScreenCaptureAccess()
@@ -245,404 +135,866 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Left Sidebar
+
+    private var sidebarColumn: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Clearance for macOS traffic-light window controls
+            Color.clear
+                .frame(height: 38)
+
+            // Clean App Identity Header
+            HStack(spacing: 10) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 36, height: 36)
+
+                VStack(alignment: .leading, spacing: 1.5) {
+                    Text("DriveBar")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Text("Phiên bản \(updater.currentVersion)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 14)
+
+            // Sidebar Navigation List
+            VStack(spacing: 2) {
+                ForEach(SettingsUIState.Tab.allCases) { tab in
+                    sidebarRow(for: tab)
+                }
+            }
+            .padding(.horizontal, 10)
+
+            Spacer(minLength: 12)
+
+            Divider()
+                .padding(.horizontal, 14)
+
+            // Compact Update Status Footer in Sidebar
+            sidebarUpdateFooter
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+        }
+    }
+
+    private func sidebarRow(for tab: SettingsUIState.Tab) -> some View {
+        let isSelected = (uiState.selectedTab == tab)
+        return Button {
+            if uiState.selectedTab != tab {
+                hotKeyService.stopRecording()
+                hotKeyService.registerAll()
+                uiState.manualBuilderTarget = nil
+                uiState.selectedTab = tab
+            }
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: tab.sfSymbol)
+                    .font(.system(size: 13.5, weight: .medium))
+                    .foregroundStyle(isSelected ? Color.white : Color.secondary)
+                    .frame(width: 18, alignment: .center)
+
+                Text(tab.rawValue)
+                    .font(.system(size: 13, weight: isSelected ? .medium : .regular))
+                    .foregroundStyle(isSelected ? Color.white : Color.primary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6.5)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isSelected ? Color(nsColor: .selectedContentBackgroundColor) : Color.clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     @ViewBuilder
-    private var headerUpdateButton: some View {
+    private var sidebarUpdateFooter: some View {
         switch updater.state {
         case .available(let ver, _, _, _):
-            Button {
-                updater.installAvailableUpdate()
-            } label: {
-                Label("Tự động cập nhật v\(ver)", systemImage: "arrow.down.circle.fill")
-                    .font(.system(size: 11.5, weight: .semibold))
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 7, height: 7)
+                Text("Bản mới v\(ver)")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Button("Cập nhật") {
+                    updater.installAvailableUpdate()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.mini)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(.green)
-            .controlSize(.small)
 
         case .checking:
-            Button {} label: {
-                Label("Đang kiểm tra...", systemImage: "arrow.triangle.2.circlepath")
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.mini)
+                Text("Đang kiểm tra...")
                     .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
             }
-            .controlSize(.small)
-            .disabled(true)
 
         case .downloading(let ver):
-            Button {} label: {
-                Label("Đang tải v\(ver)...", systemImage: "arrow.down.circle")
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.mini)
+                Text("Đang tải v\(ver)...")
                     .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
             }
-            .controlSize(.small)
-            .disabled(true)
 
         case .installing(let ver):
-            Button {} label: {
-                Label("Đang cài v\(ver)...", systemImage: "gearshape.2")
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.mini)
+                Text("Đang cài v\(ver)...")
                     .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
             }
-            .controlSize(.small)
-            .disabled(true)
+
+        case .upToDate:
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.green)
+                Text("Đã là bản mới nhất")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Button("Kiểm tra") {
+                    updater.checkForUpdatesManually()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+            }
 
         default:
+            HStack(spacing: 6) {
+                Text("Cập nhật tự động")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Button("Kiểm tra") {
+                    updater.checkForUpdatesManually()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+            }
+        }
+    }
+
+    // MARK: - Right Detail Column
+
+    private var detailColumn: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Top Page Title Bar
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(uiState.selectedTab.rawValue)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Text(uiState.selectedTab.pageSubtitle)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 12)
+
+                detailHeaderTrailingControl
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 20)
+            .padding(.bottom, 14)
+
+            Divider()
+
+            // Optional Dismissible Notification Banner
+            if let banner = settings.statusBannerMessage {
+                HStack(spacing: 8) {
+                    Image(systemName: "info.circle.fill")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.secondary)
+                    Text(banner)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                    Spacer(minLength: 8)
+                    Button {
+                        settings.statusBannerMessage = nil
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(3)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 28)
+                .padding(.vertical, 8)
+                .background(Color.primary.opacity(0.035))
+
+                Divider()
+            }
+
+            // Active Pane Content
+            Group {
+                switch uiState.selectedTab {
+                case .general:
+                    GeneralSettingsPane(
+                        settings: settings,
+                        hotKeyService: hotKeyService,
+                        updater: updater,
+                        uiState: uiState
+                    )
+                case .googleDrive:
+                    GoogleDriveSettingsPane(
+                        settings: settings,
+                        driveService: driveService,
+                        syncService: SyncAndLatchingService.shared
+                    )
+                case .windowSwitcher:
+                    WindowSwitcherSettingsPane(
+                        settings: settings,
+                        hotKeyService: hotKeyService,
+                        switcherController: WindowSwitcherController.shared,
+                        switcherService: WindowSwitcherService.shared,
+                        uiState: uiState
+                    )
+                case .systemAndContacts:
+                    SystemAndContactsSettingsPane(
+                        settings: settings,
+                        uiState: uiState
+                    )
+                case .aiMarkdown:
+                    AIMarkdownSettingsPane(
+                        settings: settings,
+                        isDropTargeted: $uiState.isDropTargeted
+                    )
+                case .actions:
+                    UniversalActionsSettingsPane(
+                        settings: settings,
+                        uiState: uiState
+                    )
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    @ViewBuilder
+    private var detailHeaderTrailingControl: some View {
+        switch uiState.selectedTab {
+        case .general:
             Button {
-                updater.checkForUpdatesManually()
+                LauncherPanelController.shared.toggleSearchPanel()
             } label: {
-                Label("Kiểm tra cập nhật", systemImage: "arrow.triangle.2.circlepath")
-                    .font(.system(size: 11.5, weight: .medium))
+                Label("Mở Tìm kiếm", systemImage: "magnifyingglass")
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+
+        case .googleDrive:
+            Button {
+                LauncherPanelController.shared.toggleSearchPanel()
+            } label: {
+                Label("Mở Tìm kiếm", systemImage: "magnifyingglass")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+
+        case .windowSwitcher:
+            Button {
+                WindowSwitcherController.shared.openPinnedFromMenuOrSearch()
+            } label: {
+                Label("Mở xem thử", systemImage: "macwindow.on.rectangle")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+
+        case .systemAndContacts:
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                TextField("Tìm lệnh hệ thống...", text: $uiState.systemCommandFilter)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .frame(width: 155)
+                if !uiState.systemCommandFilter.isEmpty {
+                    Button {
+                        uiState.systemCommandFilter = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4.5)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.75)
+            )
+
+        case .aiMarkdown:
+            EmptyView()
+
+        case .actions:
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                TextField("Tìm hành động...", text: $uiState.actionFilter)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .frame(width: 155)
+                if !uiState.actionFilter.isEmpty {
+                    Button {
+                        uiState.actionFilter = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4.5)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.75)
+            )
         }
     }
 }
 
-// MARK: - Tab 1: General, Dock Visibility, Auto-Update & Google Drive
+// MARK: - Reusable Native macOS Sonoma / Sequoia System Settings Building Blocks
 
-private struct GeneralSettingsTab: View {
+private struct MacSettingsSection<HeaderTrailing: View, Content: View>: View {
+    let title: String?
+    let footer: String?
+    let headerTrailing: HeaderTrailing
+    let content: Content
+
+    init(
+        title: String? = nil,
+        footer: String? = nil,
+        @ViewBuilder headerTrailing: () -> HeaderTrailing = { EmptyView() },
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.footer = footer
+        self.headerTrailing = headerTrailing()
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if title != nil || !(HeaderTrailing.self == EmptyView.self) {
+                HStack(alignment: .firstTextBaseline) {
+                    if let title {
+                        Text(title)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.primary)
+                    }
+                    Spacer()
+                    headerTrailing
+                }
+                .padding(.horizontal, 4)
+            }
+
+            VStack(alignment: .leading, spacing: 0) {
+                content
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color(nsColor: .separatorColor).opacity(0.75), lineWidth: 0.75)
+            )
+
+            if let footer {
+                Text(footer)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
+                    .padding(.top, 1)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+private struct MacSettingsRowDivider: View {
+    var leadingInset: CGFloat = 14
+
+    var body: some View {
+        Divider()
+            .padding(.leading, leadingInset)
+    }
+}
+
+private struct MacSettingsRow<Trailing: View>: View {
+    let symbol: String?
+    let title: String
+    let subtitle: String?
+    let statusDotColor: Color?
+    let statusText: String?
+    let trailing: Trailing
+
+    init(
+        symbol: String? = nil,
+        title: String,
+        subtitle: String? = nil,
+        statusDotColor: Color? = nil,
+        statusText: String? = nil,
+        @ViewBuilder trailing: () -> Trailing
+    ) {
+        self.symbol = symbol
+        self.title = title
+        self.subtitle = subtitle
+        self.statusDotColor = statusDotColor
+        self.statusText = statusText
+        self.trailing = trailing()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            if let symbol {
+                Image(systemName: symbol)
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20, alignment: .center)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(.primary)
+
+                    if let statusDotColor, let statusText {
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(statusDotColor)
+                                .frame(width: 5.5, height: 5.5)
+                            Text(statusText)
+                                .font(.system(size: 10.5, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1.5)
+                        .background(Color.primary.opacity(0.05), in: Capsule())
+                    }
+                }
+
+                if let subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Spacer(minLength: 16)
+
+            trailing
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+}
+
+private struct MacSettingsToggleRow: View {
+    let title: String
+    let subtitle: String?
+    @Binding var isOn: Bool
+
+    init(title: String, subtitle: String? = nil, isOn: Binding<Bool>) {
+        self.title = title
+        self.subtitle = subtitle
+        self._isOn = isOn
+    }
+
+    var body: some View {
+        MacSettingsRow(title: title, subtitle: subtitle) {
+            Toggle("", isOn: $isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+        }
+    }
+}
+
+// MARK: - Native Keycap Shortcut Recorder Control + Preset Menu
+
+private struct MacShortcutPreset: Identifiable {
+    let id: String
+    let label: String
+    let binding: HotKeyBinding
+
+    init(_ label: String, binding: HotKeyBinding) {
+        self.id = "\(binding.carbonModifiers)-\(binding.keyCode)-\(label)"
+        self.label = label
+        self.binding = binding
+    }
+}
+
+private struct MacShortcutRecorderControl: View {
+    @ObservedObject var hotKeyService: HotKeyService
+    @ObservedObject var uiState: SettingsUIState
+    let target: HotKeyService.RecordingTarget
+    let current: HotKeyBinding
+    let defaultBinding: HotKeyBinding
+    let presets: [MacShortcutPreset]
+    var isEnabled: Bool = true
+
+    private var isRecording: Bool {
+        hotKeyService.recordingTarget == target
+    }
+
+    private var keycapLabel: String {
+        guard isRecording else {
+            return current.readableDisplay
+        }
+        if !hotKeyService.liveModifiersPreview.isEmpty {
+            return hotKeyService.liveModifiersPreview
+        }
+        return "Nhấn phím..."
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            // Native Keycap Recorder Field
+            Button {
+                uiState.manualBuilderTarget = nil
+                if isRecording {
+                    hotKeyService.stopRecording()
+                    hotKeyService.registerAll()
+                } else {
+                    hotKeyService.startRecording(for: target)
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    if isRecording {
+                        Circle()
+                            .fill(Color.orange)
+                            .frame(width: 6, height: 6)
+                    }
+                    Text(keycapLabel)
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .foregroundStyle(isRecording ? Color.orange : Color.primary)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 10)
+                .frame(minWidth: 96, minHeight: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isRecording ? Color.orange.opacity(0.10) : Color(nsColor: .textBackgroundColor))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(
+                            isRecording ? Color.orange : Color(nsColor: .separatorColor),
+                            lineWidth: isRecording ? 1.25 : 0.85
+                        )
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(!isEnabled)
+            .help("Bấm vào ô rồi nhấn tổ hợp phím mới (Nhấn Esc để hủy)")
+
+            // Compact Preset & Options Menu
+            Menu {
+                Section("Tổ hợp phím gợi ý") {
+                    ForEach(presets) { preset in
+                        Button {
+                            uiState.manualBuilderTarget = nil
+                            hotKeyService.applyRecordedBinding(preset.binding, for: target)
+                        } label: {
+                            if current == preset.binding {
+                                Text("✓ \(preset.label)")
+                            } else {
+                                Text(preset.label)
+                            }
+                        }
+                    }
+                }
+
+                Divider()
+
+                Button(uiState.manualBuilderTarget == target ? "Ẩn bảng ghép phím thủ công" : "Tự ghép phím thủ công...") {
+                    uiState.toggleManualBuilder(for: target, current: current)
+                }
+
+                Button("Khôi phục mặc định (\(defaultBinding.readableDisplay))") {
+                    uiState.manualBuilderTarget = nil
+                    hotKeyService.applyRecordedBinding(defaultBinding, for: target)
+                }
+                .disabled(current == defaultBinding && !isRecording)
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(.secondary)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .disabled(!isEnabled)
+            .help("Chọn nhanh tổ hợp phím gợi ý hoặc tự ghép phím thủ công")
+        }
+        .opacity(isEnabled ? 1.0 : 0.45)
+    }
+}
+
+private struct MacManualShortcutBuilderBar: View {
     @ObservedObject var settings: AppSettings
-    @ObservedObject var driveService: GoogleDriveIndexService
+    @ObservedObject var hotKeyService: HotKeyService
+    @ObservedObject var uiState: SettingsUIState
+    let target: HotKeyService.RecordingTarget
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("Ghép phím:")
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            Toggle("⌘", isOn: $uiState.manualCmd)
+                .toggleStyle(.checkbox)
+                .font(.system(size: 12, weight: .medium))
+            Toggle("⌥", isOn: $uiState.manualOpt)
+                .toggleStyle(.checkbox)
+                .font(.system(size: 12, weight: .medium))
+            Toggle("⌃", isOn: $uiState.manualCtrl)
+                .toggleStyle(.checkbox)
+                .font(.system(size: 12, weight: .medium))
+            Toggle("⇧", isOn: $uiState.manualShift)
+                .toggleStyle(.checkbox)
+                .font(.system(size: 12, weight: .medium))
+
+            Text("+")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+
+            Picker("", selection: $uiState.manualKeyCode) {
+                ForEach(HotKeyBinding.selectableKeys, id: \.keyCode) { item in
+                    Text(item.label).tag(item.keyCode)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 145)
+            .controlSize(.small)
+
+            Spacer()
+
+            Button("Hủy") {
+                uiState.manualBuilderTarget = nil
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+
+            Button("Áp dụng") {
+                if let built = uiState.constructedManualBinding {
+                    hotKeyService.applyRecordedBinding(built, for: target)
+                    uiState.manualBuilderTarget = nil
+                } else {
+                    NSSound.beep()
+                    settings.statusBannerMessage = "Vui lòng chọn ít nhất 1 phím bổ trợ (⌘, ⌥, ⌃, ⇧) hoặc phím F1–F12."
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(Color.primary.opacity(0.025))
+    }
+}
+
+// MARK: - Pane 1: Cài đặt chung (General, Shortcuts, Clipboard & Permissions)
+
+private struct GeneralSettingsPane: View {
+    @ObservedObject var settings: AppSettings
     @ObservedObject var hotKeyService: HotKeyService
     @ObservedObject var updater: UpdateCheckerService
-    @ObservedObject var syncService: SyncAndLatchingService
     @ObservedObject var uiState: SettingsUIState
     @ObservedObject private var clipboardService = ClipboardHistoryService.shared
-    @Binding var axTrusted: Bool
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                // 1. Global Custom Hotkeys Section (Default: Command + Space)
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 12) {
-                        // A. Search Launcher Hotkey Row
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(alignment: .center, spacing: 10) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    HStack(spacing: 8) {
-                                        Text("Phím tắt Mở thanh Tìm kiếm Google Drive")
-                                            .font(.system(size: 13, weight: .semibold))
-                                        shortcutStatusPill(isActive: hotKeyService.isSearchHotKeyActive)
-                                    }
-                                    Text("Mặc định: Command + Space (⌘Space) • Bấm nút bên phải rồi nhấn tổ hợp phím bất kỳ bạn muốn")
-                                        .font(.system(size: 11.5))
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
+            VStack(alignment: .leading, spacing: 20) {
+                // 1. Startup & Appearance
+                MacSettingsSection(title: "Khởi động & Giao diện") {
+                    MacSettingsToggleRow(
+                        title: "Tự khởi động cùng macOS",
+                        subtitle: "Tự động chạy nền ngay khi đăng nhập vào máy Mac",
+                        isOn: Binding(
+                            get: { settings.launchAtLogin },
+                            set: { settings.toggleLaunchAtLogin($0) }
+                        )
+                    )
 
-                                Button {
-                                    uiState.manualBuilderTarget = nil
-                                    if hotKeyService.recordingTarget == .search {
-                                        hotKeyService.stopRecording()
-                                        hotKeyService.registerAll()
-                                    } else {
-                                        hotKeyService.startRecording(for: .search)
-                                    }
-                                } label: {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: hotKeyService.recordingTarget == .search ? "record.circle.fill" : "keyboard")
-                                        Text(recorderButtonTitle(for: .search, current: settings.searchHotKey))
-                                            .font(.system(size: 13, weight: .bold, design: .monospaced))
-                                    }
-                                    .frame(minWidth: 155)
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .tint(hotKeyService.recordingTarget == .search ? .orange : .accentColor)
+                    MacSettingsRowDivider()
 
-                                Button("Mặc định (⌘Space)") {
-                                    hotKeyService.applyRecordedBinding(.defaultSearch, for: .search)
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .disabled(settings.searchHotKey == .defaultSearch && hotKeyService.recordingTarget == nil)
-                            }
+                    MacSettingsToggleRow(
+                        title: "Hiển thị biểu tượng trên thanh Dock",
+                        subtitle: "Khi tắt, ứng dụng chỉ hiển thị gọn trên thanh Menu Bar phía trên",
+                        isOn: $settings.showDockIcon
+                    )
 
-                            // Quick 1-Click Presets + Manual Builder Toggle for Search
-                            HStack(spacing: 6) {
-                                Text("Chọn nhanh:")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
+                    MacSettingsRowDivider()
 
-                                presetChip(title: "⌘Space (Mặc định)", binding: .commandSpace, current: settings.searchHotKey, target: .search)
-                                presetChip(title: "⌥Space", binding: .optionSpace, current: settings.searchHotKey, target: .search)
-                                presetChip(title: "⌃Space", binding: .controlSpace, current: settings.searchHotKey, target: .search)
-                                presetChip(title: "⌘⇧Space", binding: .commandShiftSpace, current: settings.searchHotKey, target: .search)
+                    MacSettingsToggleRow(
+                        title: "Tìm kèm ứng dụng macOS",
+                        subtitle: "Hiển thị thêm ứng dụng trong /Applications khi gõ tìm kiếm chung (hoặc dùng tiền tố 'a ')",
+                        isOn: $settings.includeMacAppsInSearch
+                    )
+                }
 
-                                Spacer()
-
-                                Button {
-                                    uiState.toggleManualBuilder(for: .search, current: settings.searchHotKey)
-                                } label: {
-                                    Label(
-                                        uiState.manualBuilderTarget == .search ? "Ẩn ghép phím" : "Tự ghép phím thủ công",
-                                        systemImage: uiState.manualBuilderTarget == .search ? "chevron.up" : "slider.horizontal.3"
-                                    )
-                                    .font(.system(size: 11, weight: .medium))
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.mini)
-                            }
-
-                            if uiState.manualBuilderTarget == .search {
-                                manualShortcutBuilderRow(for: .search)
-                            }
-                        }
-
-                        Divider()
-
-                        // B. Universal Actions Hotkey Row (Finder & Global)
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(alignment: .center, spacing: 10) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    HStack(spacing: 8) {
-                                        Text("Phím tắt Mở Universal Actions khi thao tác trên Finder")
-                                            .font(.system(size: 13, weight: .semibold))
-                                        shortcutStatusPill(isActive: hotKeyService.isUniversalHotKeyActive)
-                                    }
-                                    Text("Mặc định: Command + / (⌘/) • Chọn file/thư mục trong Finder (hoặc URL / văn bản bôi đen) rồi nhấn phím tắt")
-                                        .font(.system(size: 11.5))
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-
-                                Button {
-                                    uiState.manualBuilderTarget = nil
-                                    if hotKeyService.recordingTarget == .universalAction {
-                                        hotKeyService.stopRecording()
-                                        hotKeyService.registerAll()
-                                    } else {
-                                        hotKeyService.startRecording(for: .universalAction)
-                                    }
-                                } label: {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: hotKeyService.recordingTarget == .universalAction ? "record.circle.fill" : "keyboard")
-                                        Text(recorderButtonTitle(for: .universalAction, current: settings.universalActionHotKey))
-                                            .font(.system(size: 13, weight: .bold, design: .monospaced))
-                                    }
-                                    .frame(minWidth: 155)
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .tint(hotKeyService.recordingTarget == .universalAction ? .orange : .accentColor)
-
-                                Button("Mặc định (⌘/)") {
-                                    hotKeyService.applyRecordedBinding(.defaultUniversalAction, for: .universalAction)
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .disabled(settings.universalActionHotKey == .defaultUniversalAction && hotKeyService.recordingTarget == nil)
-                            }
-
-                            HStack(spacing: 6) {
-                                Text("Chọn nhanh:")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
-
-                                presetChip(title: "⌘/ (Mặc định)", binding: .commandSlash, current: settings.universalActionHotKey, target: .universalAction)
-                                presetChip(title: "⌘\\", binding: .commandBackslash, current: settings.universalActionHotKey, target: .universalAction)
-                                presetChip(title: "⌥⌘/", binding: .optionCommandSlash, current: settings.universalActionHotKey, target: .universalAction)
-                                presetChip(title: "⌘⇧A", binding: .commandShiftA, current: settings.universalActionHotKey, target: .universalAction)
-                                presetChip(title: "⌘⇧M", binding: .commandShiftM, current: settings.universalActionHotKey, target: .universalAction)
-
-                                Spacer()
-
-                                Button {
-                                    uiState.toggleManualBuilder(for: .universalAction, current: settings.universalActionHotKey)
-                                } label: {
-                                    Label(
-                                        uiState.manualBuilderTarget == .universalAction ? "Ẩn ghép phím" : "Tự ghép phím thủ công",
-                                        systemImage: uiState.manualBuilderTarget == .universalAction ? "chevron.up" : "slider.horizontal.3"
-                                    )
-                                    .font(.system(size: 11, weight: .medium))
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.mini)
-                            }
-
-                            if uiState.manualBuilderTarget == .universalAction {
-                                manualShortcutBuilderRow(for: .universalAction)
-                            }
-                        }
-
-                        if let warn = hotKeyService.registrationWarning {
-                            HStack(spacing: 10) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(.orange)
-                                Text(warn)
-                                    .font(.system(size: 11.5))
-                                    .foregroundStyle(.orange)
-                                Spacer()
-                                Button("Mở Cài đặt Bàn phím macOS") {
-                                    hotKeyService.openMacOSKeyboardShortcutsSettings()
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.mini)
-                            }
-                            .padding(8)
-                            .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-                        }
-                    }
-                    .padding(8)
-                } label: {
-                    HStack {
-                        Label("Thiết lập Phím tắt Toàn cục (Mặc định: Tìm kiếm ⌘Space • Finder Action ⌘/)", systemImage: "command.square.fill")
-                            .font(.system(size: 13, weight: .semibold))
-                        Spacer()
+                // 2. Global Keyboard Shortcuts
+                MacSettingsSection(
+                    title: "Phím tắt toàn cục",
+                    headerTrailing: {
                         Button("Khôi phục mặc định") {
+                            uiState.manualBuilderTarget = nil
                             settings.resetShortcutsToDefault()
                         }
                         .buttonStyle(.link)
                         .font(.system(size: 11.5))
                     }
-                }
-
-                // 2. Dock Visibility Cards ("Nút ẩn hiện trên Dock")
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack(spacing: 12) {
-                            dockOptionCard(
-                                isSelected: settings.showDockIcon,
-                                title: "Hiện trên thanh Dock & Menu Bar",
-                                subtitle: "Hiển thị icon DriveBar trên thanh Dock, Cmd+Tab và cho phép kéo thả file trực tiếp vào icon trên Dock để Convert sang Markdown.",
-                                symbol: "dock.arrow.up.rectangle"
-                            ) {
-                                settings.showDockIcon = true
-                            }
-
-                            dockOptionCard(
-                                isSelected: !settings.showDockIcon,
-                                title: "Ẩn khỏi thanh Dock (Chỉ Menu Bar)",
-                                subtitle: "Ẩn hoàn toàn khỏi thanh Dock và Cmd+Tab để tối ưu không gian màn hình, gọi nhanh mọi lúc bằng phím tắt như Alfred.",
-                                symbol: "menubar.rectangle"
-                            ) {
-                                settings.showDockIcon = false
-                            }
-                        }
-
-                        Divider()
-
-                        HStack(spacing: 24) {
-                            Toggle("Tự khởi động cùng macOS (Launch at Login)", isOn: Binding(
-                                get: { settings.launchAtLogin },
-                                set: { settings.toggleLaunchAtLogin($0) }
-                            ))
-                            .toggleStyle(.switch)
-
-                            Toggle("Hiển thị thêm Ứng dụng macOS khi gõ tìm kiếm", isOn: $settings.includeMacAppsInSearch)
-                                .toggleStyle(.switch)
-                        }
-                        .font(.system(size: 12.5, weight: .medium))
+                ) {
+                    MacSettingsRow(
+                        title: "Mở thanh Tìm kiếm",
+                        subtitle: "Tìm nhanh Google Drive, ứng dụng, danh bạ ('c ') và lệnh hệ thống ('s ')",
+                        statusDotColor: hotKeyService.isSearchHotKeyActive ? nil : .orange,
+                        statusText: hotKeyService.isSearchHotKeyActive ? nil : "Trùng phím"
+                    ) {
+                        MacShortcutRecorderControl(
+                            hotKeyService: hotKeyService,
+                            uiState: uiState,
+                            target: .search,
+                            current: settings.searchHotKey,
+                            defaultBinding: .defaultSearch,
+                            presets: [
+                                MacShortcutPreset("⌘Space (Mặc định)", binding: .commandSpace),
+                                MacShortcutPreset("⌥Space", binding: .optionSpace),
+                                MacShortcutPreset("⌃Space", binding: .controlSpace),
+                                MacShortcutPreset("⌘⇧Space", binding: .commandShiftSpace)
+                            ]
+                        )
                     }
-                    .padding(8)
-                } label: {
-                    Label("Hiển thị trên Thanh Dock & Khởi động", systemImage: "dock.rectangle")
-                        .font(.system(size: 13, weight: .semibold))
-                }
 
-                // 3. Google Drive Index Section (Real-time FSEvents + Multi-Account)
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Image(systemName: driveService.accountRoot != nil ? "checkmark.icloud.fill" : "exclamationmark.icloud.fill")
-                                .foregroundStyle(driveService.accountRoot != nil ? .green : .orange)
-                                .font(.system(size: 20))
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 8) {
-                                    Text(driveService.accountRoot ?? "Chưa tìm thấy thư mục Google Drive")
-                                        .font(.system(size: 12.5, weight: .semibold))
-                                        .lineLimit(1)
-                                    if driveService.isRealtimeWatcherActive {
-                                        Text("Real-time FSEvents")
-                                            .font(.system(size: 10, weight: .semibold))
-                                            .foregroundStyle(.green)
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 2)
-                                            .background(Color.green.opacity(0.14), in: Capsule())
-                                    }
-                                }
-                                HStack(spacing: 14) {
-                                    Text("My Drive: **\(driveService.folderCount.formatted())** thư mục")
-                                    Text("Shared: **\(driveService.sharedCount.formatted())** mục")
-                                    Text("Tệp tin: **\(driveService.fileCount.formatted())** tệp")
-                                    if let updated = driveService.lastCacheUpdate {
-                                        Text("Cập nhật: \(updated.formatted(date: .abbreviated, time: .shortened))")
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                                .font(.system(size: 11.5))
-                            }
-                            Spacer()
-                        }
+                    if uiState.manualBuilderTarget == .search {
+                        MacSettingsRowDivider()
+                        MacManualShortcutBuilderBar(
+                            settings: settings,
+                            hotKeyService: hotKeyService,
+                            uiState: uiState,
+                            target: .search
+                        )
+                    }
 
-                        HStack(spacing: 16) {
-                            Toggle("Tự động cập nhật tức thời bằng FSEvents khi tạo/đổi tên thư mục", isOn: $settings.enableRealtimeFSEvents)
-                                .font(.system(size: 12))
+                    MacSettingsRowDivider()
 
-                            Spacer()
+                    MacSettingsRow(
+                        title: "Universal Actions",
+                        subtitle: "Chọn tệp trong Finder hoặc bôi đen văn bản rồi nhấn phím tắt để thao tác",
+                        statusDotColor: hotKeyService.isUniversalHotKeyActive ? nil : .orange,
+                        statusText: hotKeyService.isUniversalHotKeyActive ? nil : "Trùng phím"
+                    ) {
+                        MacShortcutRecorderControl(
+                            hotKeyService: hotKeyService,
+                            uiState: uiState,
+                            target: .universalAction,
+                            current: settings.universalActionHotKey,
+                            defaultBinding: .defaultUniversalAction,
+                            presets: [
+                                MacShortcutPreset("⌘/ (Mặc định)", binding: .commandSlash),
+                                MacShortcutPreset("⌘\\", binding: .commandBackslash),
+                                MacShortcutPreset("⌥⌘/", binding: .optionCommandSlash),
+                                MacShortcutPreset("⌘⇧A", binding: .commandShiftA),
+                                MacShortcutPreset("⌘⇧M", binding: .commandShiftM)
+                            ]
+                        )
+                    }
 
-                            if !driveService.availableAccounts.isEmpty {
-                                Picker("Tài khoản:", selection: $settings.selectedDriveAccountFilter) {
-                                    Text("Tất cả (\(driveService.availableAccounts.count))").tag("ALL")
-                                    ForEach(driveService.availableAccounts) { acc in
-                                        Text(acc.email).tag(acc.email)
-                                    }
-                                }
-                                .frame(maxWidth: 260)
-                                .controlSize(.small)
-                            }
-                        }
+                    if uiState.manualBuilderTarget == .universalAction {
+                        MacSettingsRowDivider()
+                        MacManualShortcutBuilderBar(
+                            settings: settings,
+                            hotKeyService: hotKeyService,
+                            uiState: uiState,
+                            target: .universalAction
+                        )
+                    }
 
+                    if let warn = hotKeyService.registrationWarning {
+                        MacSettingsRowDivider()
                         HStack(spacing: 10) {
-                            Button {
-                                driveService.rebuildAllCaches()
-                            } label: {
-                                Label(
-                                    driveService.isRebuildingFolders ? (driveService.rebuildProgressText ?? "Đang quét...") : "Quét lại Cache Google Drive ngay",
-                                    systemImage: "arrow.clockwise"
-                                )
-                            }
-                            .disabled(driveService.isRebuildingFolders)
-
-                            Button {
-                                driveService.clearAllHistory()
-                                settings.statusBannerMessage = "Đã xóa sạch lịch sử mở thư mục gần đây."
-                            } label: {
-                                Label("Xóa lịch sử gần đây", systemImage: "trash")
-                            }
-
-                            Button {
-                                LauncherPanelController.shared.toggleSearchPanel()
-                            } label: {
-                                Label("Mở thử Thanh Tìm Kiếm", systemImage: "magnifyingglass")
-                            }
-                            .buttonStyle(.borderedProminent)
-                        }
-                    }
-                    .padding(8)
-                } label: {
-                    Label("Chỉ mục Tìm kiếm Siêu tốc Google Drive (Real-time & Đa tài khoản)", systemImage: "externaldrive.fill.badge.icloud")
-                        .font(.system(size: 13, weight: .semibold))
-                }
-
-                // 3.2. Contacts (`c `), Clipboard History (`cb `), Pinned Favorites (`⌘D`) & Quick Prefixes (`ff `, `s `, Math)
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 12) {
-                            Toggle(
-                                "Tự động lưu Lịch sử Clipboard thông minh (Văn bản, URL, Tệp & Ảnh chụp — gõ 'cb ' để tìm & dán ngay)",
-                                isOn: $settings.enableClipboardHistory
-                            )
-                            .font(.system(size: 12.5, weight: .medium))
-
-                            Spacer()
-
-                            Button("Danh bạ ('c ')") {
-                                LauncherViewModel.shared.prepareForSearchLaunch()
-                                LauncherViewModel.shared.searchText = "c "
-                                LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 13))
+                                .foregroundStyle(.orange)
+                            Text(warn)
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 8)
+                            Button("Cài đặt Bàn phím...") {
+                                hotKeyService.openMacOSKeyboardShortcutsSettings()
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                    }
+                }
 
-                            Button("Clipboard ('cb ')") {
+                // 3. Clipboard History & Pinned Items
+                MacSettingsSection(
+                    title: "Lịch sử Clipboard & Mục đã ghim",
+                    footer: "Cú pháp tra cứu nhanh trong thanh tìm kiếm: 'c ' Danh bạ không dấu • 'cb ' Lịch sử Clipboard • 'a ' Ứng dụng • 'ff ' Tệp tin • 's ' Lệnh hệ thống • 'ocr' nhận diện chữ từ ảnh • nhập phép tính trực tiếp."
+                ) {
+                    MacSettingsToggleRow(
+                        title: "Lưu lịch sử Clipboard",
+                        subtitle: "Tự động lưu văn bản, liên kết, tệp và ảnh chụp (bỏ qua dữ liệu mật khẩu nhạy cảm)",
+                        isOn: $settings.enableClipboardHistory
+                    )
+
+                    MacSettingsRowDivider()
+
+                    MacSettingsRow(
+                        title: "Dữ liệu Clipboard hiện có",
+                        subtitle: "\(clipboardService.entries.count) mục đã lưu — gõ 'cb ' trong thanh tìm kiếm để xem và dán lại"
+                    ) {
+                        HStack(spacing: 6) {
+                            Button("Mở ('cb ')") {
                                 LauncherViewModel.shared.prepareForSearchLaunch()
                                 LauncherViewModel.shared.searchText = "cb "
                                 LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
@@ -650,120 +1002,70 @@ private struct GeneralSettingsTab: View {
                             .buttonStyle(.bordered)
                             .controlSize(.small)
 
-                            Button("Xóa Clipboard (\(clipboardService.entries.count))") {
+                            Button("Xóa lịch sử") {
                                 clipboardService.clearHistory()
-                                settings.statusBannerMessage = "Đã xóa sạch lịch sử Clipboard của DriveBar."
+                                settings.statusBannerMessage = "Đã xóa sạch lịch sử Clipboard."
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
                             .disabled(clipboardService.entries.isEmpty)
                         }
-
-                        HStack(spacing: 12) {
-                            Text("• Đã ghim đầu danh sách (⌘D): **\(settings.pinnedPaths.count)** mục  •  Tự động bỏ qua dữ liệu nhạy cảm từ trình quản lý mật khẩu.")
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(.secondary)
-
-                            Spacer()
-
-                            if !settings.pinnedPaths.isEmpty {
-                                Button("Bỏ ghim tất cả (\(settings.pinnedPaths.count))") {
-                                    settings.pinnedPaths = []
-                                    LauncherViewModel.shared.refreshSearchResults()
-                                    settings.statusBannerMessage = "Đã gỡ toàn bộ các mục đã ghim."
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.mini)
-                            }
-                        }
-
-                        Text("• Cú pháp tìm nhanh: **c ** (Danh bạ không dấu) • **cb ** (Clipboard) • **a ** (Ứng dụng) • **ff ** (Tệp tin) • **s ** (Lệnh hệ thống) • **ocr** (OCR ảnh Clipboard) • phép tính trực tiếp (**15% * 2400000**).")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
                     }
-                    .padding(8)
-                } label: {
-                    Label("Tra cứu Danh bạ (c), Lịch sử Clipboard (cb), Mục Đã Ghim (⌘D) & Máy Tính Nhanh", systemImage: "doc.on.clipboard")
-                        .font(.system(size: 13, weight: .semibold))
+
+                    MacSettingsRowDivider()
+
+                    MacSettingsRow(
+                        title: "Mục đã ghim đầu danh sách",
+                        subtitle: "\(settings.pinnedPaths.count) mục đang ghim (nhấn ⌘D trên kết quả tìm kiếm để ghim hoặc bỏ ghim)"
+                    ) {
+                        Button("Bỏ ghim tất cả") {
+                            settings.pinnedPaths = []
+                            LauncherViewModel.shared.refreshSearchResults()
+                            settings.statusBannerMessage = "Đã gỡ toàn bộ các mục đã ghim."
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(settings.pinnedPaths.isEmpty)
+                    }
                 }
 
-                // 3.5. Syncthing P2P Sync & Action Latching
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Toggle("Đồng bộ Lịch sử gần đây, Cài đặt & Thói quen qua Syncthing P2P (iMac ↔ MacBook Pro)", isOn: $settings.enableSyncthingSync)
-                                .font(.system(size: 12.5, weight: .medium))
-                            Spacer()
-                            Button("Đồng bộ ngay") {
-                                syncService.syncNow()
-                                settings.statusBannerMessage = "Đã đồng bộ dữ liệu thành công với \(settings.syncthingFolderPath)."
+                // 4. Permissions & Updates
+                MacSettingsSection(title: "Quyền hệ thống & Phiên bản") {
+                    MacSettingsRow(
+                        symbol: "hand.raised",
+                        title: "Quyền Trợ năng (Accessibility)",
+                        subtitle: uiState.axTrusted
+                            ? "Đã cấp quyền bắt văn bản đang chọn và điều khiển cửa sổ ứng dụng"
+                            : "Cho phép lấy đoạn văn bản bôi đen ở trình duyệt và điều khiển cửa sổ",
+                        statusDotColor: uiState.axTrusted ? .green : .orange,
+                        statusText: uiState.axTrusted ? "Đã cấp" : "Chưa cấp"
+                    ) {
+                        if uiState.axTrusted {
+                            Text("Đang bật")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Button("Cấp quyền...") {
+                                let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+                                _ = AXIsProcessTrustedWithOptions(opts)
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                    uiState.axTrusted = AXIsProcessTrusted()
+                                }
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
-                            .disabled(!settings.enableSyncthingSync)
-                        }
-
-                        if settings.enableSyncthingSync {
-                            HStack(spacing: 8) {
-                                Text("Thư mục Sync:")
-                                    .font(.system(size: 11.5))
-                                    .foregroundStyle(.secondary)
-                                TextField("~/Sync/Alfred/DriveBar", text: $settings.syncthingFolderPath)
-                                    .textFieldStyle(.roundedBorder)
-                                    .font(.system(size: 11.5, design: .monospaced))
-                                Button("Mở thư mục") {
-                                    let p = syncService.expandedSyncDir
-                                    try? FileManager.default.createDirectory(atPath: p, withIntermediateDirectories: true)
-                                    NSWorkspace.shared.open(URL(fileURLWithPath: p))
-                                }
-                                .controlSize(.small)
-                            }
-
-                            Text("✓ Đã ánh xạ đường dẫn tương đối thông minh (tự khớp user `hunglx` trên iMac & `hunglexuan` trên MacBook Pro) • Đang đồng bộ \(syncService.syncedRecordCount) mục lịch sử.")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Divider()
-
-                        HStack {
-                            Toggle("Học thói quen dùng Universal Action (Action Latching — tự đẩy Action hay chọn lên đầu theo đuôi file)", isOn: $settings.enableActionLatching)
-                                .font(.system(size: 12))
-                            Spacer()
-                            if syncService.learnedActionCount > 0 {
-                                Button("Đặt lại (\(syncService.learnedActionCount))") {
-                                    syncService.resetActionLatching()
-                                    settings.statusBannerMessage = "Đã đặt lại thứ tự học thói quen Universal Actions."
-                                }
-                                .controlSize(.small)
-                            }
                         }
                     }
-                    .padding(8)
-                } label: {
-                    Label("Đồng bộ P2P (Syncthing) & Học Thói Quen Thông Minh", systemImage: "arrow.triangle.2.circlepath.icloud.fill")
-                        .font(.system(size: 13, weight: .semibold))
-                }
 
-                // 4. GitHub Auto-Update & Accessibility Section
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 12) {
-                            Image(systemName: "arrow.triangle.2.circlepath.circle")
-                                .font(.system(size: 21))
-                                .foregroundStyle(.secondary)
+                    MacSettingsRowDivider(leadingInset: 46)
 
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Cập nhật tự động qua GitHub Releases (hungmtuci/DriveBar)")
-                                    .font(.system(size: 12.5, weight: .semibold))
-                                Text(updateStatusSubtitle)
-                                    .font(.system(size: 11.5))
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            Spacer()
-
-                            Button("Trang GitHub") {
+                    MacSettingsRow(
+                        symbol: "arrow.triangle.2.circlepath",
+                        title: "Cập nhật phần mềm",
+                        subtitle: updateStatusDescription
+                    ) {
+                        HStack(spacing: 6) {
+                            Button("GitHub") {
                                 if let u = URL(string: "https://github.com/hungmtuci/DriveBar") {
                                     NSWorkspace.shared.open(u)
                                 }
@@ -772,1140 +1074,658 @@ private struct GeneralSettingsTab: View {
                             .controlSize(.small)
 
                             if case .available(let ver, _, _, _) = updater.state {
-                                Button {
+                                Button("Cập nhật v\(ver)") {
                                     updater.installAvailableUpdate()
-                                } label: {
-                                    Label("Tải & Cập nhật tự động v\(ver)", systemImage: "arrow.down.circle.fill")
                                 }
                                 .buttonStyle(.borderedProminent)
-                                .tint(.green)
                                 .controlSize(.small)
                             } else {
-                                Button {
+                                Button(updater.isBusy ? "Đang kiểm tra..." : "Kiểm tra cập nhật") {
                                     updater.checkForUpdatesManually()
-                                } label: {
-                                    Label(updater.isBusy ? "Đang xử lý..." : "Kiểm tra & Cập nhật tự động", systemImage: "arrow.clockwise")
                                 }
-                                .buttonStyle(.borderedProminent)
+                                .buttonStyle(.bordered)
                                 .controlSize(.small)
                                 .disabled(updater.isBusy)
                             }
                         }
-
-                        Divider()
-
-                        HStack {
-                            Image(systemName: axTrusted ? "checkmark.shield.fill" : "shield.lefthalf.filled")
-                                .foregroundStyle(axTrusted ? .green : .orange)
-                            Text(axTrusted
-                                 ? "Đã cấp quyền Accessibility: Bắt văn bản bôi đen ở mọi ứng dụng."
-                                 : "Tùy chọn: Cấp quyền Accessibility để bắt đoạn văn bản đang bôi đen trong Chrome/Word (Finder hoạt động ngay không cần quyền này).")
-                                .font(.system(size: 11.5))
-                            Spacer()
-                            if !axTrusted {
-                                Button("Cấp quyền Accessibility") {
-                                    let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-                                    _ = AXIsProcessTrustedWithOptions(opts)
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                                        axTrusted = AXIsProcessTrusted()
-                                    }
-                                }
-                                .controlSize(.small)
-                            }
-                        }
                     }
-                    .padding(8)
-                } label: {
-                    Label("Đồng bộ GitHub & Tự động Cập nhật", systemImage: "icloud.and.arrow.down.fill")
-                        .font(.system(size: 13, weight: .semibold))
                 }
             }
-            .padding(20)
+            .padding(.horizontal, 28)
+            .padding(.vertical, 20)
         }
     }
 
-    private func recorderButtonTitle(for target: HotKeyService.RecordingTarget, current: HotKeyBinding) -> String {
-        guard hotKeyService.recordingTarget == target else {
-            return "\(current.readableDisplay)  •  Đổi"
-        }
-        if !hotKeyService.liveModifiersPreview.isEmpty {
-            return hotKeyService.liveModifiersPreview
-        }
-        return "Nhấn phím... (Esc hủy)"
-    }
-
-    private func shortcutStatusPill(isActive: Bool) -> some View {
-        HStack(spacing: 4) {
-            Circle()
-                .fill(isActive ? Color.green : Color.orange)
-                .frame(width: 6, height: 6)
-            Text(isActive ? "Đang hoạt động" : "Trùng phím")
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(isActive ? Color.green : Color.orange)
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background((isActive ? Color.green : Color.orange).opacity(0.13), in: Capsule())
-    }
-
-    private func presetChip(
-        title: String,
-        binding: HotKeyBinding,
-        current: HotKeyBinding,
-        target: HotKeyService.RecordingTarget
-    ) -> some View {
-        let isSelected = (current == binding)
-        return Button {
-            uiState.manualBuilderTarget = nil
-            hotKeyService.applyRecordedBinding(binding, for: target)
-        } label: {
-            Text(title)
-                .font(.system(size: 10.5, weight: isSelected ? .semibold : .regular, design: .monospaced))
-                .foregroundStyle(isSelected ? Color.white : Color.primary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(
-                    isSelected ? Color.accentColor : Color.primary.opacity(0.06),
-                    in: RoundedRectangle(cornerRadius: 5, style: .continuous)
-                )
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func manualShortcutBuilderRow(for target: HotKeyService.RecordingTarget) -> some View {
-        HStack(spacing: 10) {
-            Text("Giữ phím:")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
-
-            Toggle("⌘ Command", isOn: $uiState.manualCmd)
-                .toggleStyle(.checkbox)
-                .font(.system(size: 11.5, weight: .semibold))
-            Toggle("⌥ Option", isOn: $uiState.manualOpt)
-                .toggleStyle(.checkbox)
-                .font(.system(size: 11.5, weight: .semibold))
-            Toggle("⌃ Control", isOn: $uiState.manualCtrl)
-                .toggleStyle(.checkbox)
-                .font(.system(size: 11.5, weight: .semibold))
-            Toggle("⇧ Shift", isOn: $uiState.manualShift)
-                .toggleStyle(.checkbox)
-                .font(.system(size: 11.5, weight: .semibold))
-
-            Text("+")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(.secondary)
-
-            Picker("", selection: $uiState.manualKeyCode) {
-                ForEach(HotKeyBinding.selectableKeys, id: \.keyCode) { item in
-                    Text(item.label).tag(item.keyCode)
-                }
-            }
-            .labelsHidden()
-            .frame(width: 155)
-            .controlSize(.small)
-
-            Spacer()
-
-            Button("Áp dụng") {
-                if let built = uiState.constructedManualBinding {
-                    hotKeyService.applyRecordedBinding(built, for: target)
-                    uiState.manualBuilderTarget = nil
-                } else {
-                    NSSound.beep()
-                    settings.statusBannerMessage = "Vui lòng tick ít nhất 1 phím bổ trợ (⌘, ⌥, ⌃, ⇧) hoặc chọn phím chức năng F1–F12."
-                }
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    private var updateStatusSubtitle: String {
+    private var updateStatusDescription: String {
         switch updater.state {
         case .idle:
-            return "Phiên bản hiện tại: v\(updater.currentVersion) • Tự động tải gói .zip, gỡ Gatekeeper và khởi động lại bằng 1 cú nhấp."
+            return "Phiên bản hiện tại: v\(updater.currentVersion) • Nguồn: GitHub Releases (hungmtuci/DriveBar)"
         case .checking:
-            return "Đang đối chiếu phiên bản mới nhất trên GitHub..."
+            return "Đang kiểm tra phiên bản mới trên GitHub..."
         case .upToDate(let v):
-            return "✓ Bạn đang sử dụng phiên bản mới nhất (v\(v))."
+            return "Bạn đang sử dụng phiên bản mới nhất (v\(v))"
         case .available(let v, _, _, _):
-            return "Đã có bản mới v\(v)! Bấm nút màu xanh bên phải để tự động tải về và nâng cấp."
+            return "Đã có phiên bản mới v\(v) sẵn sàng tải về và cài đặt tự động"
         case .downloading(let v):
             return "Đang tải gói cập nhật DriveBar v\(v)..."
         case .installing(let v):
-            return "Đang cài đặt DriveBar v\(v) vào /Applications và khởi động lại..."
+            return "Đang cài đặt DriveBar v\(v) vào /Applications..."
         case .failed(let msg):
             return msg
         }
     }
+}
 
-    private func dockOptionCard(
-        isSelected: Bool,
-        title: String,
-        subtitle: String,
-        symbol: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: symbol)
-                    .font(.system(size: 19, weight: .medium))
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                    .frame(width: 28, height: 28)
+// MARK: - Pane 2: Google Drive & Đồng bộ
 
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack {
-                        Text(title)
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(.primary)
-                        Spacer()
-                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary.opacity(0.45))
+private struct GoogleDriveSettingsPane: View {
+    @ObservedObject var settings: AppSettings
+    @ObservedObject var driveService: GoogleDriveIndexService
+    @ObservedObject var syncService: SyncAndLatchingService
+
+    private var cleanDriveRootPath: String {
+        guard let root = driveService.accountRoot else {
+            return "Chưa tìm thấy thư mục Google Drive trong ~/Library/CloudStorage"
+        }
+        return (root as NSString).abbreviatingWithTildeInPath
+    }
+
+    private var indexSummaryText: String {
+        var parts = [
+            "\(driveService.folderCount.formatted()) thư mục",
+            "\(driveService.sharedCount.formatted()) mục được chia sẻ",
+            "\(driveService.fileCount.formatted()) tệp tin"
+        ]
+        if let updated = driveService.lastCacheUpdate {
+            parts.append("Cập nhật \(updated.formatted(date: .abbreviated, time: .shortened))")
+        }
+        return parts.joined(separator: " • ")
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // 1. Google Drive Index
+                MacSettingsSection(title: "Chỉ mục Google Drive") {
+                    MacSettingsRow(
+                        symbol: "externaldrive.badge.icloud",
+                        title: cleanDriveRootPath,
+                        subtitle: indexSummaryText,
+                        statusDotColor: driveService.accountRoot != nil ? .green : .orange,
+                        statusText: driveService.isRealtimeWatcherActive ? "FSEvents" : (driveService.accountRoot != nil ? "Đã kết nối" : "Chưa kết nối")
+                    ) {
+                        if let root = driveService.accountRoot {
+                            Button("Mở Finder") {
+                                NSWorkspace.shared.open(URL(fileURLWithPath: root))
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
                     }
-                    Text(subtitle)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
+
+                    if !driveService.availableAccounts.isEmpty {
+                        MacSettingsRowDivider(leadingInset: 46)
+
+                        MacSettingsRow(
+                            title: "Tài khoản hiển thị",
+                            subtitle: "Giới hạn kết quả tìm kiếm theo tài khoản Google Drive cụ thể"
+                        ) {
+                            Picker("", selection: $settings.selectedDriveAccountFilter) {
+                                Text("Tất cả tài khoản (\(driveService.availableAccounts.count))").tag("ALL")
+                                ForEach(driveService.availableAccounts) { acc in
+                                    Text(acc.email).tag(acc.email)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .frame(width: 230)
+                            .controlSize(.small)
+                        }
+                    }
+
+                    MacSettingsRowDivider()
+
+                    MacSettingsToggleRow(
+                        title: "Theo dõi thay đổi tức thời (FSEvents)",
+                        subtitle: "Tự động cập nhật chỉ mục ngay khi tạo mới, xóa hoặc đổi tên thư mục",
+                        isOn: $settings.enableRealtimeFSEvents
+                    )
+
+                    MacSettingsRowDivider()
+
+                    MacSettingsRow(
+                        title: "Bộ nhớ đệm & Lịch sử truy cập",
+                        subtitle: "Làm mới thủ công toàn bộ cây thư mục hoặc xóa danh sách mở gần đây"
+                    ) {
+                        HStack(spacing: 6) {
+                            Button("Xóa lịch sử mở") {
+                                driveService.clearAllHistory()
+                                settings.statusBannerMessage = "Đã xóa lịch sử mở thư mục gần đây."
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+
+                            Button {
+                                driveService.rebuildAllCaches()
+                            } label: {
+                                Text(driveService.isRebuildingFolders ? (driveService.rebuildProgressText ?? "Đang quét...") : "Quét lại chỉ mục")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(driveService.isRebuildingFolders)
+                        }
+                    }
+                }
+
+                // 2. Syncthing P2P Sync & Smart Action Latching
+                MacSettingsSection(
+                    title: "Đồng bộ đa máy & Học thói quen",
+                    footer: settings.enableSyncthingSync
+                        ? "Tự động ánh xạ đường dẫn tương đối giữa các máy Mac khác tên người dùng • Đang đồng bộ \(syncService.syncedRecordCount) mục lịch sử."
+                        : nil
+                ) {
+                    MacSettingsToggleRow(
+                        title: "Đồng bộ qua Syncthing P2P",
+                        subtitle: "Chia sẻ lịch sử mở gần đây và thói quen sử dụng giữa iMac và MacBook",
+                        isOn: $settings.enableSyncthingSync
+                    )
+
+                    if settings.enableSyncthingSync {
+                        MacSettingsRowDivider()
+
+                        MacSettingsRow(
+                            title: "Thư mục đồng bộ",
+                            subtitle: "Đường dẫn thư mục được chia sẻ qua Syncthing"
+                        ) {
+                            HStack(spacing: 6) {
+                                TextField("~/Sync/Alfred/DriveBar", text: $settings.syncthingFolderPath)
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.system(size: 11.5, design: .monospaced))
+                                    .frame(width: 195)
+
+                                Button("Mở") {
+                                    let p = syncService.expandedSyncDir
+                                    try? FileManager.default.createDirectory(atPath: p, withIntermediateDirectories: true)
+                                    NSWorkspace.shared.open(URL(fileURLWithPath: p))
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+
+                                Button("Đồng bộ ngay") {
+                                    syncService.syncNow()
+                                    settings.statusBannerMessage = "Đã đồng bộ dữ liệu với \(settings.syncthingFolderPath)."
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                        }
+                    }
+
+                    MacSettingsRowDivider()
+
+                    MacSettingsRow(
+                        title: "Tự học thói quen Universal Actions",
+                        subtitle: "Tự động đưa hành động thường chọn lên đầu danh sách theo từng định dạng tệp"
+                    ) {
+                        HStack(spacing: 8) {
+                            if syncService.learnedActionCount > 0 {
+                                Button("Đặt lại (\(syncService.learnedActionCount))") {
+                                    syncService.resetActionLatching()
+                                    settings.statusBannerMessage = "Đã đặt lại dữ liệu học thói quen Universal Actions."
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+
+                            Toggle("", isOn: $settings.enableActionLatching)
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                        }
+                    }
                 }
             }
-            .padding(11)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(isSelected ? Color.accentColor.opacity(0.07) : Color.primary.opacity(0.025))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .strokeBorder(isSelected ? Color.accentColor.opacity(0.55) : Color.primary.opacity(0.10), lineWidth: isSelected ? 1.5 : 1)
-            )
+            .padding(.horizontal, 28)
+            .padding(.vertical, 20)
         }
-        .buttonStyle(.plain)
     }
 }
 
-// MARK: - Tab 1B: Windows Preview (⌘Tab Multi-Window, Multi-Space & Multi-Display Switcher)
+// MARK: - Pane 3: Windows Preview (⌘Tab Multi-Window, Multi-Space & Multi-Display Switcher)
 
-private struct WindowSwitcherSettingsTab: View {
+private struct WindowSwitcherSettingsPane: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var hotKeyService: HotKeyService
     @ObservedObject var switcherController: WindowSwitcherController
     @ObservedObject var switcherService: WindowSwitcherService
     @ObservedObject var uiState: SettingsUIState
 
+    private var switcherStatusInfo: (Color, String) {
+        if !settings.enableWindowSwitcher {
+            return (.secondary, "Đang tắt")
+        } else if switcherController.isEventTapActive {
+            return (.green, "Đang hoạt động")
+        } else if hotKeyService.isWindowSwitcherCarbonFallbackActive {
+            return (.green, "Chế độ phím tắt")
+        } else {
+            return (.orange, "Cần quyền Trợ năng")
+        }
+    }
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                // 1. Hotkeys & Activation Card
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 12) {
-                        // A. Primary Window Switcher (Default: ⌘Tab)
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(alignment: .center, spacing: 10) {
-                                Toggle("", isOn: $settings.enableWindowSwitcher)
-                                    .labelsHidden()
-                                    .toggleStyle(.switch)
+            VStack(alignment: .leading, spacing: 20) {
+                // 1. Activation & Shortcuts
+                MacSettingsSection(title: "Kích hoạt & Phím tắt") {
+                    MacSettingsRow(
+                        title: "Chuyển đổi tất cả cửa sổ (Windows Preview)",
+                        subtitle: "Hiển thị các cửa sổ đang chạy của mọi ứng dụng kèm ảnh xem trước trực tiếp",
+                        statusDotColor: switcherStatusInfo.0,
+                        statusText: switcherStatusInfo.1
+                    ) {
+                        HStack(spacing: 10) {
+                            MacShortcutRecorderControl(
+                                hotKeyService: hotKeyService,
+                                uiState: uiState,
+                                target: .windowSwitcher,
+                                current: settings.windowSwitcherHotKey,
+                                defaultBinding: .defaultWindowSwitcher,
+                                presets: [
+                                    MacShortcutPreset("⌘⇥ (Mặc định)", binding: .commandTab),
+                                    MacShortcutPreset("⌥⇥ (Option + Tab)", binding: .optionTab),
+                                    MacShortcutPreset("⌃⇥ (Control + Tab)", binding: .controlTab)
+                                ],
+                                isEnabled: settings.enableWindowSwitcher
+                            )
 
-                                VStack(alignment: .leading, spacing: 2) {
-                                    HStack(spacing: 8) {
-                                        Text("Chuyển đổi tất cả cửa sổ đang chạy (Windows Preview)")
-                                            .font(.system(size: 13, weight: .semibold))
-                                        switcherStatusBadge
-                                    }
-                                    Text("Mặc định: Command + Tab (⌘⇥) • Hiển thị từng cửa sổ riêng lẻ của mọi ứng dụng và phóng to nội dung trực tiếp")
-                                        .font(.system(size: 11.5))
-                                        .foregroundStyle(.secondary)
-                                }
-
-                                Spacer()
-
-                                Button {
-                                    uiState.manualBuilderTarget = nil
-                                    if hotKeyService.recordingTarget == .windowSwitcher {
-                                        hotKeyService.stopRecording()
-                                        hotKeyService.registerAll()
-                                    } else {
-                                        hotKeyService.startRecording(for: .windowSwitcher)
-                                    }
-                                } label: {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: hotKeyService.recordingTarget == .windowSwitcher ? "record.circle.fill" : "keyboard")
-                                        Text(recorderButtonTitle(for: .windowSwitcher, current: settings.windowSwitcherHotKey))
-                                            .font(.system(size: 13, weight: .bold, design: .monospaced))
-                                    }
-                                    .frame(minWidth: 150)
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .tint(hotKeyService.recordingTarget == .windowSwitcher ? .orange : .accentColor)
-                                .disabled(!settings.enableWindowSwitcher)
-
-                                Button("Mặc định (⌘⇥)") {
-                                    hotKeyService.applyRecordedBinding(.defaultWindowSwitcher, for: .windowSwitcher)
-                                }
-                                .buttonStyle(.bordered)
+                            Toggle("", isOn: $settings.enableWindowSwitcher)
+                                .labelsHidden()
+                                .toggleStyle(.switch)
                                 .controlSize(.small)
-                                .disabled(!settings.enableWindowSwitcher || (settings.windowSwitcherHotKey == .defaultWindowSwitcher && hotKeyService.recordingTarget == nil))
-                            }
-
-                            HStack(spacing: 6) {
-                                Text("Chọn nhanh:")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
-
-                                presetChip(title: "⌘⇥ (Mặc định)", binding: .commandTab, current: settings.windowSwitcherHotKey, target: .windowSwitcher)
-                                presetChip(title: "⌥⇥ (Option + Tab)", binding: .optionTab, current: settings.windowSwitcherHotKey, target: .windowSwitcher)
-                                presetChip(title: "⌃⇥ (Control + Tab)", binding: .controlTab, current: settings.windowSwitcherHotKey, target: .windowSwitcher)
-
-                                Spacer()
-
-                                Button {
-                                    uiState.toggleManualBuilder(for: .windowSwitcher, current: settings.windowSwitcherHotKey)
-                                } label: {
-                                    Label(
-                                        uiState.manualBuilderTarget == .windowSwitcher ? "Ẩn ghép phím" : "Tự ghép phím thủ công",
-                                        systemImage: uiState.manualBuilderTarget == .windowSwitcher ? "chevron.up" : "slider.horizontal.3"
-                                    )
-                                    .font(.system(size: 11, weight: .medium))
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.mini)
-                                .disabled(!settings.enableWindowSwitcher)
-                            }
-
-                            if uiState.manualBuilderTarget == .windowSwitcher {
-                                manualShortcutBuilderRow(for: .windowSwitcher)
-                            }
-                        }
-
-                        Divider()
-
-                        // B. Same-App Window Switcher (Default: ⌘`)
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(alignment: .center, spacing: 10) {
-                                Toggle("", isOn: $settings.enableSameAppSwitcher)
-                                    .labelsHidden()
-                                    .toggleStyle(.switch)
-
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Chuyển nhanh giữa các cửa sổ của CÙNG 1 ứng dụng đang mở")
-                                        .font(.system(size: 13, weight: .semibold))
-                                    Text("Mặc định: Command + ` (⌘`) • Thuận tiện khi mở nhiều cửa sổ Word, Excel, Finder hoặc Chrome cùng lúc")
-                                        .font(.system(size: 11.5))
-                                        .foregroundStyle(.secondary)
-                                }
-
-                                Spacer()
-
-                                Button {
-                                    uiState.manualBuilderTarget = nil
-                                    if hotKeyService.recordingTarget == .sameAppWindowSwitcher {
-                                        hotKeyService.stopRecording()
-                                        hotKeyService.registerAll()
-                                    } else {
-                                        hotKeyService.startRecording(for: .sameAppWindowSwitcher)
-                                    }
-                                } label: {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: hotKeyService.recordingTarget == .sameAppWindowSwitcher ? "record.circle.fill" : "keyboard")
-                                        Text(recorderButtonTitle(for: .sameAppWindowSwitcher, current: settings.sameAppSwitcherHotKey))
-                                            .font(.system(size: 13, weight: .bold, design: .monospaced))
-                                    }
-                                    .frame(minWidth: 150)
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .tint(hotKeyService.recordingTarget == .sameAppWindowSwitcher ? .orange : .accentColor)
-                                .disabled(!settings.enableSameAppSwitcher)
-
-                                Button("Mặc định (⌘`)") {
-                                    hotKeyService.applyRecordedBinding(.defaultSameAppSwitcher, for: .sameAppWindowSwitcher)
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .disabled(!settings.enableSameAppSwitcher || (settings.sameAppSwitcherHotKey == .defaultSameAppSwitcher && hotKeyService.recordingTarget == nil))
-                            }
-
-                            HStack(spacing: 6) {
-                                Text("Chọn nhanh:")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
-
-                                presetChip(title: "⌘` (Mặc định)", binding: .commandGrave, current: settings.sameAppSwitcherHotKey, target: .sameAppWindowSwitcher)
-                                presetChip(title: "⌥` (Option + `)", binding: .optionGrave, current: settings.sameAppSwitcherHotKey, target: .sameAppWindowSwitcher)
-
-                                Spacer()
-
-                                Button {
-                                    uiState.toggleManualBuilder(for: .sameAppWindowSwitcher, current: settings.sameAppSwitcherHotKey)
-                                } label: {
-                                    Label(
-                                        uiState.manualBuilderTarget == .sameAppWindowSwitcher ? "Ẩn ghép phím" : "Tự ghép phím thủ công",
-                                        systemImage: uiState.manualBuilderTarget == .sameAppWindowSwitcher ? "chevron.up" : "slider.horizontal.3"
-                                    )
-                                    .font(.system(size: 11, weight: .medium))
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.mini)
-                                .disabled(!settings.enableSameAppSwitcher)
-                            }
-
-                            if uiState.manualBuilderTarget == .sameAppWindowSwitcher {
-                                manualShortcutBuilderRow(for: .sameAppWindowSwitcher)
-                            }
                         }
                     }
-                    .padding(8)
-                } label: {
-                    HStack {
-                        Label("Phím tắt Kích hoạt Windows Preview (⌘Tab & ⌘`)", systemImage: "macwindow.on.rectangle")
-                            .font(.system(size: 13, weight: .semibold))
-                        Spacer()
-                        Button {
-                            switcherController.openPinnedFromMenuOrSearch()
-                        } label: {
-                            Label("Mở thử Windows Preview ngay", systemImage: "rectangle.grid.1x2")
+
+                    if uiState.manualBuilderTarget == .windowSwitcher {
+                        MacSettingsRowDivider()
+                        MacManualShortcutBuilderBar(
+                            settings: settings,
+                            hotKeyService: hotKeyService,
+                            uiState: uiState,
+                            target: .windowSwitcher
+                        )
+                    }
+
+                    MacSettingsRowDivider()
+
+                    MacSettingsRow(
+                        title: "Chuyển cửa sổ trong cùng ứng dụng",
+                        subtitle: "Chuyển nhanh giữa nhiều cửa sổ của ứng dụng đang mở hiện tại"
+                    ) {
+                        HStack(spacing: 10) {
+                            MacShortcutRecorderControl(
+                                hotKeyService: hotKeyService,
+                                uiState: uiState,
+                                target: .sameAppWindowSwitcher,
+                                current: settings.sameAppSwitcherHotKey,
+                                defaultBinding: .defaultSameAppSwitcher,
+                                presets: [
+                                    MacShortcutPreset("⌘` (Mặc định)", binding: .commandGrave),
+                                    MacShortcutPreset("⌥` (Option + `)", binding: .optionGrave)
+                                ],
+                                isEnabled: settings.enableSameAppSwitcher
+                            )
+
+                            Toggle("", isOn: $settings.enableSameAppSwitcher)
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
                         }
-                        .buttonStyle(.borderedProminent)
+                    }
+
+                    if uiState.manualBuilderTarget == .sameAppWindowSwitcher {
+                        MacSettingsRowDivider()
+                        MacManualShortcutBuilderBar(
+                            settings: settings,
+                            hotKeyService: hotKeyService,
+                            uiState: uiState,
+                            target: .sameAppWindowSwitcher
+                        )
+                    }
+                }
+
+                // 2. Display & Filtering Behavior
+                MacSettingsSection(title: "Hiển thị & Hành vi") {
+                    MacSettingsRow(
+                        title: "Phạm vi màn hình",
+                        subtitle: "Chọn không gian màn hình để liệt kê cửa sổ đang mở"
+                    ) {
+                        Picker("", selection: $settings.windowSwitcherScope) {
+                            ForEach(WindowSwitcherScope.allCases, id: \.self) { scope in
+                                Text(scope.displayName).tag(scope)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(width: 245)
                         .controlSize(.small)
                     }
+
+                    MacSettingsRowDivider()
+
+                    MacSettingsToggleRow(
+                        title: "Giữ bảng chọn mở sau khi nhả phím ⌘",
+                        subtitle: "Cho phép dùng phím mũi tên điều hướng hoặc gõ từ khóa lọc cửa sổ (nhấn ↩ để chọn)",
+                        isOn: Binding(
+                            get: { !settings.windowSwitcherReleaseToActivate },
+                            set: { settings.windowSwitcherReleaseToActivate = !$0 }
+                        )
+                    )
+
+                    MacSettingsRowDivider()
+
+                    MacSettingsToggleRow(
+                        title: "Phóng to nội dung cửa sổ đang chọn",
+                        subtitle: "Hiển thị khung xem trước độ phân giải cao phía trên thanh chọn cửa sổ",
+                        isOn: $settings.windowSwitcherShowZoomPreview
+                    )
+
+                    MacSettingsRowDivider()
+
+                    MacSettingsToggleRow(
+                        title: "Hiển thị cửa sổ đang thu nhỏ (Minimize)",
+                        subtitle: "Bao gồm cửa sổ thu nhỏ dưới thanh Dock và tự động khôi phục khi chọn",
+                        isOn: $settings.windowSwitcherShowMinimized
+                    )
+
+                    MacSettingsRowDivider()
+
+                    MacSettingsToggleRow(
+                        title: "Hiển thị ứng dụng đang ẩn (⌘H)",
+                        subtitle: "Bao gồm cửa sổ của ứng dụng đang ẩn và tự động hiện lại khi chọn",
+                        isOn: $settings.windowSwitcherShowHiddenApps
+                    )
+
+                    MacSettingsRowDivider()
+
+                    MacSettingsToggleRow(
+                        title: "Hiển thị ứng dụng không có cửa sổ",
+                        subtitle: "Liệt kê thêm các ứng dụng đang chạy nền chưa mở cửa sổ nào",
+                        isOn: $settings.windowSwitcherShowWindowlessApps
+                    )
                 }
 
-                // 2. Display Scope, Live Zoom & Minimized/Hidden Window Visibility
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 11) {
-                        HStack(spacing: 12) {
-                            Text("Phạm vi hiển thị cửa sổ:")
-                                .font(.system(size: 12.5, weight: .medium))
-                            Picker("", selection: $settings.windowSwitcherScope) {
-                                ForEach(WindowSwitcherScope.allCases, id: \.self) { scope in
-                                    Text(scope.displayName).tag(scope)
-                                }
-                            }
-                            .pickerStyle(.segmented)
+                // 3. System Permissions
+                MacSettingsSection(
+                    title: "Quyền hệ thống cho Windows Preview",
+                    headerTrailing: {
+                        Button("Làm mới trạng thái") {
+                            switcherService.refreshPermissionStates()
+                            switcherController.refreshEventTapState()
+                            hotKeyService.registerAll()
+                            uiState.axTrusted = switcherService.hasAccessibilityPermission
+                            uiState.screenCaptureTrusted = switcherService.hasScreenRecordingPermission
                         }
-
-                        Divider()
-
-                        Toggle(
-                            "Giữ bảng chọn mở sau khi nhả phím ⌘ để điều hướng bằng phím mũi tên & gõ từ khóa lọc (Nhấn Enter / Click để chọn)",
-                            isOn: Binding(
-                                get: { !settings.windowSwitcherReleaseToActivate },
-                                set: { settings.windowSwitcherReleaseToActivate = !$0 }
-                            )
-                        )
-                        .font(.system(size: 12.5, weight: .medium))
-
-                        Toggle(
-                            "Phóng to nội dung cửa sổ đang chọn (hiển thị khung xem trước độ phân giải cao phía trên thanh chọn)",
-                            isOn: $settings.windowSwitcherShowZoomPreview
-                        )
-                        .font(.system(size: 12.5, weight: .medium))
-
-                        Toggle(
-                            "Hiển thị các cửa sổ đang thu nhỏ dưới thanh Dock (Minimize — tự động khôi phục khi chọn)",
-                            isOn: $settings.windowSwitcherShowMinimized
-                        )
-                        .font(.system(size: 12.5, weight: .medium))
-
-                        Toggle(
-                            "Hiển thị cửa sổ của ứng dụng đang ẩn (⌘H — tự động hiện lại ứng dụng khi chọn)",
-                            isOn: $settings.windowSwitcherShowHiddenApps
-                        )
-                        .font(.system(size: 12.5, weight: .medium))
-
-                        Toggle(
-                            "Hiển thị cả các ứng dụng đang chạy nhưng chưa mở cửa sổ nào",
-                            isOn: $settings.windowSwitcherShowWindowlessApps
-                        )
-                        .font(.system(size: 12.5, weight: .medium))
+                        .buttonStyle(.link)
+                        .font(.system(size: 11.5))
                     }
-                    .padding(8)
-                } label: {
-                    Label("Chế độ Hiển thị, Phóng to Nội dung & Lọc Cửa sổ (Minimize / Desktop / Màn hình)", systemImage: "sparkles.tv")
-                        .font(.system(size: 13, weight: .semibold))
-                }
-
-                // 3. System Permissions Required for ⌘Tab Override & Live Window Thumbnails
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 10) {
-                            Image(systemName: switcherService.hasAccessibilityPermission ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
-                                .font(.system(size: 18))
-                                .foregroundStyle(switcherService.hasAccessibilityPermission ? .green : .orange)
-                                .frame(width: 24)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Quyền Accessibility (Trợ năng) — Bắt phím ⌘Tab & Nhảy chính xác đến từng cửa sổ")
-                                    .font(.system(size: 12.5, weight: .semibold))
-                                Text(switcherService.hasAccessibilityPermission
-                                     ? "Đã cấp quyền: Hỗ trợ giữ ⌘ + Tab di chuyển lần lượt, nhả ⌘ nhảy ngay tới đúng cửa sổ con hoặc Desktop khác."
-                                     : "Cần cấp quyền để ghi đè ⌘Tab mặc định của macOS và kích hoạt chính xác cửa sổ con khi 1 ứng dụng mở nhiều cửa sổ.")
-                                    .font(.system(size: 11.5))
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            Spacer()
-
-                            if !switcherService.hasAccessibilityPermission {
-                                Button("Cấp quyền Accessibility...") {
-                                    switcherService.promptAccessibilityPermission()
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .controlSize(.small)
-                            }
-                        }
-
-                        Divider()
-
-                        HStack(spacing: 10) {
-                            Image(systemName: switcherService.hasScreenRecordingPermission ? "checkmark.rectangle.stack.fill" : "rectangle.dashed.badge.record")
-                                .font(.system(size: 18))
-                                .foregroundStyle(switcherService.hasScreenRecordingPermission ? .green : .orange)
-                                .frame(width: 24)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Quyền Ghi màn hình (Screen Recording) — Chụp ảnh nội dung trực tiếp của từng cửa sổ")
-                                    .font(.system(size: 12.5, weight: .semibold))
-                                Text(switcherService.hasScreenRecordingPermission
-                                     ? "Đã cấp quyền: Hiển thị ảnh xem trước sắc nét và phóng to nội dung trực tiếp cho mọi cửa sổ trên các màn hình."
-                                     : "Tùy chọn khuyến nghị: Cấp quyền để xem trước ảnh chụp nội dung thực tế của từng cửa sổ (nếu chưa cấp vẫn hiện biểu tượng & tên cửa sổ).")
-                                    .font(.system(size: 11.5))
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            Spacer()
-
-                            if !switcherService.hasScreenRecordingPermission {
-                                Button("Cấp quyền Ghi màn hình...") {
-                                    switcherService.promptScreenRecordingPermission()
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .controlSize(.small)
-                            }
-                        }
-
-                        HStack {
-                            Text("Sau khi bật quyền trong Cài đặt hệ thống macOS, bấm Làm mới để kích hoạt ngay không cần khởi động lại.")
-                                .font(.system(size: 11))
+                ) {
+                    MacSettingsRow(
+                        symbol: "hand.raised",
+                        title: "Quyền Trợ năng (Accessibility)",
+                        subtitle: "Bắt tổ hợp phím ⌘⇥ và chuyển tiêu điểm chính xác tới từng cửa sổ con",
+                        statusDotColor: switcherService.hasAccessibilityPermission ? .green : .orange,
+                        statusText: switcherService.hasAccessibilityPermission ? "Đã cấp" : "Cần cấp quyền"
+                    ) {
+                        if switcherService.hasAccessibilityPermission {
+                            Text("Đang bật")
+                                .font(.system(size: 12))
                                 .foregroundStyle(.secondary)
-                            Spacer()
-                            Button("Làm mới trạng thái quyền") {
-                                switcherService.refreshPermissionStates()
-                                switcherController.refreshEventTapState()
-                                hotKeyService.registerAll()
-                                uiState.axTrusted = switcherService.hasAccessibilityPermission
-                                uiState.screenCaptureTrusted = switcherService.hasScreenRecordingPermission
+                        } else {
+                            Button("Cấp quyền...") {
+                                switcherService.promptAccessibilityPermission()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                        }
+                    }
+
+                    MacSettingsRowDivider(leadingInset: 46)
+
+                    MacSettingsRow(
+                        symbol: "rectangle.dashed.badge.record",
+                        title: "Quyền Ghi màn hình (Screen Recording)",
+                        subtitle: "Chụp ảnh xem trước trực tiếp nội dung thực tế của các cửa sổ",
+                        statusDotColor: switcherService.hasScreenRecordingPermission ? .green : .orange,
+                        statusText: switcherService.hasScreenRecordingPermission ? "Đã cấp" : "Tùy chọn"
+                    ) {
+                        if switcherService.hasScreenRecordingPermission {
+                            Text("Đang bật")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Button("Cấp quyền...") {
+                                switcherService.promptScreenRecordingPermission()
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
                         }
                     }
-                    .padding(8)
-                } label: {
-                    Label("Quyền Hệ thống cho Windows Preview", systemImage: "lock.shield")
-                        .font(.system(size: 13, weight: .semibold))
                 }
 
-                // 4. Quick Keyboard Reference Inside Windows Preview
-                GroupBox {
-                    HStack(alignment: .top, spacing: 24) {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text("• Bấm ⌘Tab rồi bỏ phím: Dùng ← → ↑ ↓ để di chuyển, nhấn Enter (↩) để nhảy tới cửa sổ.")
-                            Text("• Gõ từ khóa trực tiếp: Lọc tức thì theo tên ứng dụng, tiêu đề cửa sổ, Desktop hoặc màn hình.")
-                            Text("• Giữ ⌘ + bấm Tab / ⇧Tab liên tiếp: Di chuyển mượt qua từng cửa sổ (cùng ứng dụng xếp cạnh nhau).")
-                        }
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text("• Phím ⌃← / ⌃→ / ⌃↑ / ⌃↓: Chia cửa sổ Nửa trái (⌃←), Nửa phải (⌃→), Tối đa (⌃↑), Giữa màn hình (⌃↓).")
-                            Text("• Phím ⌘W / ⌘M / ⌘H / ⌘Q: Đóng cửa sổ (⌘W), Minimize (⌘M), Ẩn App (⌘H), Thoát App (⌘Q).")
-                            Text("• Phím ⌘1 / ⌘2 / ⌘3 / ⌘4: Đổi nhanh Màn hình (⌘1), Minimize (⌘2), App ẩn (⌘3), Cùng App (⌘4).")
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
-                    .padding(8)
-                } label: {
-                    Label("Phím Thao tác Nhanh ngay trong màn hình Windows Preview", systemImage: "keyboard")
-                        .font(.system(size: 13, weight: .semibold))
+                // 4. Compact Shortcut Reference Card
+                MacSettingsSection(title: "Phím thao tác trong Windows Preview") {
+                    ShortcutHintGridRow(
+                        leftKey: "← → ↑ ↓ / ⇥",
+                        leftDesc: "Di chuyển qua các cửa sổ",
+                        rightKey: "⌃← ⌃→ ⌃↑ ⌃↓",
+                        rightDesc: "Chia cửa sổ Trái / Phải / Tối đa / Giữa"
+                    )
+                    MacSettingsRowDivider()
+                    ShortcutHintGridRow(
+                        leftKey: "Gõ ký tự",
+                        leftDesc: "Lọc theo tên ứng dụng hoặc cửa sổ",
+                        rightKey: "⌘W / ⌘M / ⌘H / ⌘Q",
+                        rightDesc: "Đóng / Thu nhỏ / Ẩn / Thoát ứng dụng"
+                    )
+                    MacSettingsRowDivider()
+                    ShortcutHintGridRow(
+                        leftKey: "↩ / Nhấp chuột",
+                        leftDesc: "Nhảy tới cửa sổ đang chọn",
+                        rightKey: "⌘1 / ⌘2 / ⌘3 / ⌘4",
+                        rightDesc: "Đổi nhanh phạm vi & bộ lọc hiển thị"
+                    )
                 }
             }
-            .padding(20)
+            .padding(.horizontal, 28)
+            .padding(.vertical, 20)
         }
         .onAppear {
             switcherService.refreshPermissionStates()
             switcherController.refreshEventTapState()
         }
     }
-
-    @ViewBuilder
-    private var switcherStatusBadge: some View {
-        if !settings.enableWindowSwitcher {
-            statusCapsule(title: "Đang tắt", color: .secondary)
-        } else if switcherController.isEventTapActive {
-            statusCapsule(title: "Đang hoạt động", color: .green)
-        } else if hotKeyService.isWindowSwitcherCarbonFallbackActive {
-            statusCapsule(title: "Chế độ phím tắt", color: .green)
-        } else {
-            statusCapsule(title: "Cần quyền Accessibility", color: .orange)
-        }
-    }
-
-    private func statusCapsule(title: String, color: Color) -> some View {
-        HStack(spacing: 4) {
-            Circle()
-                .fill(color)
-                .frame(width: 6, height: 6)
-            Text(title)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(color)
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(color.opacity(0.12), in: Capsule())
-    }
-
-    private func recorderButtonTitle(for target: HotKeyService.RecordingTarget, current: HotKeyBinding) -> String {
-        guard hotKeyService.recordingTarget == target else {
-            return "\(current.readableDisplay)  •  Đổi"
-        }
-        if !hotKeyService.liveModifiersPreview.isEmpty {
-            return hotKeyService.liveModifiersPreview
-        }
-        return "Nhấn phím... (Esc hủy)"
-    }
-
-    private func presetChip(
-        title: String,
-        binding: HotKeyBinding,
-        current: HotKeyBinding,
-        target: HotKeyService.RecordingTarget
-    ) -> some View {
-        let isSelected = (current == binding)
-        return Button {
-            uiState.manualBuilderTarget = nil
-            hotKeyService.applyRecordedBinding(binding, for: target)
-        } label: {
-            Text(title)
-                .font(.system(size: 10.5, weight: isSelected ? .semibold : .regular, design: .monospaced))
-                .foregroundStyle(isSelected ? Color.white : Color.primary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(
-                    isSelected ? Color.accentColor : Color.primary.opacity(0.06),
-                    in: RoundedRectangle(cornerRadius: 5, style: .continuous)
-                )
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func manualShortcutBuilderRow(for target: HotKeyService.RecordingTarget) -> some View {
-        HStack(spacing: 10) {
-            Text("Giữ phím:")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
-
-            Toggle("⌘ Command", isOn: $uiState.manualCmd)
-                .toggleStyle(.checkbox)
-                .font(.system(size: 11.5, weight: .semibold))
-            Toggle("⌥ Option", isOn: $uiState.manualOpt)
-                .toggleStyle(.checkbox)
-                .font(.system(size: 11.5, weight: .semibold))
-            Toggle("⌃ Control", isOn: $uiState.manualCtrl)
-                .toggleStyle(.checkbox)
-                .font(.system(size: 11.5, weight: .semibold))
-            Toggle("⇧ Shift", isOn: $uiState.manualShift)
-                .toggleStyle(.checkbox)
-                .font(.system(size: 11.5, weight: .semibold))
-
-            Text("+")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(.secondary)
-
-            Picker("", selection: $uiState.manualKeyCode) {
-                ForEach(HotKeyBinding.selectableKeys, id: \.keyCode) { item in
-                    Text(item.label).tag(item.keyCode)
-                }
-            }
-            .labelsHidden()
-            .frame(width: 155)
-            .controlSize(.small)
-
-            Spacer()
-
-            Button("Áp dụng") {
-                if let built = uiState.constructedManualBinding {
-                    hotKeyService.applyRecordedBinding(built, for: target)
-                    uiState.manualBuilderTarget = nil
-                } else {
-                    NSSound.beep()
-                    settings.statusBannerMessage = "Vui lòng tick ít nhất 1 phím bổ trợ (⌘, ⌥, ⌃, ⇧) hoặc chọn phím chức năng F1–F12."
-                }
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
-    }
 }
 
-// MARK: - Tab 2: Convert to Markdown & AI Optimization
-
-private struct AIMarkdownSettingsTab: View {
-    @ObservedObject var settings: AppSettings
-    @Binding var isDropTargeted: Bool
-
-    var body: some View {
-        let diag = MarkdownConverterService.shared.engineDiagnostics()
-
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Toggle("Xuất tệp <tên_file>.md nằm ngay cạnh tệp gốc khi bấm 'Convert to Markdown'", isOn: $settings.saveMarkdownBesideSource)
-                        Toggle("Tự động Copy toàn bộ nội dung Markdown vào Clipboard (sẵn sàng ⌘V ngay vào Claude / ChatGPT / Gemini)", isOn: $settings.autoCopyMarkdownToClipboard)
-                        Toggle("Bọc thẻ cấu trúc XML <documents><document index=\"...\"> khi gộp hoặc chọn nhiều file cùng lúc", isOn: $settings.wrapMultiFilesInXMLTags)
-                        HStack(spacing: 12) {
-                            Toggle("Tự động chia nhỏ tài liệu siêu dài (Smart Chunking theo H1/H2 → _Chunks/)", isOn: $settings.enableSmartChunking)
-                            Spacer()
-                            if settings.enableSmartChunking {
-                                Picker("Ngưỡng mỗi phần:", selection: $settings.smartChunkMaxTokens) {
-                                    Text("15.000 tokens").tag(15_000)
-                                    Text("25.000 tokens").tag(25_000)
-                                    Text("40.000 tokens").tag(40_000)
-                                }
-                                .frame(width: 220)
-                                .controlSize(.small)
-                            }
-                        }
-                        Toggle("Tự động kích hoạt Apple Vision OCR (Tiếng Việt + Tiếng Anh) khi PDF scan hoặc Ảnh không có lớp chữ", isOn: $settings.enableVisionOCR)
-                        Toggle("Tối ưu hóa dữ liệu cho AI đọc (Chuẩn hóa Unicode NFC Tiếng Việt, xóa ký tự ẩn & gộp dòng trắng thừa để giảm ~15-25% Token)", isOn: $settings.optimizeMarkdownTokens)
-                        Toggle("Chèn khối YAML Frontmatter (tên file gốc, định dạng, thời gian) ở đầu file Markdown", isOn: $settings.includeMetadataHeader)
-                    }
-                    .padding(8)
-                } label: {
-                    Label("Hành vi Convert to Markdown (Tối ưu cho LLM)", systemImage: "doc.text.magnifyingglass")
-                        .font(.system(size: 13, weight: .semibold))
-                }
-
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 8) {
-                        EngineRow(
-                            title: "AI Document Toolkit (PyMuPDF4LLM + MarkItDown)",
-                            ready: diag.toolkitReady,
-                            detail: diag.pythonPath ?? "Chưa tìm thấy .venv — Tự động dùng Engine Swift nội bộ"
-                        )
-                        EngineRow(
-                            title: "LibreOffice Headless (.doc, .xls, .ppt, .rtf → PDF/MD)",
-                            ready: diag.libreOfficeReady,
-                            detail: diag.sofficePath ?? "Chưa cài LibreOffice — Tự động dùng macOS textutil AST"
-                        )
-                        EngineRow(
-                            title: "Google Workspace (.gdoc/.gsheet/.gslides) & Web URL AI Reader",
-                            ready: true,
-                            detail: "Tích hợp trực tiếp luồng xuất Markdown / CSV bảng biểu & lọc bài viết Web sạch"
-                        )
-                        EngineRow(
-                            title: "Apple Vision Neural OCR (Tiếng Việt vi-VN & en-US)",
-                            ready: true,
-                            detail: "Tích hợp sẵn trên Apple Silicon (xử lý PDF scan dấu đỏ & ảnh chụp)"
-                        )
-                        EngineRow(
-                            title: "Native Swift HTML/Table/PDFKit Fallback Engine",
-                            ready: true,
-                            detail: "Đảm bảo app luôn chạy độc lập 100% trên mọi máy Mac"
-                        )
-
-                        Divider().padding(.vertical, 4)
-
-                        HStack {
-                            Text("Thư mục AI Toolkit:")
-                                .font(.system(size: 12))
-                            TextField("~/Developer/AI/ai-document-toolkit", text: $settings.aiToolkitPath)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(size: 12, design: .monospaced))
-                        }
-                    }
-                    .padding(8)
-                } label: {
-                    Label("Trạng thái các Bộ máy Chuyển đổi (Hybrid Engines)", systemImage: "cpu.fill")
-                        .font(.system(size: 13, weight: .semibold))
-                }
-
-                // Interactive Drag-and-Drop Test Bench
-                VStack(spacing: 8) {
-                    Image(systemName: "arrow.down.doc")
-                        .font(.system(size: 26, weight: .regular))
-                        .foregroundStyle(.secondary)
-                    Text("Kéo & Thả bất kỳ file Word (.doc/.docx), Excel, PDF, Ảnh chụp vào đây để Convert sang Markdown ngay")
-                        .font(.system(size: 12.5, weight: .medium))
-                    Text("Hoặc chọn file trong Finder rồi bấm \(settings.universalActionHotKey.readableDisplay) → Convert to Markdown")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 20)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(isDropTargeted ? Color.accentColor.opacity(0.10) : Color.primary.opacity(0.025))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [6, 4]))
-                        .foregroundStyle(isDropTargeted ? Color.accentColor : Color(nsColor: .separatorColor))
-                )
-                .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
-                    Task { @MainActor in
-                        var urls: [URL] = []
-                        for p in providers {
-                            if let item = try? await p.loadItem(forTypeIdentifier: "public.file-url", options: nil),
-                               let data = item as? Data,
-                               let u = URL(dataRepresentation: data, relativeTo: nil) {
-                                urls.append(u)
-                            }
-                        }
-                        guard !urls.isEmpty else { return }
-                        if let def = UniversalActionCatalog.all.first(where: { $0.id == "ai.convert_md" }) {
-                            UniversalActionExecutor.shared.execute(
-                                action: def,
-                                target: .files(urls),
-                                viewModel: LauncherViewModel.shared
-                            )
-                        }
-                    }
-                    return true
-                }
-            }
-            .padding(20)
-        }
-    }
-}
-
-private struct EngineRow: View {
-    let title: String
-    let ready: Bool
-    let detail: String
+private struct ShortcutHintGridRow: View {
+    let leftKey: String
+    let leftDesc: String
+    let rightKey: String
+    let rightDesc: String
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: ready ? "checkmark.circle.fill" : "info.circle.fill")
-                .foregroundStyle(ready ? .green : .orange)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(.system(size: 12.5, weight: .semibold))
-                Text(detail)
-                    .font(.system(size: 11))
+        HStack(spacing: 16) {
+            HStack(spacing: 8) {
+                Text(leftKey)
+                    .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                Text(leftDesc)
+                    .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
             }
-            Spacer()
-        }
-    }
-}
-
-// MARK: - Tab 3: Universal Actions Checklist
-
-private struct UniversalActionsChecklistTab: View {
-    @ObservedObject var settings: AppSettings
-    @ObservedObject var uiState: SettingsUIState
-
-    var body: some View {
-        HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Danh mục Universal Actions:")
-                        .font(.system(size: 13, weight: .semibold))
-                    Spacer()
-                    TextField("Tìm action...", text: $uiState.actionFilter)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 180)
-                }
-
-                List {
-                    ForEach(ActionCategory.allCases, id: \.self) { category in
-                        let filter = uiState.actionFilter
-                        let items = UniversalActionCatalog.all.filter {
-                            $0.category == category &&
-                            (filter.isEmpty || $0.title.localizedCaseInsensitiveContains(filter) || $0.subtitle.localizedCaseInsensitiveContains(filter))
-                        }
-                        if !items.isEmpty {
-                            Section(category.rawValue) {
-                                ForEach(items) { item in
-                                    HStack(spacing: 10) {
-                                        Toggle("", isOn: Binding(
-                                            get: { settings.isActionEnabled(item.id) },
-                                            set: { settings.setActionEnabled(item.id, enabled: $0) }
-                                        ))
-                                        .labelsHidden()
-
-                                        Image(systemName: item.sfSymbol)
-                                            .foregroundStyle(.secondary)
-                                            .frame(width: 18)
-
-                                        VStack(alignment: .leading, spacing: 1) {
-                                            Text(item.title)
-                                                .font(.system(size: 12.5, weight: .medium))
-                                            Text(item.subtitle)
-                                                .font(.system(size: 10.5))
-                                                .foregroundStyle(.secondary)
-                                                .lineLimit(1)
-                                        }
-                                    }
-                                    .padding(.vertical, 1)
-                                }
-                            }
-                        }
-                    }
-                }
-                .listStyle(.bordered(alternatesRowBackgrounds: true))
-
-                HStack {
-                    Text("Một số hành động chỉ xuất hiện theo ngữ cảnh (ví dụ Google Drive hoặc Gói ứng dụng).")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Bật tất cả") {
-                        settings.disabledActionIDs.removeAll()
-                    }
-                    .controlSize(.small)
-                }
-            }
-            .padding(18)
             .frame(maxWidth: .infinity)
 
-            Divider()
-
-            VStack(alignment: .leading, spacing: 14) {
-                Text("Hướng dẫn Thao tác Nhanh")
-                    .font(.system(size: 14, weight: .bold))
-
-                GuideBlock(
-                    title: "1. Từ Finder hoặc bất kỳ ứng dụng nào",
-                    bodyText: "Chọn 1 hoặc nhiều file trong Finder (hoặc bôi đen đoạn văn bản) → Nhấn \(settings.universalActionHotKey.readableDisplay) → Gõ 'md' hoặc nhấn Enter để Convert sang Markdown ngay."
-                )
-
-                GuideBlock(
-                    title: "2. Ngay trong kết quả tìm kiếm Google Drive",
-                    bodyText: "Nhấn \(settings.searchHotKey.readableDisplay) → Gõ tên thư mục không dấu/viết tắt → Nhấn Enter để duyệt file bên trong → Chọn file bất kỳ và nhấn Tab (⇥) hoặc ⇧↩ để mở Universal Actions."
-                )
-
-                GuideBlock(
-                    title: "3. Gom nhiều file bằng File Buffer",
-                    bodyText: "Khi đang duyệt file trong DriveBar: nhấn ⌥↑ hoặc ⌥↓ để gom nhiều file từ nhiều thư mục khác nhau vào Buffer → Nhấn ⌥→ → Chọn 'Gộp tài liệu sang 1 File AI Context (.md)'."
-                )
-
-                GuideBlock(
-                    title: "4. Phím bổ trợ (Modifiers)",
-                    bodyText: "• ⌥↩ trên Convert to Markdown: Chỉ Copy Markdown vào Clipboard, không tạo file .md.\n• ⌘↩ trên kết quả tìm kiếm: Mở trong Finder.\n• ⌥↩ trên kết quả Google Drive: Copy link chia sẻ.\n• ⌘Y: Xem nhanh Quick Look."
-                )
-
-                Spacer()
+            HStack(spacing: 8) {
+                Text(rightKey)
+                    .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                Text(rightDesc)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
             }
-            .padding(18)
-            .frame(width: 285)
-            .background(Color.primary.opacity(0.02))
+            .frame(maxWidth: .infinity)
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8.5)
     }
 }
 
-private struct GuideBlock: View {
-    let title: String
-    let bodyText: String
+// MARK: - Pane 4: Hệ thống & Danh bạ (`c ` & `s `)
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.primary)
-            Text(bodyText)
-                .font(.system(size: 11.5))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-}
-
-// MARK: - Tab 2B: Alfred-Parity System Commands (`s `) & Contacts Lookup (`c `)
-
-private struct SystemAndContactsSettingsTab: View {
+private struct SystemAndContactsSettingsPane: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var uiState: SettingsUIState
     @ObservedObject private var contactsService = ContactsSearchService.shared
 
+    private var contactsStatusInfo: (Color, String) {
+        if contactsService.isAuthorized {
+            return (.green, "\(contactsService.contacts.count) liên hệ")
+        } else if contactsService.authorizationStatus == .notDetermined {
+            return (.secondary, "Chưa cấp quyền")
+        } else {
+            return (.orange, "Bị từ chối")
+        }
+    }
+
+    private var contactsSubtitle: String {
+        if contactsService.isAuthorized {
+            return "Gõ 'c <tên không dấu, viết tắt hoặc SĐT>' rồi nhấn ↩ để xem chi tiết và chọn mục sao chép"
+        } else if contactsService.authorizationStatus == .notDetermined {
+            return "Cấp quyền truy cập để tìm nhanh liên hệ bằng Tiếng Việt không dấu ngay trong thanh tìm kiếm"
+        } else {
+            return "Mở Cài đặt Quyền riêng tư của macOS → Contacts và bật công tắc cho phép DriveBar"
+        }
+    }
+
     var body: some View {
-        VStack(spacing: 14) {
-            // 1. Contacts Lookup (`c `) Card
-            GroupBox {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 12) {
-                        Image(systemName: contactsService.isAuthorized ? "person.crop.circle.badge.checkmark" : "person.crop.circle")
-                            .font(.system(size: 21))
-                            .foregroundStyle(contactsService.isAuthorized ? .green : .secondary)
+        let normalizedFilter = GoogleDriveIndexService.removeAccents(uiState.systemCommandFilter)
+            .lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
 
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 8) {
-                                Text("Tra cứu Danh bạ macOS bằng Tiếng Việt không dấu ('c ')")
-                                    .font(.system(size: 13, weight: .semibold))
-                                contactsStatusPill
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // 1. Contacts Lookup (`c `)
+                MacSettingsSection(
+                    title: "Danh bạ macOS ('c ')",
+                    footer: "Trong màn hình chi tiết liên hệ: nhấn ↩ để sao chép, ⌘C sao chép và giữ mở, ⌥↩ sao chép và dán ngay, hoặc ⇧ để phóng to chữ."
+                ) {
+                    MacSettingsRow(
+                        symbol: "person.crop.circle",
+                        title: "Tra cứu Danh bạ Tiếng Việt không dấu",
+                        subtitle: contactsSubtitle,
+                        statusDotColor: contactsStatusInfo.0,
+                        statusText: contactsStatusInfo.1
+                    ) {
+                        HStack(spacing: 6) {
+                            if contactsService.isAuthorized {
+                                Button("Làm mới") {
+                                    contactsService.reloadContacts(force: true)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(contactsService.isLoading)
+                            } else if contactsService.authorizationStatus == .notDetermined {
+                                Button("Cấp quyền...") {
+                                    contactsService.requestAccessIfNeeded()
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                            } else {
+                                Button("Cài đặt Quyền...") {
+                                    contactsService.openContactsPrivacySettings()
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
                             }
-                            Text(contactsStatusDescription)
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(.secondary)
-                        }
 
-                        Spacer()
-
-                        if contactsService.isAuthorized {
-                            Button("Làm mới Danh bạ") {
-                                contactsService.reloadContacts(force: true)
+                            Button("Mở ('c ')") {
+                                LauncherViewModel.shared.prepareForSearchLaunch()
+                                LauncherViewModel.shared.searchText = "c "
+                                LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
-                            .disabled(contactsService.isLoading)
-                        } else if contactsService.authorizationStatus == .notDetermined {
-                            Button("Cấp quyền Danh bạ...") {
-                                contactsService.requestAccessIfNeeded()
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                        } else {
-                            Button("Mở Cài đặt Quyền riêng tư...") {
-                                contactsService.openContactsPrivacySettings()
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
                         }
-
-                        Button {
-                            LauncherViewModel.shared.prepareForSearchLaunch()
-                            LauncherViewModel.shared.searchText = "c "
-                            LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
-                        } label: {
-                            Label("Mở Danh bạ ('c ')", systemImage: "magnifyingglass")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
                     }
-
-                    Text("• Gõ **c nguyen hung** (không dấu), **c nxh** (viết tắt) hoặc **c 0912** (SĐT) → nhấn **Enter (↩)** xem chi tiết → dùng **↑↓** / Click chọn SĐT, Email, Địa chỉ, Cơ quan rồi nhấn **↩** để Copy (**⌘C** Copy & giữ mở, **⌥↩** Copy & Dán ngay, **⇧** phóng to chữ).")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
                 }
-                .padding(8)
-            } label: {
-                Label("Danh bạ macOS — Tìm Tiếng Việt Không Dấu & Sao chép Chi tiết ('c ')", systemImage: "person.text.rectangle")
-                    .font(.system(size: 13, weight: .semibold))
-            }
-            .padding(.horizontal, 18)
-            .padding(.top, 14)
 
-            // 2. Alfred System Commands Checklist & Confirmation Toggles
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 10) {
-                    Label("Lệnh Hệ thống chuẩn Alfred (Gõ trực tiếp từ khóa hoặc 's <từ khóa>')", systemImage: "terminal")
-                        .font(.system(size: 13, weight: .semibold))
+                // 2. Alfred-Parity System Commands Header Bar
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Lệnh Hệ thống ('s ' hoặc gõ trực tiếp từ khóa)")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
 
                     Spacer()
 
-                    Button("Mở Lệnh Hệ thống ('s ')") {
+                    Button("Mở danh sách ('s ')") {
                         LauncherViewModel.shared.prepareForSearchLaunch()
                         LauncherViewModel.shared.searchText = "s "
                         LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .buttonStyle(.link)
+                    .font(.system(size: 11.5))
 
-                    TextField("Tìm lệnh (vd: lock, quit, eject, trash)...", text: $uiState.systemCommandFilter)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 240)
+                    Text("•")
+                        .foregroundStyle(.tertiary)
+
+                    Button("Khôi phục mặc định") {
+                        settings.resetSystemCommandsToDefault()
+                        settings.statusBannerMessage = "Đã bật toàn bộ lệnh hệ thống và khôi phục tùy chọn xác nhận mặc định."
+                    }
+                    .buttonStyle(.link)
+                    .font(.system(size: 11.5))
                 }
+                .padding(.horizontal, 4)
+                .padding(.bottom, -10)
 
-                List {
-                    ForEach(SystemUtilityCategory.allCases, id: \.self) { cat in
-                        let filter = GoogleDriveIndexService.removeAccents(uiState.systemCommandFilter)
-                            .lowercased()
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                        let cmds = InstantUtilityService.allSystemCommands.filter { cmd in
-                            guard cmd.category == cat else { return false }
-                            guard !filter.isEmpty else { return true }
-                            let hay = GoogleDriveIndexService.removeAccents(
-                                "\(cmd.primaryKeyword) \(cmd.title) \(cmd.subtitle) \(cmd.keywords.joined(separator: " "))"
-                            ).lowercased()
-                            return hay.contains(filter)
-                        }
-                        if !cmds.isEmpty {
-                            Section(cat.rawValue) {
-                                ForEach(cmds) { cmd in
-                                    HStack(spacing: 10) {
-                                        Toggle("", isOn: Binding(
-                                            get: { settings.isSystemCommandEnabled(cmd.id) },
-                                            set: { settings.setSystemCommandEnabled(cmd.id, enabled: $0) }
-                                        ))
-                                        .labelsHidden()
+                // 3. Inset-Grouped Cards per SystemUtilityCategory
+                ForEach(SystemUtilityCategory.allCases, id: \.self) { category in
+                    let commands = InstantUtilityService.allSystemCommands.filter { cmd in
+                        guard cmd.category == category else { return false }
+                        guard !normalizedFilter.isEmpty else { return true }
+                        let hay = GoogleDriveIndexService.removeAccents(
+                            "\(cmd.primaryKeyword) \(cmd.title) \(cmd.subtitle) \(cmd.keywords.joined(separator: " "))"
+                        ).lowercased()
+                        return hay.contains(normalizedFilter)
+                    }
 
-                                        Image(systemName: cmd.sfSymbol)
-                                            .font(.system(size: 13.5, weight: .medium))
-                                            .foregroundStyle(.secondary)
-                                            .frame(width: 20)
-
-                                        VStack(alignment: .leading, spacing: 1.5) {
-                                            HStack(spacing: 7) {
-                                                Text(cmd.title)
-                                                    .font(.system(size: 12.5, weight: .medium))
-                                                Text(cmd.primaryKeyword)
-                                                    .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                                                    .foregroundStyle(.secondary)
-                                                    .padding(.horizontal, 6)
-                                                    .padding(.vertical, 1)
-                                                    .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-                                            }
-                                            Text(cmd.subtitle)
-                                                .font(.system(size: 11))
-                                                .foregroundStyle(.secondary)
-                                                .lineLimit(1)
-                                        }
-
-                                        Spacer()
-
-                                        if cmd.supportsConfirmation {
-                                            Toggle("Hỏi xác nhận", isOn: Binding(
-                                                get: { settings.requiresSystemCommandConfirmation(cmd.id) },
-                                                set: { settings.setSystemCommandConfirmation(cmd.id, confirm: $0) }
-                                            ))
-                                            .toggleStyle(.checkbox)
-                                            .font(.system(size: 11.5))
-                                            .foregroundStyle(.secondary)
-                                            .disabled(!settings.isSystemCommandEnabled(cmd.id))
-                                            .help("Hiển thị hộp thoại xác nhận trước khi thực thi (giữ phím ⌥ khi nhấn Enter để bỏ qua nhanh)")
-                                        }
-                                    }
-                                    .padding(.vertical, 2)
+                    if !commands.isEmpty {
+                        MacSettingsSection(title: category.rawValue) {
+                            ForEach(Array(commands.enumerated()), id: \.element.id) { idx, cmd in
+                                if idx > 0 {
+                                    MacSettingsRowDivider(leadingInset: 46)
                                 }
+
+                                SystemCommandSettingsRow(
+                                    command: cmd,
+                                    settings: settings
+                                )
                             }
                         }
                     }
                 }
-                .listStyle(.bordered(alternatesRowBackgrounds: true))
-
-                HStack {
-                    Text("Gõ trực tiếp từ khóa (lock, sleep, sleepdisplays, screensaver, trash, emptytrash, volup, voldown, mute, hide, quit, quitall, forcequit, eject, ejectall, logout, restart, shutdown) hoặc gõ 's ' để duyệt.")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-
-                    Spacer()
-
-                    Button("Khôi phục mặc định") {
-                        settings.resetSystemCommandsToDefault()
-                        settings.statusBannerMessage = "Đã bật toàn bộ Lệnh Hệ thống và khôi phục chế độ hỏi xác nhận mặc định."
-                    }
-                    .controlSize(.small)
-                }
             }
-            .padding(.horizontal, 18)
-            .padding(.bottom, 14)
+            .padding(.horizontal, 28)
+            .padding(.vertical, 20)
         }
         .onAppear {
             contactsService.refreshAuthorizationStatus()
@@ -1914,43 +1734,339 @@ private struct SystemAndContactsSettingsTab: View {
             }
         }
     }
+}
 
-    @ViewBuilder
-    private var contactsStatusPill: some View {
-        if contactsService.isAuthorized {
-            HStack(spacing: 4) {
-                Circle().fill(Color.green).frame(width: 6, height: 6)
-                Text("Đã kết nối (\(contactsService.contacts.count) liên hệ)")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.green)
+private struct SystemCommandSettingsRow: View {
+    let command: SystemUtilityDefinition
+    @ObservedObject var settings: AppSettings
+
+    var body: some View {
+        let isEnabled = settings.isSystemCommandEnabled(command.id)
+
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: command.sfSymbol)
+                .font(.system(size: 13.5, weight: .regular))
+                .foregroundStyle(isEnabled ? Color.secondary : Color.secondary.opacity(0.45))
+                .frame(width: 20, alignment: .center)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(command.title)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(isEnabled ? .primary : .secondary)
+
+                    Text(command.primaryKeyword)
+                        .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 5.5)
+                        .padding(.vertical, 1)
+                        .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                }
+
+                Text(command.subtitle)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(Color.green.opacity(0.12), in: Capsule())
-        } else if contactsService.authorizationStatus == .notDetermined {
-            Text("Chưa cấp quyền")
-                .font(.system(size: 10, weight: .semibold))
+
+            Spacer(minLength: 12)
+
+            if command.supportsConfirmation {
+                Toggle("Xác nhận", isOn: Binding(
+                    get: { settings.requiresSystemCommandConfirmation(command.id) },
+                    set: { settings.setSystemCommandConfirmation(command.id, confirm: $0) }
+                ))
+                .toggleStyle(.checkbox)
+                .controlSize(.small)
+                .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Color.primary.opacity(0.06), in: Capsule())
-        } else {
-            Text("Bị từ chối quyền")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.orange)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Color.orange.opacity(0.12), in: Capsule())
+                .disabled(!isEnabled)
+                .help("Hiển thị hộp thoại xác nhận trước khi thực thi (giữ phím ⌥ khi nhấn ↩ để bỏ qua)")
+            }
+
+            Toggle("", isOn: Binding(
+                get: { isEnabled },
+                set: { settings.setSystemCommandEnabled(command.id, enabled: $0) }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+    }
+}
+
+// MARK: - Pane 5: Convert Markdown & AI Optimization
+
+private struct AIMarkdownSettingsPane: View {
+    @ObservedObject var settings: AppSettings
+    @Binding var isDropTargeted: Bool
+
+    var body: some View {
+        let diag = MarkdownConverterService.shared.engineDiagnostics()
+
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // 1. Output & LLM Optimization
+                MacSettingsSection(title: "Đầu ra & Tối ưu hóa cho LLM") {
+                    MacSettingsToggleRow(
+                        title: "Lưu tệp .md cạnh tệp gốc",
+                        subtitle: "Tạo tệp <tên_file>.md cùng thư mục khi chạy Convert to Markdown",
+                        isOn: $settings.saveMarkdownBesideSource
+                    )
+
+                    MacSettingsRowDivider()
+
+                    MacSettingsToggleRow(
+                        title: "Tự động sao chép vào Clipboard",
+                        subtitle: "Sẵn sàng dán (⌘V) ngay vào Claude, ChatGPT hoặc Gemini sau khi chuyển đổi",
+                        isOn: $settings.autoCopyMarkdownToClipboard
+                    )
+
+                    MacSettingsRowDivider()
+
+                    MacSettingsToggleRow(
+                        title: "Chèn khối thông tin YAML Frontmatter",
+                        subtitle: "Đính kèm tên tệp gốc, định dạng và thời gian chuyển đổi ở đầu tệp Markdown",
+                        isOn: $settings.includeMetadataHeader
+                    )
+
+                    MacSettingsRowDivider()
+
+                    MacSettingsToggleRow(
+                        title: "Bọc thẻ cấu trúc XML khi gộp nhiều tệp",
+                        subtitle: "Đóng gói theo chuẩn <documents><document> giúp mô hình AI phân tách ngữ cảnh",
+                        isOn: $settings.wrapMultiFilesInXMLTags
+                    )
+
+                    MacSettingsRowDivider()
+
+                    MacSettingsToggleRow(
+                        title: "Tối ưu hóa Token & chuẩn hóa Tiếng Việt",
+                        subtitle: "Chuẩn hóa Unicode NFC, xóa ký tự ẩn và gộp dòng trắng thừa (~15–25% nhẹ hơn)",
+                        isOn: $settings.optimizeMarkdownTokens
+                    )
+
+                    MacSettingsRowDivider()
+
+                    MacSettingsToggleRow(
+                        title: "Nhận diện văn bản Apple Vision OCR",
+                        subtitle: "Tự động trích xuất chữ Tiếng Việt và Tiếng Anh khi gặp PDF scan hoặc ảnh chụp",
+                        isOn: $settings.enableVisionOCR
+                    )
+
+                    MacSettingsRowDivider()
+
+                    MacSettingsRow(
+                        title: "Chia nhỏ tài liệu dài (Smart Chunking)",
+                        subtitle: "Tự động tách theo mục H1/H2 vào thư mục _Chunks khi vượt ngưỡng token"
+                    ) {
+                        HStack(spacing: 10) {
+                            if settings.enableSmartChunking {
+                                Picker("", selection: $settings.smartChunkMaxTokens) {
+                                    Text("15.000 tokens").tag(15_000)
+                                    Text("25.000 tokens").tag(25_000)
+                                    Text("40.000 tokens").tag(40_000)
+                                }
+                                .labelsHidden()
+                                .pickerStyle(.menu)
+                                .frame(width: 130)
+                                .controlSize(.small)
+                            }
+
+                            Toggle("", isOn: $settings.enableSmartChunking)
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                        }
+                    }
+                }
+
+                // 2. Hybrid Engines Status
+                MacSettingsSection(title: "Bộ máy chuyển đổi (Hybrid Engines)") {
+                    MacEngineStatusRow(
+                        title: "AI Document Toolkit (PyMuPDF4LLM + MarkItDown)",
+                        detail: diag.pythonPath.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? "Chưa cài đặt — tự động dùng bộ chuyển đổi Swift nội bộ",
+                        isReady: diag.toolkitReady
+                    )
+
+                    MacSettingsRowDivider()
+
+                    MacEngineStatusRow(
+                        title: "LibreOffice Headless (.doc, .xls, .ppt, .rtf)",
+                        detail: diag.sofficePath ?? "Chưa cài đặt — tự động dùng macOS textutil AST",
+                        isReady: diag.libreOfficeReady
+                    )
+
+                    MacSettingsRowDivider()
+
+                    MacEngineStatusRow(
+                        title: "Google Workspace (.gdoc, .gsheet, .gslides) & Web Reader",
+                        detail: "Xuất trực tiếp cấu trúc bảng biểu và bài viết sạch sang Markdown",
+                        isReady: true
+                    )
+
+                    MacSettingsRowDivider()
+
+                    MacEngineStatusRow(
+                        title: "Apple Vision Neural OCR & Native Swift Fallback",
+                        detail: "Hoạt động độc lập trên macOS không cần phụ thuộc bên ngoài",
+                        isReady: true
+                    )
+
+                    MacSettingsRowDivider()
+
+                    MacSettingsRow(
+                        title: "Đường dẫn AI Toolkit",
+                        subtitle: "Thư mục chứa môi trường Python tùy chọn"
+                    ) {
+                        TextField("~/Developer/AI/ai-document-toolkit", text: $settings.aiToolkitPath)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 11.5, design: .monospaced))
+                            .frame(width: 250)
+                    }
+                }
+
+                // 3. Clean Native Drop Zone
+                MacSettingsSection(title: "Chuyển đổi nhanh bằng Kéo & Thả") {
+                    VStack(spacing: 6) {
+                        Image(systemName: "arrow.down.doc")
+                            .font(.system(size: 22, weight: .regular))
+                            .foregroundStyle(isDropTargeted ? Color.accentColor : Color.secondary)
+                        Text("Kéo và thả tệp Word, Excel, PDF hoặc Ảnh vào đây để chuyển sang Markdown")
+                            .font(.system(size: 12.5, weight: .medium))
+                            .foregroundStyle(.primary)
+                        Text("Hoặc chọn tệp trong Finder rồi nhấn \(settings.universalActionHotKey.readableDisplay)")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 22)
+                    .background(isDropTargeted ? Color.accentColor.opacity(0.08) : Color.clear)
+                    .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+                        Task { @MainActor in
+                            var urls: [URL] = []
+                            for p in providers {
+                                if let item = try? await p.loadItem(forTypeIdentifier: "public.file-url", options: nil),
+                                   let data = item as? Data,
+                                   let u = URL(dataRepresentation: data, relativeTo: nil) {
+                                    urls.append(u)
+                                }
+                            }
+                            guard !urls.isEmpty else { return }
+                            if let def = UniversalActionCatalog.all.first(where: { $0.id == "ai.convert_md" }) {
+                                UniversalActionExecutor.shared.execute(
+                                    action: def,
+                                    target: .files(urls),
+                                    viewModel: LauncherViewModel.shared
+                                )
+                            }
+                        }
+                        return true
+                    }
+                }
+            }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 20)
         }
     }
+}
 
-    private var contactsStatusDescription: String {
-        if contactsService.isAuthorized {
-            return "Đang đồng bộ trực tiếp với ứng dụng Danh bạ macOS • Tự động cập nhật ngay khi thêm/sửa liên hệ."
-        } else if contactsService.authorizationStatus == .notDetermined {
-            return "Bấm 'Cấp quyền Danh bạ...' hoặc gõ 'c ' trong thanh tìm kiếm để cho phép DriveBar tra cứu liên hệ."
-        } else {
-            return "Vui lòng mở System Settings → Privacy & Security → Contacts và bật công tắc cho phép DriveBar."
+private struct MacEngineStatusRow: View {
+    let title: String
+    let detail: String
+    let isReady: Bool
+
+    var body: some View {
+        MacSettingsRow(title: title, subtitle: detail) {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(isReady ? Color.green : Color.secondary.opacity(0.5))
+                    .frame(width: 6, height: 6)
+                Text(isReady ? "Sẵn sàng" : "Dự phòng")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+// MARK: - Pane 6: Universal Actions
+
+private struct UniversalActionsSettingsPane: View {
+    @ObservedObject var settings: AppSettings
+    @ObservedObject var uiState: SettingsUIState
+
+    var body: some View {
+        let filter = uiState.actionFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Quick Reference Card
+                MacSettingsSection(
+                    title: "Cách gọi nhanh Universal Actions",
+                    headerTrailing: {
+                        if !settings.disabledActionIDs.isEmpty {
+                            Button("Bật lại tất cả (\(settings.disabledActionIDs.count) đang tắt)") {
+                                settings.disabledActionIDs.removeAll()
+                            }
+                            .buttonStyle(.link)
+                            .font(.system(size: 11.5))
+                        }
+                    }
+                ) {
+                    ShortcutHintGridRow(
+                        leftKey: settings.universalActionHotKey.readableDisplay,
+                        leftDesc: "Mở trên tệp Finder hoặc văn bản đang chọn",
+                        rightKey: "⇥ / ⇧↩",
+                        rightDesc: "Mở từ kết quả tìm kiếm DriveBar"
+                    )
+                    MacSettingsRowDivider()
+                    ShortcutHintGridRow(
+                        leftKey: "⌥↑ / ⌥↓ → ⌥→",
+                        leftDesc: "Gom nhiều tệp vào Buffer để xử lý hàng loạt",
+                        rightKey: "⌥↩",
+                        rightDesc: "Chỉ sao chép Markdown (không tạo tệp .md)"
+                    )
+                }
+
+                // Categories of Actions as Native Inset-Grouped Cards
+                ForEach(ActionCategory.allCases, id: \.self) { category in
+                    let items = UniversalActionCatalog.all.filter { item in
+                        item.category == category &&
+                        (filter.isEmpty ||
+                         item.title.localizedCaseInsensitiveContains(filter) ||
+                         item.subtitle.localizedCaseInsensitiveContains(filter))
+                    }
+
+                    if !items.isEmpty {
+                        MacSettingsSection(title: category.rawValue) {
+                            ForEach(Array(items.enumerated()), id: \.element.id) { idx, item in
+                                if idx > 0 {
+                                    MacSettingsRowDivider(leadingInset: 46)
+                                }
+
+                                MacSettingsRow(
+                                    symbol: item.sfSymbol,
+                                    title: item.title,
+                                    subtitle: item.subtitle
+                                ) {
+                                    Toggle("", isOn: Binding(
+                                        get: { settings.isActionEnabled(item.id) },
+                                        set: { settings.setActionEnabled(item.id, enabled: $0) }
+                                    ))
+                                    .labelsHidden()
+                                    .toggleStyle(.switch)
+                                    .controlSize(.small)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 20)
         }
     }
 }
