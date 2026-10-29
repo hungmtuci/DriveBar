@@ -51,6 +51,7 @@ final class LauncherViewModel: ObservableObject {
     // Preview card state for Universal Actions right pane (Screenshot 2 style!)
     @Published private(set) var previewImage: NSImage?
     @Published private(set) var previewFileSizeText: String = ""
+    @Published private(set) var previewCreatedText: String = ""
     @Published private(set) var previewModifiedText: String = ""
     @Published private(set) var previewRouteHint: String = ""
 
@@ -465,7 +466,7 @@ final class LauncherViewModel: ObservableObject {
                 SearchResultItem(
                     id: "no-gdrive",
                     title: "Không tìm thấy thư mục Google Drive trong ~/Library/CloudStorage",
-                    subtitle: "Bạn vẫn dùng được mọi Universal Actions (⌘⇧A) & Convert sang Markdown trên file cục bộ!",
+                    subtitle: "Bạn vẫn dùng được mọi Universal Actions (\(AppSettings.shared.universalActionHotKey.readableDisplay)) & Convert sang Markdown trên file cục bộ!",
                     path: nil,
                     isDirectory: false,
                     kind: .infoBanner,
@@ -771,6 +772,7 @@ final class LauncherViewModel: ObservableObject {
 
         previewImage = nil
         previewFileSizeText = ""
+        previewCreatedText = ""
         previewModifiedText = ""
         previewRouteHint = ""
 
@@ -781,9 +783,9 @@ final class LauncherViewModel: ObservableObject {
 
         let path = firstURL.path
         let isDir = GoogleDriveIndexService.shared.isKnownDirectory(path, hasDirectoryHint: firstURL.hasDirectoryPath)
-        previewRouteHint = isDir
-            ? "Thư mục • Hỗ trợ gộp sang 1 file AI .md"
-            : MarkdownConverterService.routeDescription(for: firstURL)
+        if isDir {
+            previewRouteHint = "Thư mục • Convert sang Markdown (gộp ngữ cảnh AI)"
+        }
 
         // Instant zero-blocking fallback icon
         if isDir {
@@ -799,27 +801,38 @@ final class LauncherViewModel: ObservableObject {
             previewImage = NSWorkspace.shared.icon(forFile: path)
         }
 
-        // Read stat metadata on background thread so CloudStorage never blocks UI
+        // Read stat metadata + route hint on background thread so CloudStorage never blocks UI
         Task.detached(priority: .utility) {
             var sizeStr = ""
+            var createdStr = ""
             var modStr = ""
             var stBuf = Darwin.stat()
             if Darwin.lstat(path, &stBuf) == 0 {
                 if (stBuf.st_mode & S_IFMT) != S_IFDIR {
                     sizeStr = ByteCountFormatter.string(fromByteCount: Int64(stBuf.st_size), countStyle: .file)
                 }
-                let mod = Date(timeIntervalSince1970: TimeInterval(stBuf.st_mtimespec.tv_sec))
                 let df = DateFormatter()
                 df.dateFormat = "dd/MM/yyyy HH:mm"
+                if stBuf.st_birthtimespec.tv_sec > 0 {
+                    let birth = Date(timeIntervalSince1970: TimeInterval(stBuf.st_birthtimespec.tv_sec))
+                    createdStr = df.string(from: birth)
+                }
+                let mod = Date(timeIntervalSince1970: TimeInterval(stBuf.st_mtimespec.tv_sec))
                 modStr = df.string(from: mod)
             }
+            let computedRoute = isDir
+                ? "Thư mục • Convert sang Markdown (gộp ngữ cảnh AI)"
+                : MarkdownConverterService.routeDescription(for: firstURL)
             let finalSize = sizeStr
+            let finalCreated = createdStr
             let finalMod = modStr
             await MainActor.run {
                 let vm = LauncherViewModel.shared
                 guard vm.previewGeneration == gen else { return }
                 vm.previewFileSizeText = finalSize
+                vm.previewCreatedText = finalCreated
                 vm.previewModifiedText = finalMod
+                vm.previewRouteHint = computedRoute
             }
         }
 
@@ -952,9 +965,15 @@ final class LauncherViewModel: ObservableObject {
             } else if cmd == "record-hotkey" {
                 LauncherPanelController.shared.hide()
                 HotKeyService.shared.openSettingsAndRecord(.search)
+            } else if cmd == "record-ua-hotkey" {
+                LauncherPanelController.shared.hide()
+                HotKeyService.shared.openSettingsAndRecord(.universalAction)
             } else if cmd == "set-cmd-space" {
                 LauncherPanelController.shared.hide()
                 HotKeyService.shared.applyRecordedBinding(.commandSpace, for: .search)
+            } else if cmd == "set-cmd-slash" {
+                LauncherPanelController.shared.hide()
+                HotKeyService.shared.applyRecordedBinding(.commandSlash, for: .universalAction)
             } else if cmd == "set-opt-space" {
                 LauncherPanelController.shared.hide()
                 HotKeyService.shared.applyRecordedBinding(.optionSpace, for: .search)
@@ -1081,12 +1100,33 @@ final class LauncherViewModel: ObservableObject {
     }
 
     private static func hotkeyQuickItems() -> [SearchResultItem] {
-        let cur = AppSettings.shared.searchHotKey.readableDisplay
+        let curSearch = AppSettings.shared.searchHotKey.readableDisplay
+        let curUA = AppSettings.shared.universalActionHotKey.readableDisplay
         return [
             SearchResultItem(
+                id: "cmd:record-ua-hotkey",
+                title: "⚡ Tự thiết lập Phím tắt mở Universal Actions trên Finder (Đang dùng: \(curUA))",
+                subtitle: "Mặc định: ⌘/ (Command + /) • Nhấn Enter để tự bấm tổ hợp phím bất kỳ bạn muốn",
+                path: nil,
+                isDirectory: false,
+                kind: .systemCommand(id: "record-ua-hotkey"),
+                badge: "Finder Action",
+                sfSymbolFallback: "bolt.horizontal.circle.fill"
+            ),
+            SearchResultItem(
+                id: "cmd:set-cmd-slash",
+                title: "⚡ Đặt phím tắt Universal Actions mặc định Command + / (⌘/)",
+                subtitle: "Chọn file/thư mục trong Finder rồi nhấn ⌘/ để mở ngay Universal Actions & Convert sang Markdown",
+                path: nil,
+                isDirectory: false,
+                kind: .systemCommand(id: "set-cmd-slash"),
+                badge: "Mặc định",
+                sfSymbolFallback: "command.square.fill"
+            ),
+            SearchResultItem(
                 id: "cmd:record-hotkey",
-                title: "⌨️ Tự thiết lập Phím tắt mở DriveBar (Đang dùng: \(cur))",
-                subtitle: "Nhấn Enter để mở bộ thu phím tắt bất kỳ theo ý muốn của bạn",
+                title: "⌨️ Tự thiết lập Phím tắt mở Thanh Tìm Kiếm (Đang dùng: \(curSearch))",
+                subtitle: "Mặc định: ⌘Space • Nhấn Enter để mở bộ thu phím tắt bất kỳ theo ý muốn của bạn",
                 path: nil,
                 isDirectory: false,
                 kind: .systemCommand(id: "record-hotkey"),
@@ -1095,7 +1135,7 @@ final class LauncherViewModel: ObservableObject {
             ),
             SearchResultItem(
                 id: "cmd:set-cmd-space",
-                title: "⚡ Đặt phím tắt mặc định Command + Space (⌘Space)",
+                title: "⚡ Đặt phím tắt Tìm kiếm mặc định Command + Space (⌘Space)",
                 subtitle: "Áp dụng ngay tổ hợp phím mặc định ⌘Space để mở DriveBar",
                 path: nil,
                 isDirectory: false,
@@ -1105,7 +1145,7 @@ final class LauncherViewModel: ObservableObject {
             ),
             SearchResultItem(
                 id: "cmd:set-opt-space",
-                title: "⚡ Đặt phím tắt Option + Space (⌥Space)",
+                title: "⚡ Đặt phím tắt Tìm kiếm Option + Space (⌥Space)",
                 subtitle: "Áp dụng ngay tổ hợp phím ⌥Space để mở DriveBar",
                 path: nil,
                 isDirectory: false,

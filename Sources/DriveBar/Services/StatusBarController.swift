@@ -114,7 +114,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         // Quick Shortcut Customization Submenu
         let shortcutParent = NSMenuItem(
-            title: "Thiết lập Phím tắt (Đang dùng: \(settings.searchHotKey.readableDisplay))",
+            title: "Thiết lập Phím tắt (Tìm: \(settings.searchHotKey.readableDisplay) • Action: \(settings.universalActionHotKey.readableDisplay))",
             action: nil,
             keyEquivalent: ""
         )
@@ -122,7 +122,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let shortcutMenu = NSMenu()
 
         let recordSearchItem = NSMenuItem(
-            title: "🎙 Tự bấm thiết lập phím tắt Tìm kiếm...",
+            title: "🎙 Tự bấm thiết lập phím tắt Tìm kiếm (\(settings.searchHotKey.readableDisplay))...",
             action: #selector(recordSearchShortcutAction),
             keyEquivalent: ""
         )
@@ -150,15 +150,35 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         shortcutMenu.addItem(.separator())
 
         let recordUAItem = NSMenuItem(
-            title: "🎙 Tự bấm thiết lập phím tắt Universal Actions (\(settings.universalActionHotKey.readableDisplay))...",
+            title: "🎙 Tự bấm thiết lập phím tắt Universal Actions trên Finder (\(settings.universalActionHotKey.readableDisplay))...",
             action: #selector(recordUniversalShortcutAction),
             keyEquivalent: ""
         )
         recordUAItem.target = self
         shortcutMenu.addItem(recordUAItem)
 
+        let uaPresets: [(String, HotKeyBinding)] = [
+            ("⌘/ — Mặc định Finder (Command + /)", .commandSlash),
+            ("⌘\\ (Command + \\)", .commandBackslash),
+            ("⌥⌘/ (Option + Command + /)", .optionCommandSlash),
+            ("⌘⇧A (Command + Shift + A)", .commandShiftA)
+        ]
+        for (idx, uaPreset) in uaPresets.enumerated() {
+            let uItem = NSMenuItem(
+                title: uaPreset.0,
+                action: #selector(selectUniversalPresetShortcut(_:)),
+                keyEquivalent: ""
+            )
+            uItem.tag = idx
+            uItem.state = (settings.universalActionHotKey == uaPreset.1) ? .on : .off
+            uItem.target = self
+            shortcutMenu.addItem(uItem)
+        }
+
+        shortcutMenu.addItem(.separator())
+
         let resetHotkeysItem = NSMenuItem(
-            title: "Khôi phục mặc định (⌘Space & ⌘⇧A)",
+            title: "Khôi phục mặc định (⌘Space & ⌘/)",
             action: #selector(resetDefaultShortcutsAction),
             keyEquivalent: ""
         )
@@ -290,11 +310,17 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         HotKeyService.shared.applyRecordedBinding(presets[sender.tag], for: .search)
     }
 
+    @objc private func selectUniversalPresetShortcut(_ sender: NSMenuItem) {
+        let presets: [HotKeyBinding] = [.commandSlash, .commandBackslash, .optionCommandSlash, .commandShiftA]
+        guard sender.tag >= 0 && sender.tag < presets.count else { return }
+        HotKeyService.shared.applyRecordedBinding(presets[sender.tag], for: .universalAction)
+    }
+
     @objc private func resetDefaultShortcutsAction() {
         AppSettings.shared.resetShortcutsToDefault()
         FloatingToastController.shared.showSuccess(
             title: "Đã khôi phục phím tắt mặc định",
-            subtitle: "Tìm kiếm: ⌘Space  •  Universal Actions: ⌘⇧A"
+            subtitle: "Tìm kiếm: ⌘Space  •  Universal Actions (Finder): ⌘/"
         )
     }
 

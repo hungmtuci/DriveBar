@@ -24,6 +24,7 @@ struct UniversalActionsView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .truncationMode(.middle)
                 }
 
                 Spacer()
@@ -140,13 +141,32 @@ struct UniversalActionsView: View {
 
             Divider().opacity(0.45)
 
-            // 4. Bottom Action Hints
-            HStack(spacing: 14) {
-                Label("↩ Thực hiện", systemImage: "return")
-                Label("⌥↩ Convert MD (Chỉ Copy Clipboard)", systemImage: "doc.on.clipboard")
-                Label("⌘Y Quick Look", systemImage: "eye")
-                Spacer()
-                Text("⎋ Esc quay lại")
+            // 4. Bottom Action Hints & Live Description (Matches Alfred Universal Actions footer!)
+            HStack(spacing: 12) {
+                if viewModel.selectedIndex >= 0 && viewModel.selectedIndex < viewModel.filteredActions.count {
+                    Text(viewModel.filteredActions[viewModel.selectedIndex].subtitle)
+                        .lineLimit(1)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Label("↩ Thực hiện", systemImage: "return")
+                    Label("⌥↩ Chỉ Copy Markdown", systemImage: "doc.on.clipboard")
+                }
+                Spacer(minLength: 8)
+                Button {
+                    LauncherPanelController.shared.hide()
+                    HotKeyService.shared.openSettingsAndRecord(.universalAction)
+                } label: {
+                    Label("Finder: \(AppSettings.shared.universalActionHotKey.readableDisplay)", systemImage: "bolt.horizontal.circle")
+                        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.indigo)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Color.indigo.opacity(0.12), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .help("Bấm để đổi phím tắt mở Universal Actions khi thao tác trên Finder (Mặc định: ⌘/)")
+
+                Text("⌘Y Quick Look • ⎋ Esc")
                     .foregroundStyle(.tertiary)
             }
             .font(.system(size: 10.5, weight: .medium))
@@ -283,6 +303,15 @@ private struct UniversalActionRightPreviewPane: View {
                                 .foregroundStyle(.secondary)
                             Spacer()
                             Text(viewModel.previewFileSizeText)
+                                .fontWeight(.medium)
+                        }
+                    }
+                    if !viewModel.previewCreatedText.isEmpty {
+                        HStack {
+                            Text("Ngày tạo:")
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text(viewModel.previewCreatedText)
                                 .fontWeight(.medium)
                         }
                     }

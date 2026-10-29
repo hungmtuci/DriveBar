@@ -627,8 +627,26 @@ final class UniversalActionExecutor {
             subtitle: titleLabel
         )
 
+        let hasFolder = urls.contains {
+            GoogleDriveIndexService.shared.isKnownDirectory($0.path, hasDirectoryHint: $0.hasDirectoryPath)
+        }
+
         Task { @MainActor in
             do {
+                if hasFolder {
+                    let merged = try await MarkdownConverterService.shared.mergeIntoSingleContextMarkdown(
+                        urls: urls,
+                        copyToClipboard: copyClipboard
+                    )
+                    let outName = merged.savedMarkdownURL?.lastPathComponent ?? "AI_Context.md"
+                    FloatingToastController.shared.showSuccess(
+                        title: copyClipboard ? "Đã gộp sang \(outName) & Copy vào Clipboard ✓" : "Đã xuất \(outName) ✓",
+                        subtitle: "Tổng ước tính ~\(merged.estimatedTokens.formatted()) tokens cho AI",
+                        symbol: "doc.text.magnifyingglass"
+                    )
+                    return
+                }
+
                 let results = try await MarkdownConverterService.shared.convertFilesToMarkdown(
                     urls: urls,
                     saveBesideSource: saveBeside,

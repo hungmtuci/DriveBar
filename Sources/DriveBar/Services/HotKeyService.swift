@@ -110,7 +110,8 @@ final class HotKeyService: ObservableObject {
             }
         }
         if !isUniversalHotKeyActive {
-            conflicts.append("Phím tắt Universal Actions (\(settings.universalActionHotKey.readableDisplay)) đang bị trùng với ứng dụng khác.")
+            let uaDisp = settings.universalActionHotKey.readableDisplay
+            conflicts.append("Phím tắt Universal Actions (\(uaDisp)) đang bị ứng dụng khác (như Alfred) chiếm giữ — hãy đóng ứng dụng trùng hoặc chọn phím tắt khác.")
         }
         if !conflicts.isEmpty {
             registrationWarning = conflicts.joined(separator: " ")

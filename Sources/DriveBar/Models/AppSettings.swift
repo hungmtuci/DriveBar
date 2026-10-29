@@ -31,6 +31,7 @@ final class AppSettings: ObservableObject {
         static let syncthingFolderPath = "drivebar.syncthingFolderPath"
         static let hasLaunchedBefore = "drivebar.hasLaunchedBefore"
         static let didMigrateCmdSpaceV121 = "drivebar.didMigrateCmdSpaceV121"
+        static let didMigrateCmdSlashV123 = "drivebar.didMigrateCmdSlashV123"
         static let localSettingsUpdatedAt = "drivebar.localSettingsUpdatedAt"
     }
 
@@ -174,28 +175,37 @@ final class AppSettings: ObservableObject {
 
     private init() {
         let didMigrateCmdSpace = defaults.bool(forKey: Keys.didMigrateCmdSpaceV121)
-        var migratedDefaultToCmdSpace = false
+        let didMigrateCmdSlash = defaults.bool(forKey: Keys.didMigrateCmdSlashV123)
+        var didPerformDefaultMigration = false
 
         if let data = defaults.data(forKey: Keys.searchHotKey),
            let decoded = try? JSONDecoder().decode(HotKeyBinding.self, from: data) {
             if !didMigrateCmdSpace && decoded == .optionSpace {
                 self.searchHotKey = .defaultSearch
-                migratedDefaultToCmdSpace = true
+                didPerformDefaultMigration = true
             } else {
                 self.searchHotKey = decoded
             }
         } else {
             self.searchHotKey = .defaultSearch
             if !didMigrateCmdSpace {
-                migratedDefaultToCmdSpace = true
+                didPerformDefaultMigration = true
             }
         }
 
         if let data = defaults.data(forKey: Keys.universalActionHotKey),
            let decoded = try? JSONDecoder().decode(HotKeyBinding.self, from: data) {
-            self.universalActionHotKey = decoded
+            if !didMigrateCmdSlash && decoded == .commandShiftA {
+                self.universalActionHotKey = .defaultUniversalAction
+                didPerformDefaultMigration = true
+            } else {
+                self.universalActionHotKey = decoded
+            }
         } else {
             self.universalActionHotKey = .defaultUniversalAction
+            if !didMigrateCmdSlash {
+                didPerformDefaultMigration = true
+            }
         }
 
         let savedDisabled = defaults.stringArray(forKey: Keys.disabledActionIDs) ?? []
@@ -244,8 +254,12 @@ final class AppSettings: ObservableObject {
         if !didMigrateCmdSpace {
             defaults.set(true, forKey: Keys.didMigrateCmdSpaceV121)
         }
-        if migratedDefaultToCmdSpace {
+        if !didMigrateCmdSlash {
+            defaults.set(true, forKey: Keys.didMigrateCmdSlashV123)
+        }
+        if didPerformDefaultMigration {
             saveCodable(self.searchHotKey, forKey: Keys.searchHotKey)
+            saveCodable(self.universalActionHotKey, forKey: Keys.universalActionHotKey)
             defaults.set(Date().timeIntervalSince1970 + 2.0, forKey: Keys.localSettingsUpdatedAt)
             DispatchQueue.main.async {
                 SyncAndLatchingService.shared.pushPortableSettings()

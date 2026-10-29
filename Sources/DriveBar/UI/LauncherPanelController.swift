@@ -41,9 +41,17 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
 
     func triggerUniversalActionsOnSelection() {
         Task { @MainActor in
-            if isVisible, case .search = LauncherViewModel.shared.screenMode {
-                LauncherViewModel.shared.openUniversalActionsForSelectedSearchItem()
-                return
+            if isVisible {
+                switch LauncherViewModel.shared.screenMode {
+                case .search:
+                    LauncherViewModel.shared.openUniversalActionsForSelectedSearchItem()
+                    return
+                case .universalActions:
+                    hide()
+                    return
+                default:
+                    break
+                }
             }
 
             guard let target = await SelectionCaptureService.shared.captureCurrentSelection() else {

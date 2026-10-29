@@ -342,6 +342,20 @@ private struct SearchFooterBar: View {
             .help("Bấm để tự thiết lập phím tắt mở DriveBar (Mặc định: ⌘Space)")
 
             Button {
+                LauncherPanelController.shared.hide()
+                HotKeyService.shared.openSettingsAndRecord(.universalAction)
+            } label: {
+                Label("Action \(settings.universalActionHotKey.readableDisplay)", systemImage: "bolt.horizontal.circle")
+                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.teal)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2.5)
+                    .background(Color.teal.opacity(0.13), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("Bấm để đổi phím tắt mở Universal Actions trên Finder (Mặc định: ⌘/)")
+
+            Button {
                 settings.showDockIcon.toggle()
             } label: {
                 Label(

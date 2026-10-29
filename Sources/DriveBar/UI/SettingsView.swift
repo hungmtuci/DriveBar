@@ -100,7 +100,7 @@ struct SettingsView: View {
 
                     Spacer()
 
-                    // Quick Shortcut Recorder Badge in Header
+                    // Quick Shortcut Recorder Badges in Header (Search & Finder Universal Actions)
                     Button {
                         uiState.selectedTab = .general
                         hotKeyService.startRecording(for: .search)
@@ -108,7 +108,7 @@ struct SettingsView: View {
                         Label(
                             hotKeyService.recordingTarget == .search
                                 ? (hotKeyService.liveModifiersPreview.isEmpty ? "Nhấn phím..." : hotKeyService.liveModifiersPreview)
-                                : "Phím tắt: \(settings.searchHotKey.readableDisplay)",
+                                : "Tìm: \(settings.searchHotKey.readableDisplay)",
                             systemImage: "command.square.fill"
                         )
                         .font(.system(size: 11.5, weight: .semibold))
@@ -117,6 +117,23 @@ struct SettingsView: View {
                     .tint(hotKeyService.recordingTarget == .search ? .orange : .purple)
                     .controlSize(.small)
                     .help("Bấm để tự thiết lập phím tắt gọi nhanh DriveBar (Mặc định: ⌘Space)")
+
+                    Button {
+                        uiState.selectedTab = .general
+                        hotKeyService.startRecording(for: .universalAction)
+                    } label: {
+                        Label(
+                            hotKeyService.recordingTarget == .universalAction
+                                ? (hotKeyService.liveModifiersPreview.isEmpty ? "Nhấn phím..." : hotKeyService.liveModifiersPreview)
+                                : "Finder Action: \(settings.universalActionHotKey.readableDisplay)",
+                            systemImage: "bolt.horizontal.circle.fill"
+                        )
+                        .font(.system(size: 11.5, weight: .semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(hotKeyService.recordingTarget == .universalAction ? .orange : .indigo)
+                    .controlSize(.small)
+                    .help("Bấm để tự thiết lập phím tắt mở Universal Actions trên Finder (Mặc định: ⌘/)")
 
                     // Quick Toggle Show/Hide on Dock Button
                     Button {
@@ -345,16 +362,16 @@ private struct GeneralSettingsTab: View {
 
                         Divider()
 
-                        // B. Universal Actions Hotkey Row
+                        // B. Universal Actions Hotkey Row (Finder & Global)
                         VStack(alignment: .leading, spacing: 8) {
                             HStack(alignment: .center, spacing: 10) {
                                 VStack(alignment: .leading, spacing: 2) {
                                     HStack(spacing: 8) {
-                                        Text("Phím tắt Universal Actions & Convert sang Markdown")
+                                        Text("Phím tắt Mở Universal Actions khi thao tác trên Finder")
                                             .font(.system(size: 13, weight: .semibold))
                                         shortcutStatusPill(isActive: hotKeyService.isUniversalHotKeyActive)
                                     }
-                                    Text("Chọn file trong Finder, URL hoặc bôi đen văn bản bất kỳ rồi nhấn phím tắt (Mặc định: ⌘⇧A)")
+                                    Text("Mặc định: Command + / (⌘/) • Chọn file/thư mục trong Finder (hoặc URL / văn bản bôi đen) rồi nhấn phím tắt")
                                         .font(.system(size: 11.5))
                                         .foregroundStyle(.secondary)
                                 }
@@ -379,7 +396,7 @@ private struct GeneralSettingsTab: View {
                                 .buttonStyle(.borderedProminent)
                                 .tint(hotKeyService.recordingTarget == .universalAction ? .orange : .indigo)
 
-                                Button("Mặc định (⌘⇧A)") {
+                                Button("Mặc định (⌘/)") {
                                     hotKeyService.applyRecordedBinding(.defaultUniversalAction, for: .universalAction)
                                 }
                                 .buttonStyle(.bordered)
@@ -392,9 +409,10 @@ private struct GeneralSettingsTab: View {
                                     .font(.system(size: 11))
                                     .foregroundStyle(.secondary)
 
-                                presetChip(title: "⌘⇧A (Mặc định)", binding: .defaultUniversalAction, current: settings.universalActionHotKey, target: .universalAction)
-                                presetChip(title: "⌥⌘A", binding: .optionCommandA, current: settings.universalActionHotKey, target: .universalAction)
-                                presetChip(title: "⌃⇧A", binding: .controlShiftA, current: settings.universalActionHotKey, target: .universalAction)
+                                presetChip(title: "⌘/ (Mặc định)", binding: .commandSlash, current: settings.universalActionHotKey, target: .universalAction)
+                                presetChip(title: "⌘\\", binding: .commandBackslash, current: settings.universalActionHotKey, target: .universalAction)
+                                presetChip(title: "⌥⌘/", binding: .optionCommandSlash, current: settings.universalActionHotKey, target: .universalAction)
+                                presetChip(title: "⌘⇧A", binding: .commandShiftA, current: settings.universalActionHotKey, target: .universalAction)
                                 presetChip(title: "⌘⇧M", binding: .commandShiftM, current: settings.universalActionHotKey, target: .universalAction)
 
                                 Spacer()
@@ -438,7 +456,7 @@ private struct GeneralSettingsTab: View {
                     .padding(8)
                 } label: {
                     HStack {
-                        Label("Thiết lập Phím tắt Toàn cục (Tùy chỉnh tự do • Mặc định: ⌘Space)", systemImage: "command.square.fill")
+                        Label("Thiết lập Phím tắt Toàn cục (Mặc định: Tìm kiếm ⌘Space • Finder Action ⌘/)", systemImage: "command.square.fill")
                             .font(.system(size: 13, weight: .semibold))
                         Spacer()
                         Button("Khôi phục mặc định") {

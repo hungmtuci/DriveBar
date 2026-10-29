@@ -29,8 +29,25 @@ struct HotKeyBinding: Codable, Equatable, Hashable, Sendable {
         carbonModifiers: UInt32(cmdKey | shiftKey)
     )
 
-    /// Default Universal Actions shortcut: ⌘⇧A (Command + Shift + A)
+    /// Default Universal Actions shortcut (Finder & macOS): ⌘/ (Command + /)
     static let defaultUniversalAction = HotKeyBinding(
+        keyCode: UInt32(kVK_ANSI_Slash),
+        carbonModifiers: UInt32(cmdKey)
+    )
+
+    static let commandSlash = defaultUniversalAction
+
+    static let commandBackslash = HotKeyBinding(
+        keyCode: UInt32(kVK_ANSI_Backslash),
+        carbonModifiers: UInt32(cmdKey)
+    )
+
+    static let optionCommandSlash = HotKeyBinding(
+        keyCode: UInt32(kVK_ANSI_Slash),
+        carbonModifiers: UInt32(optionKey | cmdKey)
+    )
+
+    static let commandShiftA = HotKeyBinding(
         keyCode: UInt32(kVK_ANSI_A),
         carbonModifiers: UInt32(cmdKey | shiftKey)
     )
