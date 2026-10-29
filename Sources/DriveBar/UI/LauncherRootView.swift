@@ -93,7 +93,7 @@ private struct SearchModeContentView: View {
 
                 NativeSearchInputField(
                     text: $viewModel.searchText,
-                    placeholder: "Tìm nhanh thư mục Google Drive (gõ không dấu / viết tắt, 'fs ' chia sẻ, 'ai ' convert)...",
+                    placeholder: "Tìm nhanh thư mục & ứng dụng ('a ' lọc ứng dụng, 'fs ' chia sẻ, 'ai ' convert)...",
                     fontSize: 18,
                     focusTrigger: viewModel.focusTrigger,
                     selectAllOnFocus: viewModel.selectAllOnFocus,
@@ -307,6 +307,18 @@ private struct SearchResultRowView: View {
 
     private var dynamicSubtitle: String {
         guard isSelected, item.path != nil else { return item.subtitle }
+        if case .localApp = item.kind {
+            if activeModifiers.contains(.command) {
+                return "⌘↩ Mở vị trí ứng dụng trong Finder  •  ⌘/ Mở Universal Actions"
+            }
+            if activeModifiers.contains(.option) {
+                return "⌥↩ Sao chép đường dẫn ứng dụng vào Clipboard"
+            }
+            if activeModifiers.contains(.shift) {
+                return "⇧↩ Mở Universal Actions cho ứng dụng này"
+            }
+            return item.subtitle
+        }
         if activeModifiers.contains(.command) {
             return "⌘↩ Mở vị trí trực tiếp trong Finder  •  ⌘/ Mở Universal Actions"
         }

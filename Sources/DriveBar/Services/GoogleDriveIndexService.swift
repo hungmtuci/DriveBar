@@ -12,6 +12,17 @@ struct DriveAccountMount: Identifiable, Equatable, Sendable {
     let shortcutTargetsPath: String?
 }
 
+struct InstalledAppEntry: Sendable {
+    let name: String
+    let path: String
+    let bundleIdentifier: String
+    let cleanFull: String
+    let acronym: String
+    let words: [String]
+    let aliasWords: [String]
+    let isNestedHelper: Bool
+}
+
 struct FastFolderRecord: Sendable {
     let path: String
     let cleanBytes: [[UInt8]]
@@ -103,7 +114,9 @@ final class GoogleDriveIndexService: ObservableObject {
     private(set) var fastFolderIndex: FastFolderIndex = .empty
     private(set) var fastSharedIndex: FastSharedIndex = .empty
     private(set) var history: [String: HistoryRecord] = [:]
-    private(set) var appEntries: [(name: String, clean: String, acronym: String, path: String)] = []
+    private(set) var installedApps: [InstalledAppEntry] = []
+    private var lastAppScanUptime: TimeInterval = 0
+    private var isScanningApps: Bool = false
 
     private var driveFSStream: FSEventStreamRef?
     private let driveFSQueue = DispatchQueue(label: "com.hunglx.DriveBar.driveFSEvents", qos: .utility)
@@ -522,7 +535,8 @@ final class GoogleDriveIndexService: ObservableObject {
             await MainActor.run {
                 let service = GoogleDriveIndexService.shared
                 service.history = loadedHistory
-                service.appEntries = scannedApps
+                service.installedApps = scannedApps
+                service.lastAppScanUptime = ProcessInfo.processInfo.systemUptime
 
                 if let (entries, ts) = loadedFolders, let builtFastFolders {
                     service.folderEntries = entries
@@ -578,30 +592,242 @@ final class GoogleDriveIndexService: ObservableObject {
         return (payload.items, payload.timestamp)
     }
 
-    private nonisolated static func scanInstalledApplications() -> [(name: String, clean: String, acronym: String, path: String)] {
-        let fm = FileManager.default
-        let home = fm.homeDirectoryForCurrentUser.path
-        let dirs = [
-            "/Applications",
-            "/System/Applications",
-            "/System/Applications/Utilities",
-            "\(home)/Applications"
-        ]
-        var seen = Set<String>()
-        var result: [(String, String, String, String)] = []
+    func refreshInstalledAppsIfNeeded(force: Bool = false) {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard !isScanningApps else { return }
+        guard force || installedApps.isEmpty || (now - lastAppScanUptime) > 30.0 else { return }
+        isScanningApps = true
 
-        for dir in dirs {
-            guard let items = try? fm.contentsOfDirectory(atPath: dir) else { continue }
-            for item in items where item.hasSuffix(".app") {
-                let full = "\(dir)/\(item)"
-                let baseName = String(item.dropLast(4))
-                guard !seen.contains(baseName.lowercased()) else { continue }
-                seen.insert(baseName.lowercased())
-                let (clean, acr) = extractSignatures(baseName)
-                result.append((baseName, clean, acr, full))
+        Task.detached(priority: .utility) {
+            let scanned = Self.scanInstalledApplications()
+            await MainActor.run {
+                let svc = GoogleDriveIndexService.shared
+                svc.installedApps = scanned
+                svc.lastAppScanUptime = ProcessInfo.processInfo.systemUptime
+                svc.isScanningApps = false
             }
         }
-        return result
+    }
+
+    private nonisolated static let skippedAppSubfolderNames: Set<String> = [
+        "contents", "frameworks", "plugins", "helpers", "services",
+        "xpcservices", "library", "_codesignature", "resources", "macos"
+    ]
+
+    private nonisolated static func scanInstalledApplications() -> [InstalledAppEntry] {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser.path
+        let scanRoots: [(path: String, maxDepth: Int)] = [
+            ("/Applications", 5),
+            ("/System/Applications", 2),
+            ("/System/Cryptexes/App/System/Applications", 2),
+            ("\(home)/Applications", 3),
+            ("/System/Library/CoreServices/Applications", 1)
+        ]
+
+        var candidatePaths: [(path: String, depth: Int)] = []
+        if fm.fileExists(atPath: "/System/Library/CoreServices/Finder.app") {
+            candidatePaths.append(("/System/Library/CoreServices/Finder.app", 0))
+        }
+
+        for root in scanRoots {
+            collectAppBundles(in: root.path, currentDepth: 0, maxDepth: root.maxDepth, fm: fm, into: &candidatePaths)
+        }
+
+        var seenCanonicalPaths = Set<String>()
+        var seenBundleAndName = Set<String>()
+        var entries: [InstalledAppEntry] = []
+        entries.reserveCapacity(candidatePaths.count)
+
+        for candidate in candidatePaths {
+            let full = candidate.path
+            let canonical = URL(fileURLWithPath: full).resolvingSymlinksInPath().path.lowercased()
+            guard seenCanonicalPaths.insert(canonical).inserted else { continue }
+
+            let rawFileName = ((full as NSString).lastPathComponent as NSString).deletingPathExtension
+            guard !rawFileName.isEmpty else { continue }
+
+            let infoPlistPath = "\(full)/Contents/Info.plist"
+            let plist = NSDictionary(contentsOfFile: infoPlistPath) as? [String: Any]
+            if let bgOnly = plist?["LSBackgroundOnly"] as? Bool, bgOnly {
+                continue
+            }
+            if let bgStr = plist?["LSBackgroundOnly"] as? String, (bgStr == "1" || bgStr.lowercased() == "true") {
+                continue
+            }
+
+            let bundleID = (plist?["CFBundleIdentifier"] as? String) ?? ""
+            let bundleDisplayName = (plist?["CFBundleDisplayName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let bundleShortName = (plist?["CFBundleName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let finderDisplay = fm.displayName(atPath: full)
+                .replacingOccurrences(of: ".app", with: "", options: [.caseInsensitive, .anchored, .backwards])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            let primaryName: String = {
+                if !finderDisplay.isEmpty && finderDisplay.lowercased() != rawFileName.lowercased() {
+                    return finderDisplay
+                }
+                if !bundleDisplayName.isEmpty {
+                    return bundleDisplayName
+                }
+                return rawFileName
+            }()
+
+            let dedupKey = "\(bundleID.lowercased())::\(primaryName.lowercased())"
+            if !bundleID.isEmpty && !seenBundleAndName.insert(dedupKey).inserted {
+                continue
+            }
+
+            var wordList: [String] = []
+            var seenWords = Set<String>()
+            for variant in [primaryName, rawFileName, bundleDisplayName, bundleShortName] where !variant.isEmpty {
+                for w in extractAppWords(variant) where seenWords.insert(w).inserted {
+                    wordList.append(w)
+                }
+            }
+
+            let primaryWords = extractAppWords(primaryName)
+            let acronym: String = {
+                if primaryWords.count > 1 {
+                    return String(primaryWords.compactMap(\.first))
+                }
+                if wordList.count > 1 {
+                    return String(wordList.compactMap(\.first))
+                }
+                return ""
+            }()
+
+            let cleanFull = cleanString(primaryName)
+            let aliases = builtInAliases(bundleID: bundleID, cleanFull: cleanFull, rawFileClean: cleanString(rawFileName))
+            let lowerName = primaryName.lowercased()
+            let isHelper = candidate.depth >= 2 && (
+                lowerName.contains("uninstall") ||
+                lowerName.contains("license") ||
+                lowerName.contains("updater") ||
+                lowerName.contains("helper") ||
+                lowerName.contains("python2 ") ||
+                lowerName.contains("python3 ")
+            )
+
+            entries.append(InstalledAppEntry(
+                name: primaryName,
+                path: full,
+                bundleIdentifier: bundleID,
+                cleanFull: cleanFull.isEmpty ? cleanString(rawFileName) : cleanFull,
+                acronym: acronym,
+                words: wordList,
+                aliasWords: aliases,
+                isNestedHelper: isHelper
+            ))
+        }
+
+        entries.sort {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+        return entries
+    }
+
+    private nonisolated static func collectAppBundles(
+        in dirPath: String,
+        currentDepth: Int,
+        maxDepth: Int,
+        fm: FileManager,
+        into results: inout [(path: String, depth: Int)]
+    ) {
+        guard currentDepth <= maxDepth,
+              let names = try? fm.contentsOfDirectory(atPath: dirPath) else { return }
+
+        for name in names {
+            if name.hasPrefix(".") { continue }
+            let lower = name.lowercased()
+            if lower.hasSuffix(".backup") || lower.hasSuffix(".workflow") || lower.hasSuffix(".bundle") || lower.hasSuffix(".framework") {
+                continue
+            }
+            let full = "\(dirPath)/\(name)"
+            if lower.hasSuffix(".app") {
+                results.append((full, currentDepth))
+                continue
+            }
+            guard currentDepth < maxDepth else { continue }
+            if skippedAppSubfolderNames.contains(lower) { continue }
+
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: full, isDirectory: &isDir), isDir.boolValue {
+                collectAppBundles(in: full, currentDepth: currentDepth + 1, maxDepth: maxDepth, fm: fm, into: &results)
+            }
+        }
+    }
+
+    nonisolated static func extractAppWords(_ raw: String) -> [String] {
+        let unaccented = removeAccents(raw)
+        let chars = Array(unaccented)
+        var spaced = ""
+        spaced.reserveCapacity(chars.count + 4)
+
+        for i in chars.indices {
+            let c = chars[i]
+            if i > 0 {
+                let prev = chars[i - 1]
+                let boundaryCamel = prev.isLowercase && c.isUppercase
+                let boundaryAcronymWord = prev.isUppercase && c.isUppercase && (i + 1 < chars.count && chars[i + 1].isLowercase)
+                let boundaryNumLetter = (prev.isNumber && c.isLetter) || (prev.isLetter && c.isNumber)
+                if boundaryCamel || boundaryAcronymWord || boundaryNumLetter {
+                    spaced.append(" ")
+                }
+            }
+            spaced.append(c)
+        }
+
+        let lower = spaced.lowercased()
+        var out: [String] = []
+        var cur = ""
+        for scalar in lower.unicodeScalars {
+            let isAlphaNum = (scalar.value >= 97 && scalar.value <= 122) || (scalar.value >= 48 && scalar.value <= 57)
+            if isAlphaNum {
+                cur.unicodeScalars.append(scalar)
+            } else if !cur.isEmpty {
+                out.append(cur)
+                cur = ""
+            }
+        }
+        if !cur.isEmpty {
+            out.append(cur)
+        }
+        return out
+    }
+
+    private nonisolated static func builtInAliases(bundleID: String, cleanFull: String, rawFileClean: String) -> [String] {
+        switch bundleID {
+        case "com.apple.ActivityMonitor":
+            return ["active", "monitor", "task", "manager", "process", "cpu", "ram", "memory", "giam", "sat", "hoat", "dong"]
+        case "com.apple.systempreferences":
+            return ["system", "preferences", "settings", "cai", "dat", "he", "thong", "tuy", "chon"]
+        case "com.microsoft.edgemac":
+            return ["msedge", "edge", "browser", "trinh", "duyet"]
+        case "com.microsoft.Word":
+            return ["msword", "doc", "docx", "van", "ban"]
+        case "com.microsoft.Excel":
+            return ["msexcel", "xls", "xlsx", "spreadsheet", "bang", "tinh"]
+        case "com.microsoft.Powerpoint":
+            return ["mspowerpoint", "ppt", "pptx", "slide", "thuyet", "trinh"]
+        case "com.google.Chrome":
+            return ["chrome", "browser", "trinh", "duyet"]
+        case "com.apple.Safari":
+            return ["safari", "browser", "trinh", "duyet"]
+        case "com.apple.Terminal":
+            return ["terminal", "shell", "zsh", "bash", "cli", "console"]
+        case "com.apple.DiskUtility":
+            return ["disk", "utility", "o", "dia", "format"]
+        case "com.apple.screencaptureui":
+            return ["screenshot", "screen", "capture", "chup", "man", "hinh"]
+        case "com.apple.finder":
+            return ["finder", "file", "tep", "thu", "muc"]
+        default:
+            if rawFileClean != cleanFull && !rawFileClean.isEmpty {
+                return [rawFileClean]
+            }
+            return []
+        }
     }
 
     // MARK: - Vietnamese Normalization & Signatures (Exact parity with folder_search.py)
@@ -683,6 +909,7 @@ final class GoogleDriveIndexService: ObservableObject {
 
     func rebuildAllCaches() {
         refreshAccountPaths()
+        refreshInstalledAppsIfNeeded(force: true)
         rebuildFolderCacheInBackground()
         rebuildSharedCacheInBackground()
     }
@@ -1443,6 +1670,217 @@ final class GoogleDriveIndexService: ObservableObject {
         return hits.prefix(maxResults).map { ($0.entry, $0.historyCount) }
     }
 
+    func defaultInstalledAppResultItems(limit: Int = 80) -> [SearchResultItem] {
+        let runningPaths = Set(
+            NSWorkspace.shared.runningApplications
+                .filter { $0.activationPolicy == .regular }
+                .compactMap { $0.bundleURL?.resolvingSymlinksInPath().path.lowercased() }
+        )
+        let sorted = installedApps.sorted { a, b in
+            let hA = history[a.path]?.count ?? 0
+            let hB = history[b.path]?.count ?? 0
+            if hA != hB { return hA > hB }
+
+            let runA = runningPaths.contains(URL(fileURLWithPath: a.path).resolvingSymlinksInPath().path.lowercased())
+            let runB = runningPaths.contains(URL(fileURLWithPath: b.path).resolvingSymlinksInPath().path.lowercased())
+            if runA != runB { return runA && !runB }
+
+            if a.isNestedHelper != b.isNestedHelper { return !a.isNestedHelper && b.isNestedHelper }
+            return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+        }
+
+        return sorted.prefix(limit).map { app in
+            Self.makeAppSearchResultItem(
+                app: app,
+                historyCount: history[app.path]?.count ?? 0,
+                isRunning: runningPaths.contains(URL(fileURLWithPath: app.path).resolvingSymlinksInPath().path.lowercased())
+            )
+        }
+    }
+
+    nonisolated static func searchInstalledApps(
+        queryTokens: [String],
+        apps: [InstalledAppEntry],
+        historySnapshot: [String: HistoryRecord],
+        isAppOnlyMode: Bool,
+        maxResults: Int
+    ) -> [SearchResultItem] {
+        let cleanTokens = queryTokens.map(cleanString).filter { !$0.isEmpty }
+        guard !cleanTokens.isEmpty else { return [] }
+        let joinedQ = cleanTokens.joined()
+
+        var hits: [(score: Int, app: InstalledAppEntry, historyCount: Int)] = []
+        hits.reserveCapacity(16)
+
+        for app in apps {
+            guard let rawScore = scoreInstalledApp(
+                app: app,
+                cleanTokens: cleanTokens,
+                joinedQuery: joinedQ,
+                isAppOnlyMode: isAppOnlyMode
+            ) else {
+                continue
+            }
+            let hCount = historySnapshot[app.path]?.count ?? 0
+            let historyBoost = min(260, hCount * 35)
+            let helperPenalty = app.isNestedHelper ? 220 : 0
+            let lengthPenalty = min(60, app.name.count)
+            let total = rawScore + historyBoost - helperPenalty - lengthPenalty
+            hits.append((total, app, hCount))
+        }
+
+        hits.sort { a, b in
+            if a.score != b.score { return a.score > b.score }
+            if a.historyCount != b.historyCount { return a.historyCount > b.historyCount }
+            return a.app.name.localizedCaseInsensitiveCompare(b.app.name) == .orderedAscending
+        }
+
+        return hits.prefix(maxResults).map { hit in
+            makeAppSearchResultItem(app: hit.app, historyCount: hit.historyCount, isRunning: false)
+        }
+    }
+
+    private nonisolated static func makeAppSearchResultItem(
+        app: InstalledAppEntry,
+        historyCount: Int,
+        isRunning: Bool
+    ) -> SearchResultItem {
+        var subParts: [String] = []
+        if historyCount > 0 {
+            subParts.append("Mở gần đây (\(historyCount) lần)")
+        } else if isRunning {
+            subParts.append("Đang chạy")
+        } else {
+            subParts.append("Ứng dụng macOS")
+        }
+        subParts.append(app.path)
+        return SearchResultItem(
+            id: "app:\(app.path)",
+            title: app.name,
+            subtitle: subParts.joined(separator: " • "),
+            path: app.path,
+            isDirectory: false,
+            kind: .localApp(path: app.path),
+            badge: isRunning ? "Đang chạy" : "App",
+            sfSymbolFallback: "app.fill"
+        )
+    }
+
+    private nonisolated static func scoreInstalledApp(
+        app: InstalledAppEntry,
+        cleanTokens: [String],
+        joinedQuery: String,
+        isAppOnlyMode: Bool
+    ) -> Int? {
+        // 1. Direct joined query match against full clean name or acronym (e.g. "microsoftedge", "am", "me", "spss")
+        if app.cleanFull == joinedQuery {
+            return 2_600
+        }
+        if !app.acronym.isEmpty && app.acronym == joinedQuery {
+            return 2_450
+        }
+        if app.cleanFull.hasPrefix(joinedQuery) {
+            return 2_250
+        }
+        if !app.acronym.isEmpty && app.acronym.hasPrefix(joinedQuery) && joinedQuery.count >= 2 {
+            return 2_050
+        }
+
+        // 2. Per-token evaluation across words, aliases, substrings & near-prefixes
+        // Handles "moni" -> Activity Monitor, "active monitor" -> Activity Monitor, "edg" -> Microsoft Edge!
+        var totalTokenScore = 0
+        var matchedWordIndices = Set<Int>()
+
+        for token in cleanTokens {
+            var bestForToken: Int?
+
+            // Check primary & bundle words first
+            for (wIdx, word) in app.words.enumerated() {
+                let firstWordBonus = (wIdx == 0) ? 70 : 0
+                if word == token {
+                    let candidate = 2_200 + firstWordBonus - (matchedWordIndices.contains(wIdx) ? 60 : 0)
+                    if candidate > (bestForToken ?? 0) {
+                        bestForToken = candidate
+                        matchedWordIndices.insert(wIdx)
+                    }
+                } else if word.hasPrefix(token) {
+                    let candidate = 1_980 + firstWordBonus - (matchedWordIndices.contains(wIdx) ? 60 : 0)
+                    if candidate > (bestForToken ?? 0) {
+                        bestForToken = candidate
+                        matchedWordIndices.insert(wIdx)
+                    }
+                } else if token.count >= 4 && sharesNearPrefix(queryToken: token, targetWord: word) {
+                    // e.g. "active" vs "activity" shares 5-char prefix "activ"!
+                    let candidate = 1_680 + firstWordBonus
+                    if candidate > (bestForToken ?? 0) {
+                        bestForToken = candidate
+                    }
+                } else if (token.count >= 3 || (isAppOnlyMode && token.count >= 2)) && word.contains(token) {
+                    let candidate = 1_520
+                    if candidate > (bestForToken ?? 0) {
+                        bestForToken = candidate
+                    }
+                }
+            }
+
+            // Check built-in synonyms / Vietnamese & English aliases (e.g. "active" -> Activity Monitor, "ppt" -> PowerPoint)
+            if bestForToken == nil {
+                for alias in app.aliasWords {
+                    if alias == token {
+                        bestForToken = max(bestForToken ?? 0, 1_780)
+                    } else if alias.hasPrefix(token) && (token.count >= 2 || isAppOnlyMode) {
+                        bestForToken = max(bestForToken ?? 0, 1_660)
+                    }
+                }
+            }
+
+            // Check cross-word substring inside cleanFull (e.g. "note" inside "endnote", "studio" inside "rstudio")
+            if bestForToken == nil && (token.count >= 3 || (isAppOnlyMode && token.count >= 2)) && app.cleanFull.contains(token) {
+                bestForToken = 1_480
+            }
+
+            // In `a <keyword>` App-Only Mode, also allow ordered subsequence matching (e.g. "actmon", "msedg", "stse")
+            if bestForToken == nil && isAppOnlyMode && token.count >= 2 && isOrderedSubsequence(token, in: app.cleanFull) {
+                bestForToken = 1_220
+            }
+
+            guard let matchedScore = bestForToken else {
+                return nil
+            }
+            totalTokenScore += matchedScore
+        }
+
+        return totalTokenScore / cleanTokens.count + (cleanTokens.count > 1 ? 120 : 0)
+    }
+
+    private nonisolated static func sharesNearPrefix(queryToken: String, targetWord: String) -> Bool {
+        let qBytes = Array(queryToken.utf8)
+        let tBytes = Array(targetWord.utf8)
+        let minRequired = max(3, qBytes.count - 1)
+        guard tBytes.count >= minRequired else { return false }
+        var shared = 0
+        let limit = min(qBytes.count, tBytes.count)
+        while shared < limit && qBytes[shared] == tBytes[shared] {
+            shared += 1
+        }
+        return shared >= minRequired
+    }
+
+    private nonisolated static func isOrderedSubsequence(_ needle: String, in haystack: String) -> Bool {
+        var hIter = haystack.utf8.makeIterator()
+        for b in needle.utf8 {
+            var found = false
+            while let hb = hIter.next() {
+                if hb == b {
+                    found = true
+                    break
+                }
+            }
+            if !found { return false }
+        }
+        return true
+    }
+
     func searchMyDriveFolders(tokens: [String], includeApps: Bool, maxResults: Int = 45) -> [SearchResultItem] {
         let cleanTokens = tokens.map(Self.cleanString).filter { !$0.isEmpty }
         guard !cleanTokens.isEmpty else { return recentMyDriveFolders() }
@@ -1463,31 +1901,17 @@ final class GoogleDriveIndexService: ObservableObject {
         maxResults: Int = 45
     ) -> [SearchResultItem] {
         var results: [SearchResultItem] = []
-        results.reserveCapacity(min(topHits.count + 4, maxResults))
+        results.reserveCapacity(min(topHits.count + 6, maxResults))
 
-        if includeApps && cleanTokens.count <= 2 && !cleanTokens.isEmpty {
-            let joinedQ = cleanTokens.joined()
-            var appHits: [(score: Int, name: String, path: String)] = []
-            for app in appEntries {
-                if app.clean == joinedQ || app.acronym == joinedQ {
-                    appHits.append((1250, app.name, app.path))
-                } else if app.clean.hasPrefix(joinedQ) || (!app.acronym.isEmpty && app.acronym.hasPrefix(joinedQ)) {
-                    appHits.append((1120, app.name, app.path))
-                }
-            }
-            appHits.sort { $0.score > $1.score }
-            for app in appHits.prefix(3) {
-                results.append(SearchResultItem(
-                    id: "app:\(app.path)",
-                    title: app.name,
-                    subtitle: "Ứng dụng macOS • \(app.path)",
-                    path: app.path,
-                    isDirectory: false,
-                    kind: .localApp(path: app.path),
-                    badge: "App",
-                    sfSymbolFallback: "app.fill"
-                ))
-            }
+        if includeApps && !cleanTokens.isEmpty {
+            let appItems = Self.searchInstalledApps(
+                queryTokens: cleanTokens,
+                apps: installedApps,
+                historySnapshot: history,
+                isAppOnlyMode: false,
+                maxResults: 5
+            )
+            results.append(contentsOf: appItems)
         }
 
         for hit in topHits {

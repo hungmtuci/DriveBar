@@ -83,7 +83,25 @@ final class LauncherViewModel: ObservableObject {
             guard searchText != live else { return }
             searchText = live
             let trimmed = live.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty && !live.hasPrefix("/") && !live.hasPrefix("~/") {
+            if trimmed.lowercased() == "a" || live.lowercased().hasPrefix("a ") {
+                let appQuery = trimmed.lowercased() == "a" ? "" : String(live.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                searchGeneration &+= 1
+                let drive = GoogleDriveIndexService.shared
+                if appQuery.isEmpty {
+                    searchResults = drive.defaultInstalledAppResultItems(limit: 80)
+                } else {
+                    let appTokens = appQuery.split(separator: " ").map(String.init)
+                    let matched = GoogleDriveIndexService.searchInstalledApps(
+                        queryTokens: appTokens,
+                        apps: drive.installedApps,
+                        historySnapshot: drive.history,
+                        isAppOnlyMode: true,
+                        maxResults: 60
+                    )
+                    searchResults = matched.isEmpty ? Self.emptyAppSearchBanner(for: appQuery) : matched
+                }
+                selectedIndex = 0
+            } else if !trimmed.isEmpty && !live.hasPrefix("/") && !live.hasPrefix("~/") {
                 let tokens = trimmed.split(separator: " ").map(String.init)
                 if !tokens.isEmpty {
                     searchGeneration &+= 1
@@ -231,6 +249,7 @@ final class LauncherViewModel: ObservableObject {
         screenMode = .search
         actionFilterText = ""
         selectedIndex = 0
+        GoogleDriveIndexService.shared.refreshInstalledAppsIfNeeded()
         refreshSearchResults()
     }
 
@@ -310,6 +329,9 @@ final class LauncherViewModel: ObservableObject {
         }
         if searchText.hasPrefix("/") || searchText.hasPrefix("~/") {
             return ("Duyệt thư mục", .secondary)
+        }
+        if trimmed.lowercased() == "a" || searchText.lowercased().hasPrefix("a ") {
+            return ("Ứng dụng", .secondary)
         }
         if trimmed == "fs" || searchText.lowercased().hasPrefix("fs ") {
             return ("Shared Drives", .secondary)
@@ -499,6 +521,28 @@ final class LauncherViewModel: ObservableObject {
             return
         }
 
+        // 3.5. App-Only Mode (`a` or `a <từ khóa>`) — Filter exclusively installed macOS applications!
+        if trimmed.lowercased() == "a" || raw.lowercased().hasPrefix("a ") {
+            let appQuery = trimmed.lowercased() == "a"
+                ? ""
+                : String(raw.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+            if appQuery.isEmpty {
+                searchResults = drive.defaultInstalledAppResultItems(limit: 80)
+            } else {
+                let appTokens = appQuery.split(separator: " ").map(String.init)
+                let matched = GoogleDriveIndexService.searchInstalledApps(
+                    queryTokens: appTokens,
+                    apps: drive.installedApps,
+                    historySnapshot: drive.history,
+                    isAppOnlyMode: true,
+                    maxResults: 60
+                )
+                searchResults = matched.isEmpty ? Self.emptyAppSearchBanner(for: appQuery) : matched
+            }
+            selectedIndex = 0
+            return
+        }
+
         // 4. Parse optional prefixes `f ` or `fs `
         var isSharedMode = false
         var effectiveQuery = trimmed
@@ -584,13 +628,28 @@ final class LauncherViewModel: ObservableObject {
             return
         }
 
-        // 6. Check Google Drive availability
+        // 6. Check Google Drive availability (still allow searching installed macOS apps if user typed a keyword!)
         if drive.accountRoot == nil {
+            let fallbackTokens = effectiveQuery.split(separator: " ").map(String.init)
+            if AppSettings.shared.includeMacAppsInSearch && !fallbackTokens.isEmpty {
+                let appMatches = GoogleDriveIndexService.searchInstalledApps(
+                    queryTokens: fallbackTokens,
+                    apps: drive.installedApps,
+                    historySnapshot: drive.history,
+                    isAppOnlyMode: true,
+                    maxResults: 30
+                )
+                if !appMatches.isEmpty {
+                    searchResults = appMatches
+                    selectedIndex = 0
+                    return
+                }
+            }
             searchResults = [
                 SearchResultItem(
                     id: "no-gdrive",
                     title: "Không tìm thấy thư mục Google Drive trong ~/Library/CloudStorage",
-                    subtitle: "Bạn vẫn dùng được mọi Universal Actions (\(AppSettings.shared.universalActionHotKey.readableDisplay)) & Convert sang Markdown trên file cục bộ!",
+                    subtitle: "Gõ 'a + từ khóa' để mở nhanh ứng dụng macOS, hoặc dùng Universal Actions (\(AppSettings.shared.universalActionHotKey.readableDisplay))!",
                     path: nil,
                     isDirectory: false,
                     kind: .infoBanner,
@@ -1312,11 +1371,29 @@ final class LauncherViewModel: ObservableObject {
             NSWorkspace.shared.open(folderURL)
 
         case .localApp(let appPath):
+            let appURL = URL(fileURLWithPath: appPath)
+            GoogleDriveIndexService.shared.recordUsed(appPath)
+            if modifiers.contains(.shift) {
+                openUniversalActions(for: .files([appURL]), directExternalTrigger: false)
+                return
+            }
+            if modifiers.contains(.option) {
+                copyDriveOrLocalLinkAsync(path: appPath, isDirectory: false)
+                return
+            }
             LauncherPanelController.shared.hide()
             if modifiers.contains(.command) {
-                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: appPath)])
+                NSWorkspace.shared.activateFileViewerSelecting([appURL])
             } else {
-                NSWorkspace.shared.open(URL(fileURLWithPath: appPath))
+                let cfg = NSWorkspace.OpenConfiguration()
+                cfg.activates = true
+                NSWorkspace.shared.openApplication(at: appURL, configuration: cfg) { _, error in
+                    if error != nil {
+                        DispatchQueue.main.async {
+                            NSWorkspace.shared.open(appURL)
+                        }
+                    }
+                }
             }
 
         case .driveFolder(let path), .driveFile(let path):
@@ -1456,6 +1533,21 @@ final class LauncherViewModel: ObservableObject {
                 kind: .systemCommand(id: "set-opt-space"),
                 badge: "Preset",
                 sfSymbolFallback: "option"
+            )
+        ]
+    }
+
+    private static func emptyAppSearchBanner(for query: String) -> [SearchResultItem] {
+        [
+            SearchResultItem(
+                id: "empty-apps:\(query)",
+                title: "Không tìm thấy ứng dụng nào khớp '\(query)'",
+                subtitle: "Chỉ đang lọc trong /Applications & ứng dụng hệ thống macOS • Xóa bớt từ khóa để xem toàn bộ ứng dụng",
+                path: nil,
+                isDirectory: false,
+                kind: .infoBanner,
+                badge: "Ứng dụng",
+                sfSymbolFallback: "app.dashed"
             )
         ]
     }
