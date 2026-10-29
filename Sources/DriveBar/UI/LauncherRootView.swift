@@ -11,7 +11,7 @@ struct LauncherRootView: View {
         VStack(spacing: 0) {
             if !bufferService.items.isEmpty, case .search = viewModel.screenMode {
                 FileBufferStripView(bufferService: bufferService, viewModel: viewModel)
-                Divider().opacity(0.4)
+                Divider()
             }
 
             switch viewModel.screenMode {
@@ -41,12 +41,15 @@ struct LauncherRootView: View {
         }
         .frame(width: 760, height: 500)
         .background(
-            VisualEffectFrostView(material: .popover, blendingMode: .behindWindow)
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            ZStack {
+                VisualEffectFrostView(material: .menu, blendingMode: .behindWindow)
+                Color(nsColor: .windowBackgroundColor).opacity(0.66)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.16), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
         )
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             handleDroppedProviders(providers)
@@ -82,11 +85,11 @@ private struct SearchModeContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Search Input Bar (Native AppKit NSTextField for 0ms Vietnamese IME & Arrow Reliability)
+            // Search Input Bar (Native macOS Spotlight-style header)
             HStack(spacing: 12) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(Color.purple)
+                    .font(.system(size: 19, weight: .medium))
+                    .foregroundStyle(.secondary)
 
                 NativeSearchInputField(
                     text: $viewModel.searchText,
@@ -115,7 +118,7 @@ private struct SearchModeContentView: View {
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .font(.system(size: 14))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.tertiary)
                     }
                     .buttonStyle(.plain)
                     .help("Xóa nội dung tìm kiếm (Esc)")
@@ -125,35 +128,39 @@ private struct SearchModeContentView: View {
                     HStack(spacing: 5) {
                         ProgressView().controlSize(.small)
                         Text(driveService.rebuildProgressText ?? "Đang đồng bộ...")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.system(size: 11, weight: .regular))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
                     .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.primary.opacity(0.06), in: Capsule())
+                    .padding(.vertical, 3.5)
+                    .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                     .fixedSize(horizontal: true, vertical: false)
                 }
 
                 let badge = viewModel.currentSearchModeBadge
                 Text(badge.label)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(badge.color)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 4)
-                    .background(badge.color.opacity(0.14), in: Capsule())
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3.5)
+                    .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                    )
                     .fixedSize(horizontal: true, vertical: false)
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 14)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 13)
 
-            Divider().opacity(0.45)
+            Divider()
 
             // Results List (Eager VStack + single integer ID for instant 120fps selection & scroll)
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(spacing: 3) {
+                    VStack(spacing: 2) {
                         ForEach(Array(viewModel.searchResults.enumerated()), id: \.offset) { idx, item in
                             SearchResultRowView(
                                 item: item,
@@ -172,8 +179,8 @@ private struct SearchModeContentView: View {
                             .id(idx)
                         }
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .onChange(of: viewModel.selectedIndex) { _, newIdx in
@@ -181,7 +188,7 @@ private struct SearchModeContentView: View {
                 }
             }
 
-            Divider().opacity(0.45)
+            Divider()
 
             // Bottom Shortcut Hints Footer
             SearchFooterBar(viewModel: viewModel, folderCount: driveService.folderCount)
@@ -198,28 +205,32 @@ private struct SearchResultRowView: View {
     var onOpenActions: (() -> Void)? = nil
 
     var body: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 12) {
-                FileOrSymbolIconView(path: item.path, fallbackSymbol: item.sfSymbolFallback ?? "folder.fill")
-                    .frame(width: 32, height: 32)
+        HStack(spacing: 11) {
+            HStack(spacing: 11) {
+                FileOrSymbolIconView(
+                    path: item.path,
+                    fallbackSymbol: item.sfSymbolFallback ?? "folder.fill",
+                    isRowSelected: isSelected
+                )
+                .frame(width: 28, height: 28)
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 1.5) {
                     HStack(spacing: 6) {
                         Text(item.title)
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.system(size: 13.5, weight: .medium))
                             .foregroundStyle(isSelected ? Color.white : Color.primary)
                             .lineLimit(1)
 
                         if let badge = item.badge {
                             Text(badge)
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(isSelected ? Color.white : Color.purple)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(isSelected ? Color.white.opacity(0.92) : Color.secondary)
                                 .lineLimit(1)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 1.5)
+                                .padding(.horizontal, 5.5)
+                                .padding(.vertical, 1)
                                 .background(
-                                    (isSelected ? Color.white.opacity(0.22) : Color.purple.opacity(0.13)),
-                                    in: Capsule()
+                                    (isSelected ? Color.white.opacity(0.18) : Color.primary.opacity(0.06)),
+                                    in: RoundedRectangle(cornerRadius: 4, style: .continuous)
                                 )
                                 .fixedSize(horizontal: true, vertical: false)
                         }
@@ -227,7 +238,7 @@ private struct SearchResultRowView: View {
 
                     Text(dynamicSubtitle)
                         .font(.system(size: 11.5))
-                        .foregroundStyle(isSelected ? Color.white.opacity(0.86) : Color.secondary)
+                        .foregroundStyle(isSelected ? Color.white.opacity(0.82) : Color.secondary)
                         .lineLimit(1)
                 }
 
@@ -242,12 +253,12 @@ private struct SearchResultRowView: View {
                 HStack(spacing: 6) {
                     if item.path != nil, let onOpenActions {
                         Text("→ Actions")
-                            .font(.system(size: 10.5, weight: .semibold))
+                            .font(.system(size: 10.5, weight: .medium))
                             .foregroundStyle(.white.opacity(0.95))
                             .lineLimit(1)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(Color.white.opacity(0.22), in: RoundedRectangle(cornerRadius: 6))
+                            .padding(.horizontal, 6.5)
+                            .padding(.vertical, 2.5)
+                            .background(Color.white.opacity(0.18), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
                             .fixedSize(horizontal: true, vertical: false)
                             .contentShape(Rectangle())
                             .onTapGesture {
@@ -257,8 +268,8 @@ private struct SearchResultRowView: View {
                     }
 
                     Text("↩")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(.white)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.9))
                         .padding(.horizontal, 4)
                         .padding(.vertical, 2)
                         .contentShape(Rectangle())
@@ -269,9 +280,9 @@ private struct SearchResultRowView: View {
             } else if index < 9 {
                 HStack(spacing: 6) {
                     if item.path != nil, let onOpenActions {
-                        Image(systemName: "bolt.horizontal.circle")
+                        Image(systemName: "ellipsis.circle")
                             .font(.system(size: 12.5))
-                            .foregroundStyle(.secondary.opacity(0.65))
+                            .foregroundStyle(.tertiary)
                             .padding(3)
                             .contentShape(Rectangle())
                             .onTapGesture {
@@ -280,17 +291,17 @@ private struct SearchResultRowView: View {
                             .help("Mở Universal Actions cho mục này")
                     }
                     Text("⌘\(index + 1)")
-                        .font(.system(size: 11.5, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 11, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
                         .fixedSize(horizontal: true, vertical: false)
                 }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7.5)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6.5)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(isSelected ? Color(red: 0.36, green: 0.16, blue: 0.62) : Color.clear)
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(isSelected ? Color(nsColor: .selectedContentBackgroundColor) : Color.clear)
         )
     }
 
@@ -319,7 +330,7 @@ private struct SearchFooterBar: View {
     let folderCount: Int
 
     var body: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: 10) {
             Label("↩ Mở", systemImage: "return")
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
@@ -347,13 +358,13 @@ private struct SearchFooterBar: View {
                     LauncherPanelController.shared.hide()
                     updater.installAvailableUpdate()
                 } label: {
-                    Label("v\(ver)", systemImage: "arrow.down.circle.fill")
-                        .font(.system(size: 10.5, weight: .semibold))
+                    Label("Cập nhật v\(ver)", systemImage: "arrow.down.circle.fill")
+                        .font(.system(size: 10.5, weight: .medium))
                         .lineLimit(1)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 2.5)
-                        .background(Color.green, in: Capsule())
+                        .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .fixedSize(horizontal: true, vertical: false)
@@ -364,13 +375,7 @@ private struct SearchFooterBar: View {
                 LauncherPanelController.shared.hide()
                 HotKeyService.shared.openSettingsAndRecord(.search)
             } label: {
-                Label(settings.searchHotKey.readableDisplay, systemImage: "keyboard")
-                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                    .lineLimit(1)
-                    .foregroundStyle(.indigo)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2.5)
-                    .background(Color.indigo.opacity(0.12), in: Capsule())
+                footerKeycapLabel(settings.searchHotKey.readableDisplay, systemImage: "keyboard", monospaced: true)
             }
             .buttonStyle(.plain)
             .fixedSize(horizontal: true, vertical: false)
@@ -382,13 +387,7 @@ private struct SearchFooterBar: View {
                     HotKeyService.shared.openSettingsAndRecord(.universalAction)
                 }
             } label: {
-                Label("Action \(settings.universalActionHotKey.readableDisplay)", systemImage: "bolt.horizontal.circle")
-                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                    .lineLimit(1)
-                    .foregroundStyle(.teal)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2.5)
-                    .background(Color.teal.opacity(0.13), in: Capsule())
+                footerKeycapLabel("Action \(settings.universalActionHotKey.readableDisplay)", systemImage: "bolt.horizontal", monospaced: true)
             }
             .buttonStyle(.plain)
             .fixedSize(horizontal: true, vertical: false)
@@ -406,16 +405,11 @@ private struct SearchFooterBar: View {
             Button {
                 settings.showDockIcon.toggle()
             } label: {
-                Label(
+                footerKeycapLabel(
                     settings.showDockIcon ? "Ẩn Dock" : "Hiện Dock",
-                    systemImage: settings.showDockIcon ? "menubar.rectangle" : "dock.arrow.up.rectangle"
+                    systemImage: settings.showDockIcon ? "menubar.rectangle" : "dock.rectangle",
+                    monospaced: false
                 )
-                .font(.system(size: 10.5, weight: .semibold))
-                .lineLimit(1)
-                .foregroundStyle(.purple)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 2.5)
-                .background(Color.purple.opacity(0.12), in: Capsule())
             }
             .buttonStyle(.plain)
             .fixedSize(horizontal: true, vertical: false)
@@ -425,8 +419,8 @@ private struct SearchFooterBar: View {
                 LauncherPanelController.shared.hide()
                 AppDelegate.shared?.openSettingsWindow()
             } label: {
-                Image(systemName: "gearshape.fill")
-                    .font(.system(size: 11.5))
+                Image(systemName: "gearshape")
+                    .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .padding(3)
             }
@@ -434,11 +428,25 @@ private struct SearchFooterBar: View {
             .fixedSize(horizontal: true, vertical: false)
             .help("Mở Cài đặt & Kiểm tra cập nhật tự động")
         }
-        .font(.system(size: 10.5, weight: .medium))
+        .font(.system(size: 10.5, weight: .regular))
         .foregroundStyle(.secondary)
         .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(Color.primary.opacity(0.03))
+        .padding(.vertical, 7.5)
+        .background(Color.primary.opacity(0.02))
+    }
+
+    private func footerKeycapLabel(_ title: String, systemImage: String, monospaced: Bool) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.system(size: 10.5, weight: .medium, design: monospaced ? .monospaced : .default))
+            .lineLimit(1)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2.5)
+            .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+            )
     }
 }
 
@@ -450,12 +458,12 @@ private struct FileBufferStripView: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "tray.full.fill")
-                .foregroundStyle(.purple)
-                .font(.system(size: 12, weight: .semibold))
+            Image(systemName: "tray.full")
+                .foregroundStyle(.secondary)
+                .font(.system(size: 12, weight: .medium))
 
             Text("Buffer (\(bufferService.items.count)):")
-                .font(.system(size: 11.5, weight: .semibold))
+                .font(.system(size: 11.5, weight: .medium))
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
@@ -474,8 +482,8 @@ private struct FileBufferStripView: View {
                             .buttonStyle(.plain)
                         }
                         .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(Color.purple.opacity(0.13), in: Capsule())
+                        .padding(.vertical, 2.5)
+                        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
                     }
                 }
             }
@@ -489,7 +497,6 @@ private struct FileBufferStripView: View {
                 )
             }
             .buttonStyle(.borderedProminent)
-            .tint(.purple)
             .controlSize(.mini)
 
             Button("Xóa (⌥⌫)") {
@@ -500,7 +507,7 @@ private struct FileBufferStripView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 7)
-        .background(Color.purple.opacity(0.06))
+        .background(Color.primary.opacity(0.03))
     }
 }
 
@@ -523,7 +530,7 @@ private struct OpenWithPickerView: View {
                 .controlSize(.small)
 
                 Text("Mở '\(fileURL.lastPathComponent)' bằng ứng dụng:")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 13.5, weight: .semibold))
                     .lineLimit(1)
                 Spacer()
                 Text("↩ Mở  •  ← / Esc để quay lại")
@@ -536,31 +543,31 @@ private struct OpenWithPickerView: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(spacing: 3) {
+                    VStack(spacing: 2) {
                         ForEach(Array(viewModel.openWithApps.enumerated()), id: \.offset) { idx, app in
                             HStack(spacing: 10) {
                                 Image(nsImage: NSWorkspace.shared.icon(forFile: app.url.path))
                                     .resizable()
-                                    .frame(width: 26, height: 26)
+                                    .frame(width: 24, height: 24)
                                 Text(app.name)
-                                    .font(.system(size: 13.5, weight: .medium))
+                                    .font(.system(size: 13, weight: .medium))
                                     .foregroundStyle(idx == viewModel.selectedIndex ? .white : .primary)
                                 Spacer()
                                 if idx == viewModel.selectedIndex {
                                     Text("↩")
-                                        .font(.system(size: 12.5, weight: .bold))
+                                        .font(.system(size: 12, weight: .semibold))
                                         .foregroundStyle(.white)
                                 } else if idx < 9 {
                                     Text("⌘\(idx + 1)")
                                         .font(.system(size: 11, design: .monospaced))
-                                        .foregroundStyle(.secondary)
+                                        .foregroundStyle(.tertiary)
                                 }
                             }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 7)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6.5)
                             .background(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(idx == viewModel.selectedIndex ? Color(red: 0.36, green: 0.16, blue: 0.62) : Color.clear)
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .fill(idx == viewModel.selectedIndex ? Color(nsColor: .selectedContentBackgroundColor) : Color.clear)
                             )
                             .contentShape(Rectangle())
                             .onTapGesture {
@@ -569,7 +576,7 @@ private struct OpenWithPickerView: View {
                             .id(idx)
                         }
                     }
-                    .padding(10)
+                    .padding(8)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .onChange(of: viewModel.selectedIndex) { _, newIdx in
@@ -602,8 +609,8 @@ private struct DestinationFolderPickerView: View {
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(operation.rawValue)
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(.purple)
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundStyle(.primary)
                     Text(sources.count == 1 ? sources[0].lastPathComponent : "\(sources.count) mục đã chọn")
                         .font(.system(size: 11.5))
                         .foregroundStyle(.secondary)
@@ -613,24 +620,25 @@ private struct DestinationFolderPickerView: View {
                 Spacer()
 
                 Text("\(sources.count) mục")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
-                    .background(Color.purple.opacity(0.14), in: Capsule())
+                    .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
             }
             .padding(.horizontal, 16)
             .padding(.top, 12)
             .padding(.bottom, 8)
 
             HStack(spacing: 10) {
-                Image(systemName: "folder.badge.gearshape")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.purple)
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 14.5, weight: .medium))
+                    .foregroundStyle(.secondary)
 
                 NativeSearchInputField(
                     text: $viewModel.destinationSearchText,
                     placeholder: "Gõ tìm thư mục Google Drive đích (hoặc nhấn Tab / → để duyệt cây thư mục con)...",
-                    fontSize: 15.5,
+                    fontSize: 15,
                     focusTrigger: viewModel.focusTrigger,
                     selectAllOnFocus: false,
                     onMoveSelection: { viewModel.moveSelection(delta: $0) },
@@ -647,22 +655,29 @@ private struct DestinationFolderPickerView: View {
                         viewModel.triggerInputFocus(selectAll: false)
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.tertiary)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .padding(.horizontal, 11)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color(nsColor: .textBackgroundColor).opacity(0.55))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.75)
+            )
             .padding(.horizontal, 16)
             .padding(.bottom, 10)
 
-            Divider().opacity(0.45)
+            Divider()
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(spacing: 3) {
+                    VStack(spacing: 2) {
                         ForEach(Array(viewModel.destinationFolders.enumerated()), id: \.offset) { idx, folder in
                             SearchResultRowView(
                                 item: folder,
@@ -678,7 +693,7 @@ private struct DestinationFolderPickerView: View {
                             .id(idx)
                         }
                     }
-                    .padding(10)
+                    .padding(8)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .onChange(of: viewModel.selectedIndex) { _, newIdx in
@@ -686,7 +701,7 @@ private struct DestinationFolderPickerView: View {
                 }
             }
 
-            Divider().opacity(0.45)
+            Divider()
 
             HStack(spacing: 14) {
                 Label("↩ Thực hiện tại thư mục này", systemImage: "return")
@@ -697,11 +712,11 @@ private struct DestinationFolderPickerView: View {
                 Text("⎋ Esc Quay lại")
                     .foregroundStyle(.tertiary)
             }
-            .font(.system(size: 10.5, weight: .medium))
+            .font(.system(size: 10.5, weight: .regular))
             .foregroundStyle(.secondary)
             .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(Color.primary.opacity(0.03))
+            .padding(.vertical, 7.5)
+            .background(Color.primary.opacity(0.02))
         }
     }
 }
@@ -711,6 +726,7 @@ private struct DestinationFolderPickerView: View {
 struct FileOrSymbolIconView: View {
     let path: String?
     let fallbackSymbol: String
+    var isRowSelected: Bool = false
 
     private var prefersDirectSymbol: Bool {
         fallbackSymbol == "arrow.turn.left.up" ||
@@ -720,11 +736,11 @@ struct FileOrSymbolIconView: View {
     var body: some View {
         if prefersDirectSymbol {
             ZStack {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(Color.purple.opacity(0.14))
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isRowSelected ? Color.white.opacity(0.18) : Color.primary.opacity(0.06))
                 Image(systemName: fallbackSymbol)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color.purple)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(isRowSelected ? Color.white : Color.secondary)
             }
         } else if let path {
             if path.contains("/Library/CloudStorage/") {
@@ -737,13 +753,13 @@ struct FileOrSymbolIconView: View {
                     .interpolation(.high)
             } else {
                 Image(systemName: fallbackSymbol)
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(Color.purple)
+                    .font(.system(size: 18, weight: .regular))
+                    .foregroundStyle(isRowSelected ? Color.white : Color.secondary)
             }
         } else {
             Image(systemName: fallbackSymbol)
-                .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(Color.purple)
+                .font(.system(size: 18, weight: .regular))
+                .foregroundStyle(isRowSelected ? Color.white : Color.secondary)
         }
     }
 

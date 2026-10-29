@@ -7,8 +7,8 @@ cd "$PROJECT_DIR"
 
 APP_NAME="DriveBar"
 BUNDLE_ID="com.hunglx.DriveBar"
-VERSION="1.2.4"
-BUILD_NUMBER="7"
+VERSION="1.2.5"
+BUILD_NUMBER="8"
 APP_BUNDLE="$PROJECT_DIR/$APP_NAME.app"
 ROOT_APP_BUNDLE="$ROOT_WORKSPACE_DIR/$APP_NAME.app"
 DIST_DIR="$PROJECT_DIR/dist"
@@ -64,28 +64,28 @@ for (px, name) in sizes {
     let bgRect = rect.insetBy(dx: inset, dy: inset)
     let radius = bgRect.width * 0.225
 
-    // Rich Alfred-inspired royal purple -> electric indigo gradient
+    // Clean, understated macOS Graphite-Blue squircle gradient
     let path = NSBezierPath(roundedRect: bgRect, xRadius: radius, yRadius: radius)
     let gradient = NSGradient(colors: [
-        NSColor(calibratedRed: 0.34, green: 0.11, blue: 0.68, alpha: 1.0),
-        NSColor(calibratedRed: 0.46, green: 0.18, blue: 0.88, alpha: 1.0),
-        NSColor(calibratedRed: 0.16, green: 0.48, blue: 0.96, alpha: 1.0)
+        NSColor(calibratedRed: 0.14, green: 0.17, blue: 0.22, alpha: 1.0),
+        NSColor(calibratedRed: 0.18, green: 0.24, blue: 0.33, alpha: 1.0),
+        NSColor(calibratedRed: 0.12, green: 0.44, blue: 0.85, alpha: 1.0)
     ])!
-    gradient.draw(in: path, angle: -45)
+    gradient.draw(in: path, angle: -55)
 
-    // Glass search bar pill inside icon
+    // Subtle Spotlight glass search bar pill inside icon
     let barRect = NSRect(
         x: CGFloat(px) * 0.18,
-        y: CGFloat(px) * 0.36,
+        y: CGFloat(px) * 0.37,
         width: CGFloat(px) * 0.64,
-        height: CGFloat(px) * 0.28
+        height: CGFloat(px) * 0.26
     )
     let barPath = NSBezierPath(roundedRect: barRect, xRadius: barRect.height * 0.46, yRadius: barRect.height * 0.46)
-    NSColor.white.withAlphaComponent(0.18).setFill()
+    NSColor.white.withAlphaComponent(0.14).setFill()
     barPath.fill()
 
-    if let symbol = NSImage(systemSymbolName: "bolt.horizontal.circle.fill", accessibilityDescription: nil) {
-        let config = NSImage.SymbolConfiguration(pointSize: CGFloat(px) * 0.42, weight: .bold)
+    if let symbol = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil) {
+        let config = NSImage.SymbolConfiguration(pointSize: CGFloat(px) * 0.36, weight: .medium)
             .applying(.init(paletteColors: [.white]))
         if let configured = symbol.withSymbolConfiguration(config) {
             let symSize = configured.size

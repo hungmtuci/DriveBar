@@ -93,9 +93,9 @@ private struct ToastBannerView: View {
                     .frame(width: 26, height: 26)
             } else {
                 Image(systemName: controller.symbolName)
-                    .font(.system(size: 22, weight: .semibold))
+                    .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(
-                        controller.symbolName.contains("exclamationmark") ? Color.red : Color.purple
+                        controller.symbolName.contains("exclamationmark") ? Color.red : Color.green
                     )
             }
 

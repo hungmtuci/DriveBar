@@ -306,21 +306,21 @@ final class LauncherViewModel: ObservableObject {
     var currentSearchModeBadge: (label: String, color: Color) {
         let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.lowercased().hasPrefix("http://") || trimmed.lowercased().hasPrefix("https://") {
-            return ("Web → AI MD", .purple)
+            return ("Web → AI MD", .secondary)
         }
         if searchText.hasPrefix("/") || searchText.hasPrefix("~/") {
-            return ("Duyệt thư mục", .blue)
+            return ("Duyệt thư mục", .secondary)
         }
         if trimmed == "fs" || searchText.lowercased().hasPrefix("fs ") {
-            return ("Shared Drives", .teal)
+            return ("Shared Drives", .secondary)
         }
         if trimmed == "ai" || searchText.lowercased().hasPrefix("ai ") {
-            return ("AI Toolkit", .purple)
+            return ("AI Toolkit", .secondary)
         }
         if trimmed.hasPrefix("//") {
-            return ("Lệnh hệ thống", .orange)
+            return ("Lệnh hệ thống", .secondary)
         }
-        return ("Google Drive", .indigo)
+        return ("Google Drive", .secondary)
     }
 
     // MARK: - Search Engine Evaluation (Zero Main-Thread Blocking!)

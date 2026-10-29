@@ -15,12 +15,12 @@ struct MarkdownPreviewView: View {
             // Header
             HStack(spacing: 12) {
                 Image(systemName: "doc.text.magnifyingglass")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(.purple)
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(.secondary)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text("AI Markdown Inspector — \(title)")
-                        .font(.system(size: 14.5, weight: .semibold))
+                        .font(.system(size: 14, weight: .semibold))
                         .lineLimit(1)
 
                     HStack(spacing: 10) {
@@ -29,8 +29,8 @@ struct MarkdownPreviewView: View {
                         Text("\(markdown.count.formatted()) ký tự")
                         Text("•")
                         Text("~\(estimatedTokens.formatted()) LLM tokens")
-                            .fontWeight(.semibold)
-                            .foregroundStyle(.purple)
+                            .fontWeight(.medium)
+                            .foregroundStyle(.primary)
                     }
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
@@ -59,10 +59,9 @@ struct MarkdownPreviewView: View {
                         subtitle: "Nhấn ⌘V trực tiếp vào Claude / ChatGPT / Gemini"
                     )
                 } label: {
-                    Label("Copy Markdown (↩)", systemImage: "doc.on.clipboard.fill")
+                    Label("Copy Markdown (↩)", systemImage: "doc.on.clipboard")
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.purple)
                 .controlSize(.small)
             }
             .padding(14)

@@ -67,33 +67,23 @@ struct SettingsView: View {
             // Top Header Banner with Quick Dock Toggle & 1-Click Auto-Update Button
             VStack(spacing: 12) {
                 HStack(spacing: 14) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [Color(red: 0.42, green: 0.16, blue: 0.85), Color(red: 0.14, green: 0.46, blue: 0.96)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                            .frame(width: 46, height: 46)
-                        Image(systemName: "bolt.horizontal.circle.fill")
-                            .font(.system(size: 25, weight: .bold))
-                            .foregroundStyle(.white)
-                    }
+                    Image(nsImage: NSApp.applicationIconImage)
+                        .resizable()
+                        .interpolation(.high)
+                        .frame(width: 44, height: 44)
 
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 8) {
                             Text("DriveBar")
-                                .font(.system(size: 16.5, weight: .bold))
+                                .font(.system(size: 16, weight: .semibold))
                             Text("v\(updater.currentVersion)")
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
                                 .padding(.horizontal, 7)
                                 .padding(.vertical, 2)
-                                .background(Color.purple.opacity(0.14), in: Capsule())
-                                .foregroundStyle(.purple)
+                                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                                .foregroundStyle(.secondary)
                         }
-                        Text("Tìm kiếm siêu tốc Google Drive & Universal Actions tối ưu Markdown cho AI")
+                        Text("Tìm kiếm nhanh Google Drive & Universal Actions tối ưu Markdown cho AI")
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
                     }
@@ -109,12 +99,12 @@ struct SettingsView: View {
                             hotKeyService.recordingTarget == .search
                                 ? (hotKeyService.liveModifiersPreview.isEmpty ? "Nhấn phím..." : hotKeyService.liveModifiersPreview)
                                 : "Tìm: \(settings.searchHotKey.readableDisplay)",
-                            systemImage: "command.square.fill"
+                            systemImage: "command"
                         )
-                        .font(.system(size: 11.5, weight: .semibold))
+                        .font(.system(size: 11.5, weight: .medium))
                     }
                     .buttonStyle(.bordered)
-                    .tint(hotKeyService.recordingTarget == .search ? .orange : .purple)
+                    .tint(hotKeyService.recordingTarget == .search ? .orange : nil)
                     .controlSize(.small)
                     .help("Bấm để tự thiết lập phím tắt gọi nhanh DriveBar (Mặc định: ⌘Space)")
 
@@ -126,12 +116,12 @@ struct SettingsView: View {
                             hotKeyService.recordingTarget == .universalAction
                                 ? (hotKeyService.liveModifiersPreview.isEmpty ? "Nhấn phím..." : hotKeyService.liveModifiersPreview)
                                 : "Finder Action: \(settings.universalActionHotKey.readableDisplay)",
-                            systemImage: "bolt.horizontal.circle.fill"
+                            systemImage: "bolt.horizontal"
                         )
-                        .font(.system(size: 11.5, weight: .semibold))
+                        .font(.system(size: 11.5, weight: .medium))
                     }
                     .buttonStyle(.bordered)
-                    .tint(hotKeyService.recordingTarget == .universalAction ? .orange : .indigo)
+                    .tint(hotKeyService.recordingTarget == .universalAction ? .orange : nil)
                     .controlSize(.small)
                     .help("Bấm để tự thiết lập phím tắt mở Universal Actions trên Finder (Mặc định: ⌘/)")
 
@@ -171,22 +161,22 @@ struct SettingsView: View {
             if let banner = settings.statusBannerMessage {
                 HStack(spacing: 8) {
                     Image(systemName: "info.circle.fill")
-                        .foregroundStyle(.purple)
+                        .foregroundStyle(.secondary)
                     Text(banner)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: 12, weight: .regular))
                     Spacer()
                     Button {
                         settings.statusBannerMessage = nil
                     } label: {
                         Image(systemName: "xmark")
-                            .font(.system(size: 10, weight: .bold))
+                            .font(.system(size: 10, weight: .semibold))
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 8)
-                .background(Color.purple.opacity(0.09))
+                .background(Color.primary.opacity(0.04))
                 Divider()
             }
 
@@ -263,8 +253,7 @@ struct SettingsView: View {
                 Label("Kiểm tra cập nhật", systemImage: "arrow.triangle.2.circlepath")
                     .font(.system(size: 11.5, weight: .medium))
             }
-            .buttonStyle(.borderedProminent)
-            .tint(.purple)
+            .buttonStyle(.bordered)
             .controlSize(.small)
         }
     }
@@ -319,7 +308,7 @@ private struct GeneralSettingsTab: View {
                                     .frame(minWidth: 155)
                                 }
                                 .buttonStyle(.borderedProminent)
-                                .tint(hotKeyService.recordingTarget == .search ? .orange : .purple)
+                                .tint(hotKeyService.recordingTarget == .search ? .orange : .accentColor)
 
                                 Button("Mặc định (⌘Space)") {
                                     hotKeyService.applyRecordedBinding(.defaultSearch, for: .search)
@@ -394,7 +383,7 @@ private struct GeneralSettingsTab: View {
                                     .frame(minWidth: 155)
                                 }
                                 .buttonStyle(.borderedProminent)
-                                .tint(hotKeyService.recordingTarget == .universalAction ? .orange : .indigo)
+                                .tint(hotKeyService.recordingTarget == .universalAction ? .orange : .accentColor)
 
                                 Button("Mặc định (⌘/)") {
                                     hotKeyService.applyRecordedBinding(.defaultUniversalAction, for: .universalAction)
@@ -586,7 +575,6 @@ private struct GeneralSettingsTab: View {
                                 Label("Mở thử Thanh Tìm Kiếm", systemImage: "magnifyingglass")
                             }
                             .buttonStyle(.borderedProminent)
-                            .tint(.purple)
                         }
                     }
                     .padding(8)
@@ -657,9 +645,9 @@ private struct GeneralSettingsTab: View {
                 GroupBox {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack(spacing: 12) {
-                            Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
-                                .font(.system(size: 22))
-                                .foregroundStyle(.purple)
+                            Image(systemName: "arrow.triangle.2.circlepath.circle")
+                                .font(.system(size: 21))
+                                .foregroundStyle(.secondary)
 
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Cập nhật tự động qua GitHub Releases (hungmtuci/DriveBar)")
@@ -695,7 +683,6 @@ private struct GeneralSettingsTab: View {
                                     Label(updater.isBusy ? "Đang xử lý..." : "Kiểm tra & Cập nhật tự động", systemImage: "arrow.clockwise")
                                 }
                                 .buttonStyle(.borderedProminent)
-                                .tint(.purple)
                                 .controlSize(.small)
                                 .disabled(updater.isBusy)
                             }
@@ -769,13 +756,13 @@ private struct GeneralSettingsTab: View {
             hotKeyService.applyRecordedBinding(binding, for: target)
         } label: {
             Text(title)
-                .font(.system(size: 10.5, weight: isSelected ? .bold : .medium, design: .monospaced))
+                .font(.system(size: 10.5, weight: isSelected ? .semibold : .regular, design: .monospaced))
                 .foregroundStyle(isSelected ? Color.white : Color.primary)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
                 .background(
-                    isSelected ? Color.purple : Color.primary.opacity(0.07),
-                    in: Capsule()
+                    isSelected ? Color.accentColor : Color.primary.opacity(0.06),
+                    in: RoundedRectangle(cornerRadius: 5, style: .continuous)
                 )
         }
         .buttonStyle(.plain)
@@ -825,12 +812,11 @@ private struct GeneralSettingsTab: View {
                 }
             }
             .buttonStyle(.borderedProminent)
-            .tint(.purple)
             .controlSize(.small)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(Color.purple.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private var updateStatusSubtitle: String {
@@ -862,18 +848,18 @@ private struct GeneralSettingsTab: View {
         Button(action: action) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: symbol)
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(isSelected ? Color.purple : Color.secondary)
+                    .font(.system(size: 19, weight: .medium))
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
                     .frame(width: 28, height: 28)
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack {
                         Text(title)
-                            .font(.system(size: 12.5, weight: .bold))
+                            .font(.system(size: 12.5, weight: .semibold))
                             .foregroundStyle(.primary)
                         Spacer()
                         Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(isSelected ? Color.purple : Color.secondary.opacity(0.5))
+                            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary.opacity(0.45))
                     }
                     Text(subtitle)
                         .font(.system(size: 11))
@@ -885,12 +871,12 @@ private struct GeneralSettingsTab: View {
             .padding(11)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isSelected ? Color.purple.opacity(0.10) : Color.primary.opacity(0.03))
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(isSelected ? Color.accentColor.opacity(0.07) : Color.primary.opacity(0.025))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(isSelected ? Color.purple.opacity(0.6) : Color.primary.opacity(0.10), lineWidth: isSelected ? 1.5 : 1)
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .strokeBorder(isSelected ? Color.accentColor.opacity(0.55) : Color.primary.opacity(0.10), lineWidth: isSelected ? 1.5 : 1)
             )
         }
         .buttonStyle(.plain)
@@ -982,25 +968,25 @@ private struct AIMarkdownSettingsTab: View {
 
                 // Interactive Drag-and-Drop Test Bench
                 VStack(spacing: 8) {
-                    Image(systemName: "arrow.down.doc.fill")
-                        .font(.system(size: 28))
-                        .foregroundStyle(.purple)
+                    Image(systemName: "arrow.down.doc")
+                        .font(.system(size: 26, weight: .regular))
+                        .foregroundStyle(.secondary)
                     Text("Kéo & Thả bất kỳ file Word (.doc/.docx), Excel, PDF, Ảnh chụp vào đây để Convert sang Markdown ngay")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 12.5, weight: .medium))
                     Text("Hoặc chọn file trong Finder rồi bấm \(settings.universalActionHotKey.readableDisplay) → Convert to Markdown")
                         .font(.system(size: 11.5))
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 22)
+                .padding(.vertical, 20)
                 .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(isDropTargeted ? Color.purple.opacity(0.16) : Color.purple.opacity(0.06))
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(isDropTargeted ? Color.accentColor.opacity(0.10) : Color.primary.opacity(0.025))
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
-                        .foregroundStyle(Color.purple.opacity(0.55))
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [6, 4]))
+                        .foregroundStyle(isDropTargeted ? Color.accentColor : Color(nsColor: .separatorColor))
                 )
                 .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
                     Task { @MainActor in
@@ -1086,7 +1072,7 @@ private struct UniversalActionsChecklistTab: View {
                                         .labelsHidden()
 
                                         Image(systemName: item.sfSymbol)
-                                            .foregroundStyle(.purple)
+                                            .foregroundStyle(.secondary)
                                             .frame(width: 18)
 
                                         VStack(alignment: .leading, spacing: 1) {
@@ -1163,7 +1149,7 @@ private struct GuideBlock: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.purple)
+                .foregroundStyle(.primary)
             Text(bodyText)
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
