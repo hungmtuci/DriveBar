@@ -1119,7 +1119,7 @@ final class GoogleDriveIndexService: ObservableObject {
             if !knownFolderSet.isEmpty && !knownFolderSet.contains(hPath) {
                 continue
             }
-            let sub = "🕒 Mở gần đây (\(rec.count) lần) ‹ \(formatHierarchicalSubtitle(hPath))"
+            let sub = "Mở gần đây (\(rec.count) lần) ‹ \(formatHierarchicalSubtitle(hPath))"
             items.append(SearchResultItem(
                 id: "recent:\(hPath)",
                 title: (hPath as NSString).lastPathComponent,
@@ -1164,7 +1164,7 @@ final class GoogleDriveIndexService: ObservableObject {
             guard inSD || inST else { continue }
             let isDir = sharedByPath[hPath]?.isDir ?? true
 
-            let sub = "🕒 Mở gần đây (\(rec.count) lần) ‹ \(formatHierarchicalSubtitle(hPath))"
+            let sub = "Mở gần đây (\(rec.count) lần) ‹ \(formatHierarchicalSubtitle(hPath))"
             items.append(SearchResultItem(
                 id: "srecent:\(hPath)",
                 title: (hPath as NSString).lastPathComponent,
@@ -1494,7 +1494,7 @@ final class GoogleDriveIndexService: ObservableObject {
             if results.count >= maxResults { break }
             let sub: String
             if hit.historyCount > 0 {
-                sub = "⭐ Mở gần đây (\(hit.historyCount) lần) ‹ \(formatHierarchicalSubtitle(hit.path))"
+                sub = "Mở gần đây (\(hit.historyCount) lần) ‹ \(formatHierarchicalSubtitle(hit.path))"
             } else {
                 sub = formatHierarchicalSubtitle(hit.path)
             }
@@ -1520,7 +1520,7 @@ final class GoogleDriveIndexService: ObservableObject {
         results.reserveCapacity(min(topHits.count, maxResults))
         for hit in topHits.prefix(maxResults) {
             let sub = hit.historyCount > 0
-                ? "⭐ Mở gần đây (\(hit.historyCount) lần) ‹ \(formatHierarchicalSubtitle(hit.entry.path))"
+                ? "Mở gần đây (\(hit.historyCount) lần) ‹ \(formatHierarchicalSubtitle(hit.entry.path))"
                 : formatHierarchicalSubtitle(hit.entry.path)
             results.append(SearchResultItem(
                 id: "sh:\(hit.entry.path)",

@@ -60,7 +60,7 @@ final class UniversalActionExecutor {
                     if let first = res.first {
                         let cCount = res.reduce(0) { $0 + $1.chunkCount }
                         FloatingToastController.shared.showSuccess(
-                            title: "Đã tách thành \(cCount) phần trong _Chunks/ ✓",
+                            title: "Đã tách thành \(cCount) phần trong _Chunks/",
                             subtitle: "Kèm chỉ mục 00_INDEX.md • Tổng ~\(first.estimatedTokens.formatted()) tokens",
                             symbol: "rectangle.split.3x1.fill"
                         )
@@ -91,7 +91,7 @@ final class UniversalActionExecutor {
                 LauncherPanelController.shared.hide()
             }
             FloatingToastController.shared.showProgress(
-                title: "🌐 Đang trích xuất nội dung Web sang Markdown...",
+                title: "Đang trích xuất nội dung Web sang Markdown...",
                 subtitle: webURL.host ?? webURL.absoluteString
             )
             Task { @MainActor in
@@ -102,7 +102,7 @@ final class UniversalActionExecutor {
                         copyToClipboard: true
                     )
                     FloatingToastController.shared.showSuccess(
-                        title: saveDesktop ? "Đã lưu .md ra Desktop & Copy vào Clipboard ✓" : "Đã Copy Markdown trang Web vào Clipboard ✓",
+                        title: saveDesktop ? "Đã lưu .md ra Desktop & Copy vào Clipboard" : "Đã Copy Markdown trang Web vào Clipboard",
                         subtitle: "\(item.engineUsed) • ~\(item.estimatedTokens.formatted()) tokens",
                         symbol: "globe.desk.fill"
                     )
@@ -174,7 +174,7 @@ final class UniversalActionExecutor {
                     let pkgDirs = try await MarkdownConverterService.shared.convertFilesForAIPackage(urls: urls)
                     if let firstPkg = pkgDirs.first {
                         FloatingToastController.shared.showSuccess(
-                            title: "Đã tạo gói AI Package thành công ✓",
+                            title: "Đã tạo gói AI Package thành công",
                             subtitle: pkgDirs.count == 1 ? firstPkg.lastPathComponent : "Đã tạo \(pkgDirs.count) thư mục _AI/",
                             symbol: "sparkles.rectangle.stack.fill"
                         )
@@ -224,7 +224,7 @@ final class UniversalActionExecutor {
                     let pdfs = try await MarkdownConverterService.shared.convertFilesToPDF(urls: urls)
                     if let first = pdfs.first {
                         FloatingToastController.shared.showSuccess(
-                            title: "Đã xuất PDF thành công ✓",
+                            title: "Đã xuất PDF thành công",
                             subtitle: pdfs.count == 1 ? first.lastPathComponent : "Đã xuất \(pdfs.count) tệp PDF",
                             symbol: "doc.richtext.fill"
                         )
@@ -657,7 +657,7 @@ final class UniversalActionExecutor {
             await MainActor.run {
                 if finalSuccess > 0 {
                     FloatingToastController.shared.showSuccess(
-                        title: "Đã hoàn tất \(operation.rawValue) (\(finalSuccess) mục) ✓",
+                        title: "Đã hoàn tất \(operation.rawValue) (\(finalSuccess) mục)",
                         subtitle: "Đích: \(destinationFolder.lastPathComponent)"
                     )
                     if revealInFinder && !finalProduced.isEmpty {
@@ -700,7 +700,7 @@ final class UniversalActionExecutor {
                     )
                     let outName = merged.savedMarkdownURL?.lastPathComponent ?? "AI_Context.md"
                     FloatingToastController.shared.showSuccess(
-                        title: copyClipboard ? "Đã gộp sang \(outName) & Copy vào Clipboard ✓" : "Đã xuất \(outName) ✓",
+                        title: copyClipboard ? "Đã gộp sang \(outName) & Copy vào Clipboard" : "Đã xuất \(outName)",
                         subtitle: "Tổng ước tính ~\(merged.estimatedTokens.formatted()) tokens cho AI",
                         symbol: "doc.text.magnifyingglass"
                     )
@@ -720,16 +720,16 @@ final class UniversalActionExecutor {
 
                 let mainMsg: String
                 if forceXMLWrap {
-                    mainMsg = "Đã Copy cấu trúc XML <documents> vào Clipboard ✓"
+                    mainMsg = "Đã Copy cấu trúc XML <documents> vào Clipboard"
                 } else if saveBeside && copyClipboard {
                     let mdName = results.first?.savedMarkdownURL?.lastPathComponent ?? ".md"
                     mainMsg = results.count == 1
-                        ? "Đã tạo \(mdName) & Copy vào Clipboard ✓"
-                        : "Đã tạo \(results.count) file .md & Copy vào Clipboard ✓"
+                        ? "Đã tạo \(mdName) & Copy vào Clipboard"
+                        : "Đã tạo \(results.count) file .md & Copy vào Clipboard"
                 } else if copyClipboard {
-                    mainMsg = "Đã Copy Markdown vào Clipboard ✓ (Sẵn sàng ⌘V)"
+                    mainMsg = "Đã Copy Markdown vào Clipboard (Sẵn sàng ⌘V)"
                 } else {
-                    mainMsg = "Đã xuất \(results.count) file Markdown ✓"
+                    mainMsg = "Đã xuất \(results.count) file Markdown"
                 }
 
                 let chunkNote = totalChunks > 0 ? " • Tách \(totalChunks) phần _Chunks/" : ""

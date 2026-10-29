@@ -103,7 +103,7 @@ final class MarkdownConverterService: ObservableObject {
 
     nonisolated static func routeDescription(for url: URL) -> String {
         let ext = url.pathExtension.lowercased()
-        let cloudTag = GoogleDriveIndexService.isCloudDatalessFile(url) ? "☁️ Online-Only → " : ""
+        let cloudTag = GoogleDriveIndexService.isCloudDatalessFile(url) ? "Online-Only → " : ""
         if googleWorkspaceExtensions.contains(ext) {
             return "\(cloudTag)Google Workspace Cloud Export → .md"
         } else if ext == "pdf" {
@@ -302,7 +302,7 @@ final class MarkdownConverterService: ObservableObject {
         guard GoogleDriveIndexService.isCloudDatalessFile(url) else { return }
 
         FloatingToastController.shared.showProgress(
-            title: "☁️ Đang tải từ Google Drive về máy...",
+            title: "Đang tải từ Google Drive về máy...",
             subtitle: "\(url.lastPathComponent) (Tệp Online-only)"
         )
 

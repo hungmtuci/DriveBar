@@ -55,11 +55,11 @@ struct MarkdownPreviewView: View {
                     pb.setString(markdown, forType: .string)
                     LauncherPanelController.shared.hide()
                     FloatingToastController.shared.showSuccess(
-                        title: "Đã sao chép Markdown vào Clipboard ✓",
+                        title: "Đã sao chép Markdown vào Clipboard",
                         subtitle: "Nhấn ⌘V trực tiếp vào Claude / ChatGPT / Gemini"
                     )
                 } label: {
-                    Label("Copy Markdown (↩)", systemImage: "doc.on.clipboard")
+                    Label("Copy Markdown", systemImage: "doc.on.clipboard")
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
@@ -85,9 +85,7 @@ struct MarkdownPreviewView: View {
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("⎋ Esc để quay lại")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.tertiary)
+                FooterShortcutHint(key: "Esc", label: "Quay lại")
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)

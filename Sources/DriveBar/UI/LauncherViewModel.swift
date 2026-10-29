@@ -520,13 +520,13 @@ final class LauncherViewModel: ObservableObject {
             searchResults = [
                 SearchResultItem(
                     id: "cmd:rebuild",
-                    title: drive.isRebuildingFolders ? "⏳ Đang quét lại dữ liệu Google Drive ở nền..." : "🔄 Quét lại toàn bộ Cache Google Drive (Background Rebuild)",
+                    title: drive.isRebuildingFolders ? "Đang quét lại dữ liệu Google Drive ở nền..." : "Quét lại toàn bộ Cache Google Drive (Background Rebuild)",
                     subtitle: "Nhấn Enter để cập nhật danh mục thư mục My Drive & Shared Drives mà không gây đơ máy",
                     path: nil,
                     isDirectory: false,
                     kind: .systemCommand(id: "rebuild"),
                     badge: "Rebuild",
-                    sfSymbolFallback: "arrow.clockwise.circle.fill"
+                    sfSymbolFallback: "arrow.clockwise.circle"
                 )
             ]
             selectedIndex = 0
@@ -537,13 +537,13 @@ final class LauncherViewModel: ObservableObject {
             searchResults = [
                 SearchResultItem(
                     id: "cmd:clean",
-                    title: "🗑️ Xóa toàn bộ lịch sử thư mục mở gần đây",
+                    title: "Xóa toàn bộ lịch sử thư mục mở gần đây",
                     subtitle: "Nhấn Enter để làm sạch danh sách mở gần đây",
                     path: nil,
                     isDirectory: false,
                     kind: .systemCommand(id: "clean-history"),
                     badge: "Clean",
-                    sfSymbolFallback: "trash.circle.fill"
+                    sfSymbolFallback: "trash"
                 )
             ]
             selectedIndex = 0
@@ -650,13 +650,13 @@ final class LauncherViewModel: ObservableObject {
             let folderName = currentDir == "/" ? "/" : (currentDir as NSString).lastPathComponent
             items.append(SearchResultItem(
                 id: "open-finder:\(currentDir)",
-                title: "📂 Mở thư mục '\(folderName)' trong Finder",
+                title: "Mở thư mục '\(folderName)' trong Finder",
                 subtitle: "Nhấn Enter (hoặc click chuột) để mở trong Finder • Phím ↓ chọn mục con bên dưới • ⇥ Actions",
                 path: currentDir,
                 isDirectory: true,
                 kind: .openInFinder(path: currentDir),
                 badge: "Finder",
-                sfSymbolFallback: "folder.badge.gearshape"
+                sfSymbolFallback: "folder"
             ))
         }
 
@@ -691,7 +691,7 @@ final class LauncherViewModel: ObservableObject {
         if items.isEmpty {
             items.append(SearchResultItem(
                 id: "empty-browse",
-                title: isInitialRAMOnly ? "⏳ Đang đọc danh sách tệp trong thư mục..." : "Không có tệp hoặc thư mục con khớp '\(filterPart)'",
+                title: isInitialRAMOnly ? "Đang đọc danh sách tệp trong thư mục..." : "Không có tệp hoặc thư mục con khớp '\(filterPart)'",
                 subtitle: currentDir,
                 path: nil,
                 isDirectory: false,
@@ -717,13 +717,13 @@ final class LauncherViewModel: ObservableObject {
             results.insert(
                 SearchResultItem(
                     id: "cmd:clean-inline",
-                    title: "🗑️ Xóa lịch sử thư mục gần đây (Clean History)",
+                    title: "Xóa lịch sử thư mục gần đây (Clean History)",
                     subtitle: "Nhấn Enter để làm sạch lịch sử mở gần đây",
                     path: nil,
                     isDirectory: false,
                     kind: .systemCommand(id: "clean-history"),
                     badge: "History",
-                    sfSymbolFallback: "trash.fill"
+                    sfSymbolFallback: "trash"
                 ),
                 at: 0
             )
@@ -829,7 +829,7 @@ final class LauncherViewModel: ObservableObject {
                 let folderName = currentDir == "/" ? "/" : (currentDir as NSString).lastPathComponent
                 items.append(SearchResultItem(
                     id: "dest-here:\(currentDir)",
-                    title: "📥 Chọn chính thư mục này: '\(folderName)'",
+                    title: "Chọn chính thư mục này: '\(folderName)'",
                     subtitle: currentDir,
                     path: currentDir,
                     isDirectory: true,
@@ -869,7 +869,7 @@ final class LauncherViewModel: ObservableObject {
                         let folderName = currentDir == "/" ? "/" : (currentDir as NSString).lastPathComponent
                         built.append(SearchResultItem(
                             id: "dest-here:\(currentDir)",
-                            title: "📥 Chọn chính thư mục này: '\(folderName)'",
+                            title: "Chọn chính thư mục này: '\(folderName)'",
                             subtitle: currentDir,
                             path: currentDir,
                             isDirectory: true,
@@ -1144,7 +1144,7 @@ final class LauncherViewModel: ObservableObject {
             pb.setString(markdown, forType: .string)
             LauncherPanelController.shared.hide()
             FloatingToastController.shared.showSuccess(
-                title: "Đã sao chép Markdown vào Clipboard ✓",
+                title: "Đã sao chép Markdown vào Clipboard",
                 subtitle: "Sẵn sàng nhấn ⌘V vào AI"
             )
         }
@@ -1346,47 +1346,47 @@ final class LauncherViewModel: ObservableObject {
         return [
             SearchResultItem(
                 id: "cmd:record-ua-hotkey",
-                title: "⚡ Tự thiết lập Phím tắt mở Universal Actions trên Finder (Đang dùng: \(curUA))",
+                title: "Tự thiết lập Phím tắt mở Universal Actions trên Finder (Đang dùng: \(curUA))",
                 subtitle: "Mặc định: ⌘/ (Command + /) • Nhấn Enter để tự bấm tổ hợp phím bất kỳ bạn muốn",
                 path: nil,
                 isDirectory: false,
                 kind: .systemCommand(id: "record-ua-hotkey"),
                 badge: "Finder Action",
-                sfSymbolFallback: "bolt.horizontal.circle.fill"
+                sfSymbolFallback: "bolt.horizontal"
             ),
             SearchResultItem(
                 id: "cmd:set-cmd-slash",
-                title: "⚡ Đặt phím tắt Universal Actions mặc định Command + / (⌘/)",
+                title: "Đặt phím tắt Universal Actions mặc định Command + / (⌘/)",
                 subtitle: "Chọn file/thư mục trong Finder rồi nhấn ⌘/ để mở ngay Universal Actions & Convert sang Markdown",
                 path: nil,
                 isDirectory: false,
                 kind: .systemCommand(id: "set-cmd-slash"),
                 badge: "Mặc định",
-                sfSymbolFallback: "command.square.fill"
+                sfSymbolFallback: "command"
             ),
             SearchResultItem(
                 id: "cmd:record-hotkey",
-                title: "⌨️ Tự thiết lập Phím tắt mở Thanh Tìm Kiếm (Đang dùng: \(curSearch))",
+                title: "Tự thiết lập Phím tắt mở Thanh Tìm Kiếm (Đang dùng: \(curSearch))",
                 subtitle: "Mặc định: ⌘Space • Nhấn Enter để mở bộ thu phím tắt bất kỳ theo ý muốn của bạn",
                 path: nil,
                 isDirectory: false,
                 kind: .systemCommand(id: "record-hotkey"),
                 badge: "Tùy chỉnh",
-                sfSymbolFallback: "keyboard.fill"
+                sfSymbolFallback: "keyboard"
             ),
             SearchResultItem(
                 id: "cmd:set-cmd-space",
-                title: "⚡ Đặt phím tắt Tìm kiếm mặc định Command + Space (⌘Space)",
+                title: "Đặt phím tắt Tìm kiếm mặc định Command + Space (⌘Space)",
                 subtitle: "Áp dụng ngay tổ hợp phím mặc định ⌘Space để mở DriveBar",
                 path: nil,
                 isDirectory: false,
                 kind: .systemCommand(id: "set-cmd-space"),
                 badge: "Mặc định",
-                sfSymbolFallback: "command.square.fill"
+                sfSymbolFallback: "command"
             ),
             SearchResultItem(
                 id: "cmd:set-opt-space",
-                title: "⚡ Đặt phím tắt Tìm kiếm Option + Space (⌥Space)",
+                title: "Đặt phím tắt Tìm kiếm Option + Space (⌥Space)",
                 subtitle: "Áp dụng ngay tổ hợp phím ⌥Space để mở DriveBar",
                 path: nil,
                 isDirectory: false,

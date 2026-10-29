@@ -512,8 +512,8 @@ private struct GeneralSettingsTab: View {
                                         .font(.system(size: 12.5, weight: .semibold))
                                         .lineLimit(1)
                                     if driveService.isRealtimeWatcherActive {
-                                        Text("⚡ Real-time FSEvents")
-                                            .font(.system(size: 10, weight: .bold))
+                                        Text("Real-time FSEvents")
+                                            .font(.system(size: 10, weight: .semibold))
                                             .foregroundStyle(.green)
                                             .padding(.horizontal, 6)
                                             .padding(.vertical, 2)

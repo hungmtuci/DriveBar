@@ -144,25 +144,25 @@ struct UniversalActionsView: View {
             Divider()
 
             // 4. Bottom Action Hints & Live Description
-            HStack(spacing: 12) {
+            HStack(spacing: 11) {
                 if viewModel.selectedIndex >= 0 && viewModel.selectedIndex < viewModel.filteredActions.count {
                     Text(viewModel.filteredActions[viewModel.selectedIndex].subtitle)
                         .lineLimit(1)
                         .foregroundStyle(.secondary)
                 } else {
-                    Label("↩ Thực hiện", systemImage: "return")
-                    Label("⌥↩ Chỉ Copy Markdown", systemImage: "doc.on.clipboard")
+                    FooterShortcutHint(key: "↩", label: "Thực hiện")
+                    FooterShortcutHint(key: "⌥↩", label: "Chỉ Copy Markdown")
                 }
                 Spacer(minLength: 8)
                 Button {
                     LauncherPanelController.shared.hide()
                     HotKeyService.shared.openSettingsAndRecord(.universalAction)
                 } label: {
-                    Label("Finder: \(AppSettings.shared.universalActionHotKey.readableDisplay)", systemImage: "bolt.horizontal")
+                    Text("Finder: \(AppSettings.shared.universalActionHotKey.readableDisplay)")
                         .font(.system(size: 10.5, weight: .medium, design: .monospaced))
                         .lineLimit(1)
                         .foregroundStyle(.secondary)
-                        .padding(.horizontal, 7)
+                        .padding(.horizontal, 7.5)
                         .padding(.vertical, 2)
                         .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
                         .overlay(
@@ -174,10 +174,8 @@ struct UniversalActionsView: View {
                 .fixedSize(horizontal: true, vertical: false)
                 .help("Bấm để đổi phím tắt mở Universal Actions khi thao tác trên Finder (Mặc định: ⌘/)")
 
-                Text("⇧ / ⌘Y Quick Look • ⎋ Esc")
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .foregroundStyle(.tertiary)
+                FooterShortcutHint(key: "⇧", label: "Quick Look")
+                FooterShortcutHint(key: "Esc", label: "Đóng")
             }
             .font(.system(size: 10.5, weight: .regular))
             .foregroundStyle(.secondary)

@@ -122,7 +122,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let shortcutMenu = NSMenu()
 
         let recordSearchItem = NSMenuItem(
-            title: "🎙 Tự bấm thiết lập phím tắt Tìm kiếm (\(settings.searchHotKey.readableDisplay))...",
+            title: "Tự bấm thiết lập phím tắt Tìm kiếm (\(settings.searchHotKey.readableDisplay))...",
             action: #selector(recordSearchShortcutAction),
             keyEquivalent: ""
         )
@@ -150,7 +150,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         shortcutMenu.addItem(.separator())
 
         let recordUAItem = NSMenuItem(
-            title: "🎙 Tự bấm thiết lập phím tắt Universal Actions trên Finder (\(settings.universalActionHotKey.readableDisplay))...",
+            title: "Tự bấm thiết lập phím tắt Universal Actions trên Finder (\(settings.universalActionHotKey.readableDisplay))...",
             action: #selector(recordUniversalShortcutAction),
             keyEquivalent: ""
         )

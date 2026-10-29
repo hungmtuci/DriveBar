@@ -330,19 +330,11 @@ private struct SearchFooterBar: View {
     let folderCount: Int
 
     var body: some View {
-        HStack(spacing: 10) {
-            Label("↩ Mở", systemImage: "return")
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-            Label("→/⇥ Actions", systemImage: "arrow.right.to.line")
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-            Label("⇧ Quick Look", systemImage: "eye")
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-            Label("⌘↩ Finder", systemImage: "folder")
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
+        HStack(spacing: 11) {
+            FooterShortcutHint(key: "↩", label: "Mở")
+            FooterShortcutHint(key: "⇥", label: "Actions")
+            FooterShortcutHint(key: "⇧", label: "Quick Look")
+            FooterShortcutHint(key: "⌘↩", label: "Finder")
 
             Spacer(minLength: 4)
 
@@ -375,7 +367,7 @@ private struct SearchFooterBar: View {
                 LauncherPanelController.shared.hide()
                 HotKeyService.shared.openSettingsAndRecord(.search)
             } label: {
-                footerKeycapLabel(settings.searchHotKey.readableDisplay, systemImage: "keyboard", monospaced: true)
+                footerActionPill(settings.searchHotKey.readableDisplay, monospaced: true)
             }
             .buttonStyle(.plain)
             .fixedSize(horizontal: true, vertical: false)
@@ -387,7 +379,7 @@ private struct SearchFooterBar: View {
                     HotKeyService.shared.openSettingsAndRecord(.universalAction)
                 }
             } label: {
-                footerKeycapLabel("Action \(settings.universalActionHotKey.readableDisplay)", systemImage: "bolt.horizontal", monospaced: true)
+                footerActionPill("Action \(settings.universalActionHotKey.readableDisplay)", monospaced: true)
             }
             .buttonStyle(.plain)
             .fixedSize(horizontal: true, vertical: false)
@@ -405,9 +397,8 @@ private struct SearchFooterBar: View {
             Button {
                 settings.showDockIcon.toggle()
             } label: {
-                footerKeycapLabel(
+                footerActionPill(
                     settings.showDockIcon ? "Ẩn Dock" : "Hiện Dock",
-                    systemImage: settings.showDockIcon ? "menubar.rectangle" : "dock.rectangle",
                     monospaced: false
                 )
             }
@@ -435,12 +426,12 @@ private struct SearchFooterBar: View {
         .background(Color.primary.opacity(0.02))
     }
 
-    private func footerKeycapLabel(_ title: String, systemImage: String, monospaced: Bool) -> some View {
-        Label(title, systemImage: systemImage)
+    private func footerActionPill(_ title: String, monospaced: Bool) -> some View {
+        Text(title)
             .font(.system(size: 10.5, weight: .medium, design: monospaced ? .monospaced : .default))
             .lineLimit(1)
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 7)
+            .padding(.horizontal, 7.5)
             .padding(.vertical, 2.5)
             .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
             .overlay(
@@ -703,14 +694,13 @@ private struct DestinationFolderPickerView: View {
 
             Divider()
 
-            HStack(spacing: 14) {
-                Label("↩ Thực hiện tại thư mục này", systemImage: "return")
-                Label("⇥ / → Duyệt thư mục con", systemImage: "arrow.right.to.line")
-                Label("⌘↩ Thực hiện & Mở Finder", systemImage: "folder")
-                Label("⇧ Quick Look", systemImage: "eye")
+            HStack(spacing: 12) {
+                FooterShortcutHint(key: "↩", label: "Thực hiện tại đây")
+                FooterShortcutHint(key: "⇥", label: "Duyệt thư mục con")
+                FooterShortcutHint(key: "⌘↩", label: "Thực hiện & Mở Finder")
+                FooterShortcutHint(key: "⇧", label: "Quick Look")
                 Spacer()
-                Text("⎋ Esc Quay lại")
-                    .foregroundStyle(.tertiary)
+                FooterShortcutHint(key: "Esc", label: "Quay lại")
             }
             .font(.system(size: 10.5, weight: .regular))
             .foregroundStyle(.secondary)
@@ -722,6 +712,31 @@ private struct DestinationFolderPickerView: View {
 }
 
 // MARK: - Shared Visual Helpers
+
+struct FooterShortcutHint: View {
+    let key: String
+    let label: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(key)
+                .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4.5)
+                .padding(.vertical, 1.5)
+                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 3.5, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 3.5, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                )
+            Text(label)
+                .font(.system(size: 10.5, weight: .regular))
+                .foregroundStyle(.secondary)
+        }
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+}
 
 struct FileOrSymbolIconView: View {
     let path: String?
