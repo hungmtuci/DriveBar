@@ -57,13 +57,13 @@ final class FloatingToastController: ObservableObject {
     private func presentPanel() {
         if panel == nil {
             let p = NSPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 420, height: 68),
+                contentRect: NSRect(x: 0, y: 0, width: 460, height: 68),
                 styleMask: [.borderless, .nonactivatingPanel],
                 backing: .buffered,
                 defer: false
             )
             p.isFloatingPanel = true
-            p.level = .statusBar
+            p.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 2)
             p.backgroundColor = .clear
             p.isOpaque = false
             p.hasShadow = true
@@ -75,9 +75,9 @@ final class FloatingToastController: ObservableObject {
 
         guard let panel, let screen = NSScreen.main ?? NSScreen.screens.first else { return }
         let frame = screen.visibleFrame
-        let x = frame.midX - 210
+        let x = frame.midX - 230
         let y = frame.maxY - 86
-        panel.setFrame(NSRect(x: x, y: y, width: 420, height: 68), display: true)
+        panel.setFrame(NSRect(x: x, y: y, width: 460, height: 68), display: true)
         panel.orderFrontRegardless()
     }
 }

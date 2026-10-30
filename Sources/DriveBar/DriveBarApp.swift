@@ -3,6 +3,19 @@ import AppKit
 import QuickLookUI
 
 final class DriveBarApplication: NSApplication {
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown {
+            let handled = MainActor.assumeIsolated { () -> Bool in
+                guard WindowSwitcherController.shared.isVisible else { return false }
+                return WindowSwitcherController.shared.handleLocalNSEventShortcut(event)
+            }
+            if handled {
+                return
+            }
+        }
+        super.sendEvent(event)
+    }
+
     override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool {
         true
     }
@@ -63,8 +76,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(withTitle: "Mở Lệnh Hệ thống ('s ')", action: #selector(openSystemCommandsFromMenu), keyEquivalent: "").target = self
         appMenu.addItem(withTitle: "Kiểm tra cập nhật từ GitHub...", action: #selector(checkUpdatesFromMenu), keyEquivalent: "").target = self
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Ẩn DriveBar", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
-        appMenu.addItem(withTitle: "Thoát DriveBar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: "Ẩn DriveBar", action: #selector(handleMenuHide(_:)), keyEquivalent: "h").target = self
+        appMenu.addItem(withTitle: "Thoát DriveBar", action: #selector(handleMenuQuit(_:)), keyEquivalent: "q").target = self
         appMenuItem.submenu = appMenu
 
         // Edit Menu
@@ -84,7 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let winMenuItem = NSMenuItem()
         mainMenu.addItem(winMenuItem)
         let winMenu = NSMenu(title: "Cửa sổ")
-        winMenu.addItem(withTitle: "Đóng cửa sổ", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        winMenu.addItem(withTitle: "Đóng cửa sổ", action: #selector(handleMenuCloseWindow(_:)), keyEquivalent: "w").target = self
         winMenuItem.submenu = winMenu
 
         NSApp.mainMenu = mainMenu
@@ -243,5 +256,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func bringSettingsWindowToFront() {
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    @objc func handleMenuHide(_ sender: Any?) {
+        if WindowSwitcherController.shared.isVisible {
+            WindowSwitcherController.shared.triggerHideSelectedApp()
+            return
+        }
+        NSApp.hide(sender)
+    }
+
+    @objc func handleMenuQuit(_ sender: Any?) {
+        if WindowSwitcherController.shared.isVisible {
+            let force = NSEvent.modifierFlags.contains(.option)
+            WindowSwitcherController.shared.triggerQuitSelectedApp(force: force)
+            return
+        }
+        NSApp.terminate(sender)
+    }
+
+    @objc func handleMenuCloseWindow(_ sender: Any?) {
+        if WindowSwitcherController.shared.isVisible {
+            WindowSwitcherController.shared.triggerCloseSelectedWindow()
+            return
+        }
+        if LauncherPanelController.shared.isVisible {
+            LauncherPanelController.shared.hide()
+            return
+        }
+        NSApp.keyWindow?.performClose(sender)
     }
 }

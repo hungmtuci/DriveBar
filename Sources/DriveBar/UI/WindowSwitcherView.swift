@@ -26,6 +26,7 @@ struct WindowSwitcherOverlayView: View {
                             previewImage: (service.zoomedPreviewWindowID == selected.windowID ? service.zoomedPreviewImage : nil)
                                 ?? selected.windowID.flatMap { service.thumbnails[$0] },
                             hasScreenRecordingPermission: service.hasScreenRecordingPermission,
+                            hasAccessibilityPermission: service.hasAccessibilityPermission,
                             maxWidth: min(geo.size.width * 0.64, 920),
                             maxHeight: min(geo.size.height * 0.47, 465),
                             onActivate: {
@@ -35,12 +36,13 @@ struct WindowSwitcherOverlayView: View {
                                 controller.commitSnapSelectionAndDismiss(placement)
                             },
                             onCloseWindow: {
-                                controller.pinOpenFromInteraction()
-                                service.closeSelectedWindow()
+                                controller.triggerCloseSelectedWindow()
+                            },
+                            onQuitApp: { force in
+                                controller.triggerQuitSelectedApp(force: force)
                             },
                             onToggleMinimize: {
-                                controller.pinOpenFromInteraction()
-                                service.toggleMinimizeSelectedWindow()
+                                controller.triggerMinimizeSelectedWindow()
                             },
                             onRequestScreenRecording: {
                                 controller.dismissWithoutActivating(restorePreviousApp: false)
@@ -72,13 +74,19 @@ private struct ZoomedWindowPreviewCard: View {
     let item: SwitchableWindowItem
     let previewImage: NSImage?
     let hasScreenRecordingPermission: Bool
+    let hasAccessibilityPermission: Bool
     let maxWidth: CGFloat
     let maxHeight: CGFloat
     let onActivate: () -> Void
     let onSnapWindow: (WindowSnapPlacement) -> Void
     let onCloseWindow: () -> Void
+    let onQuitApp: (Bool) -> Void
     let onToggleMinimize: () -> Void
     let onRequestScreenRecording: () -> Void
+
+    private var canQuitApp: Bool {
+        item.pid != ProcessInfo.processInfo.processIdentifier && item.bundleIdentifier != "com.apple.finder"
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -120,8 +128,8 @@ private struct ZoomedWindowPreviewCard: View {
                         .fixedSize(horizontal: true, vertical: false)
                 }
 
-                if !item.isWindowlessApp {
-                    HStack(spacing: 4) {
+                HStack(spacing: 4) {
+                    if !item.isWindowlessApp {
                         if !item.isFullscreen {
                             Button { onSnapWindow(.leftHalf) } label: {
                                 Image(systemName: "rectangle.lefthalf.inset.filled")
@@ -172,7 +180,22 @@ private struct ZoomedWindowPreviewCard: View {
                                 .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
                         }
                         .buttonStyle(.plain)
-                        .help("Đóng cửa sổ này (⌘W)")
+                        .help(hasAccessibilityPermission ? "Đóng cửa sổ này (⌘W)" : "Cấp quyền Trợ năng để đóng cửa sổ (⌘W)")
+                    }
+
+                    if canQuitApp {
+                        Button {
+                            let force = NSEvent.modifierFlags.contains(.option)
+                            onQuitApp(force)
+                        } label: {
+                            Image(systemName: "power")
+                                .font(.system(size: 10.5, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 22, height: 22)
+                                .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Thoát ứng dụng \(item.appName) (⌘Q • Giữ ⌥ để buộc thoát ⌥⌘Q)")
                     }
                 }
             }
@@ -374,7 +397,10 @@ private struct WindowThumbnailStripCard: View {
                                 WindowThumbnailItemCard(
                                     item: item,
                                     thumbnail: item.windowID.flatMap { service.thumbnails[$0] },
-                                    isSelected: idx == service.selectedIndex
+                                    isSelected: idx == service.selectedIndex,
+                                    onQuickClose: {
+                                        controller.triggerCloseWindowItem(item)
+                                    }
                                 )
                                 .id(item.id)
                                 .onHover { hovering in
@@ -384,6 +410,34 @@ private struct WindowThumbnailStripCard: View {
                                 }
                                 .onTapGesture {
                                     controller.selectAndActivateAtIndex(idx)
+                                }
+                                .contextMenu {
+                                    Button("Mở cửa sổ này (↩)") {
+                                        controller.selectAndActivateAtIndex(idx)
+                                    }
+                                    if !item.isWindowlessApp {
+                                        Divider()
+                                        Button("Đóng cửa sổ (⌘W)") {
+                                            controller.triggerCloseWindowItem(item)
+                                        }
+                                        Button(item.isMinimized ? "Khôi phục cửa sổ (⌘M)" : "Thu nhỏ xuống Dock (⌘M)") {
+                                            controller.triggerMinimizeWindowItem(item)
+                                        }
+                                    }
+                                    if item.pid != ProcessInfo.processInfo.processIdentifier {
+                                        Divider()
+                                        Button(item.isAppHidden ? "Hiện ứng dụng \(item.appName) (⌘H)" : "Ẩn ứng dụng \(item.appName) (⌘H)") {
+                                            controller.triggerHideAppForItem(item)
+                                        }
+                                        if item.bundleIdentifier != "com.apple.finder" {
+                                            Button("Thoát \(item.appName) (⌘Q)") {
+                                                controller.triggerQuitAppForItem(item, force: false)
+                                            }
+                                            Button("Buộc thoát \(item.appName) (⌥⌘Q)") {
+                                                controller.triggerQuitAppForItem(item, force: true)
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -403,16 +457,46 @@ private struct WindowThumbnailStripCard: View {
             Divider()
 
             // Subtle Single-Line Controls & Filter Toggles Footer
-            HStack(spacing: 10) {
+            HStack(spacing: 9) {
                 FooterShortcutHint(key: "↩", label: "Mở")
                 FooterShortcutHint(key: "← →", label: "Di chuyển")
                 FooterShortcutHint(key: "⌃←→↑", label: "Chia đôi/Tối đa")
                 FooterShortcutHint(key: "⌘Y", label: settings.windowSwitcherShowZoomPreview ? "Ẩn phóng to" : "Phóng to")
                 FooterShortcutHint(key: "⌘W", label: "Đóng")
+                FooterShortcutHint(key: "⌘Q", label: "Thoát App")
                 FooterShortcutHint(key: "⌘M", label: "Minimize")
                 FooterShortcutHint(key: "Esc", label: service.filterQuery.isEmpty ? "Đóng" : "Xóa lọc")
 
-                Spacer(minLength: 10)
+                Spacer(minLength: 8)
+
+                if !service.hasAccessibilityPermission {
+                    Button {
+                        controller.dismissWithoutActivating(restorePreviousApp: false)
+                        service.promptAccessibilityPermission()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 9.5, weight: .semibold))
+                            Text("Bật quyền Trợ năng (⌘W / ⌘⇥)")
+                                .font(.system(size: 10.5, weight: .semibold))
+                                .lineLimit(1)
+                        }
+                        .foregroundStyle(Color(nsColor: .systemOrange))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2.5)
+                        .background(
+                            Color(nsColor: .systemOrange).opacity(0.14),
+                            in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .strokeBorder(Color(nsColor: .systemOrange).opacity(0.42), lineWidth: 0.5)
+                        )
+                        .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Cấp quyền Trợ năng (Accessibility) để đóng cửa sổ bằng ⌘W, thu nhỏ bằng ⌘M và dùng phím tắt ⌘Tab")
+                }
 
                 if !service.hasScreenRecordingPermission {
                     Button {
@@ -524,6 +608,7 @@ private struct WindowThumbnailItemCard: View {
     let item: SwitchableWindowItem
     let thumbnail: NSImage?
     let isSelected: Bool
+    let onQuickClose: () -> Void
 
     var body: some View {
         VStack(spacing: 6) {
@@ -567,6 +652,26 @@ private struct WindowThumbnailItemCard: View {
                         .padding(.vertical, 1.5)
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
                         .padding(5)
+                }
+
+                if isSelected && !item.isWindowlessApp {
+                    HStack {
+                        Button(action: onQuickClose) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 8.5, weight: .bold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 17, height: 17)
+                                .background(.regularMaterial, in: Circle())
+                                .overlay(
+                                    Circle()
+                                        .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .help("Đóng cửa sổ này (⌘W)")
+                        Spacer()
+                    }
+                    .padding(5)
                 }
             }
             .frame(width: 180, height: 104)

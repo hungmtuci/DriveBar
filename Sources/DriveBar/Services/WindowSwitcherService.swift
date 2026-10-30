@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import Carbon
 import ApplicationServices
 import CoreGraphics
 import ScreenCaptureKit
@@ -122,6 +123,21 @@ final class WindowSwitcherService: ObservableObject {
                 guard let self else { return }
                 if pid != ProcessInfo.processInfo.processIdentifier {
                     self.recordMRUPID(pid)
+                }
+            }
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+            let pid = app.processIdentifier
+            Task { @MainActor in
+                guard let self else { return }
+                self.mruPIDs.removeAll { $0 == pid }
+                if WindowSwitcherController.shared.isVisible {
+                    self.purgeSessionItemsForPID(pid)
                 }
             }
         }
@@ -1198,31 +1214,203 @@ final class WindowSwitcherService: ObservableObject {
         )
     }
 
-    // MARK: - In-Switcher Quick Actions (Close ⌘W, Minimize ⌘M, Hide ⌘H, Quit ⌘Q)
+    // MARK: - In-Switcher Quick Actions (Close ⌘W, Minimize ⌘M, Hide ⌘H, Quit ⌘Q / Force Quit ⌥⌘Q)
+
+    func purgeSessionItemsForPID(_ pid: pid_t) {
+        let before = allSessionItems.count
+        allSessionItems.removeAll { $0.pid == pid }
+        if allSessionItems.count != before {
+            applySearchFilterFromSessionCache(resetSelectionToFirst: false)
+            requestHighResZoomPreviewForSelection(debounced: false)
+            if allSessionItems.isEmpty && filterQuery.isEmpty && sessionSameAppPID == nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                    if WindowSwitcherController.shared.isVisible && WindowSwitcherService.shared.items.isEmpty {
+                        WindowSwitcherController.shared.dismissWithoutActivating(restorePreviousApp: false)
+                    }
+                }
+            }
+        }
+    }
+
+    func purgeSessionItem(id: String) {
+        let before = allSessionItems.count
+        allSessionItems.removeAll { $0.id == id }
+        if allSessionItems.count != before {
+            applySearchFilterFromSessionCache(resetSelectionToFirst: false)
+            requestHighResZoomPreviewForSelection(debounced: false)
+            if allSessionItems.isEmpty && filterQuery.isEmpty && sessionSameAppPID == nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                    if WindowSwitcherController.shared.isVisible && WindowSwitcherService.shared.items.isEmpty {
+                        WindowSwitcherController.shared.dismissWithoutActivating(restorePreviousApp: false)
+                    }
+                }
+            }
+        }
+    }
+
+    private func resolveLiveAXWindow(for item: SwitchableWindowItem, timeout: Float = 0.85) -> AXUIElement? {
+        guard AXIsProcessTrusted() else { return nil }
+        let resolved = item.windowID.flatMap { Self.findAXWindow(pid: item.pid, targetWID: $0, timeout: timeout) }
+            ?? item.axWindow
+            ?? item.windowID.flatMap { Self.resolveOffSpaceAXWindow(pid: item.pid, targetWID: $0) }
+        if let resolved {
+            AXUIElementSetMessagingTimeout(resolved, timeout)
+        }
+        return resolved
+    }
 
     func closeSelectedWindow() {
-        guard let item = selectedItem, !item.isWindowlessApp else { return }
-        if let axWin = item.axWindow ?? item.windowID.flatMap({ Self.findAXWindow(pid: item.pid, targetWID: $0) }) {
+        guard let item = selectedItem else { return }
+        closeWindow(item)
+    }
+
+    func closeWindow(_ item: SwitchableWindowItem) {
+        if item.isWindowlessApp {
+            quitApp(for: item, force: false)
+            return
+        }
+
+        if item.pid == ProcessInfo.processInfo.processIdentifier {
+            NSApp.windows.first(where: { $0.title.contains("DriveBar") })?.close()
+            purgeSessionItem(id: item.id)
+            return
+        }
+
+        refreshPermissionStates()
+        guard hasAccessibilityPermission else {
+            WindowSwitcherController.shared.dismissWithoutActivating(restorePreviousApp: false)
+            FloatingToastController.shared.showError(
+                title: "Cần bật lại quyền Trợ năng (Accessibility) để đóng cửa sổ (⌘W)",
+                subtitle: "Đang mở Cài đặt Trợ năng macOS — hãy bật công tắc DriveBar"
+            )
+            promptAccessibilityPermission()
+            return
+        }
+
+        let initialModalPresent = Self.appHasActiveModalOrSheet(pid: item.pid, targetWID: item.windowID)
+        var didSendClose = false
+        var usedMenuFallback = false
+
+        if let axWin = resolveLiveAXWindow(for: item, timeout: 0.85) {
+            if !item.isMinimized {
+                AXUIElementSetAttributeValue(axWin, kAXMainAttribute as CFString, kCFBooleanTrue)
+            }
             var closeBtnRef: CFTypeRef?
             if AXUIElementCopyAttributeValue(axWin, kAXCloseButtonAttribute as CFString, &closeBtnRef) == .success,
                let closeBtn = closeBtnRef {
-                _ = AXUIElementPerformAction(closeBtn as! AXUIElement, kAXPressAction as CFString)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
-                    self?.rebuildFilteredItemsPreservingSelection()
+                let closeElem = closeBtn as! AXUIElement
+                AXUIElementSetMessagingTimeout(closeElem, 0.85)
+                if Self.axBool(closeElem, kAXEnabledAttribute) != false,
+                   AXUIElementPerformAction(closeElem, kAXPressAction as CFString) == .success {
+                    didSendClose = true
                 }
-                return
+            }
+
+            if !didSendClose {
+                AXUIElementSetAttributeValue(axWin, kAXMainAttribute as CFString, kCFBooleanTrue)
+                AXUIElementSetAttributeValue(axWin, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+                usedMenuFallback = true
+                if Self.pressMenuCommandChar(pid: item.pid, cmdChar: "W") {
+                    didSendClose = true
+                } else if Self.postCommandKeyToPID(pid: item.pid, keyCode: CGKeyCode(kVK_ANSI_W)) {
+                    didSendClose = true
+                }
+            }
+        } else {
+            usedMenuFallback = true
+            if Self.pressMenuCommandChar(pid: item.pid, cmdChar: "W")
+                || Self.postCommandKeyToPID(pid: item.pid, keyCode: CGKeyCode(kVK_ANSI_W)) {
+                didSendClose = true
             }
         }
-        NSSound.beep()
+
+        guard didSendClose else {
+            NSSound.beep()
+            return
+        }
+
+        scheduleWindowCloseFollowUp(
+            item: item,
+            initialModalPresent: initialModalPresent,
+            usedMenuFallback: usedMenuFallback,
+            delays: [0.08, 0.24, 0.48, 0.85],
+            stepIndex: 0
+        )
+    }
+
+    private func scheduleWindowCloseFollowUp(
+        item: SwitchableWindowItem,
+        initialModalPresent: Bool,
+        usedMenuFallback: Bool,
+        delays: [TimeInterval],
+        stepIndex: Int
+    ) {
+        guard stepIndex < delays.count else { return }
+        let wait = stepIndex == 0 ? delays[0] : (delays[stepIndex] - delays[stepIndex - 1])
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0.05, wait)) { [weak self] in
+            guard let self else { return }
+            guard WindowSwitcherController.shared.isVisible else { return }
+
+            if !Self.isWindowStillAlive(wid: item.windowID, pid: item.pid, wasMinimized: item.isMinimized) {
+                self.purgeSessionItem(id: item.id)
+                return
+            }
+
+            // If closing triggered a "Save changes?" sheet/dialog (e.g. Microsoft Word, Excel, TextEdit),
+            // automatically dismiss Windows Preview and bring that window & Save prompt to the front!
+            if stepIndex >= 1,
+               !initialModalPresent,
+               Self.appHasActiveModalOrSheet(pid: item.pid, targetWID: item.windowID) {
+                WindowSwitcherController.shared.dismissWithoutActivating(restorePreviousApp: false)
+                self.activateWindow(item)
+                return
+            }
+
+            // Second-stage fallback if AXCloseButton reported .success on a custom-chrome window without closing it
+            var nextUsedFallback = usedMenuFallback
+            if stepIndex == 1 && !usedMenuFallback {
+                nextUsedFallback = true
+                if !Self.pressMenuCommandChar(pid: item.pid, cmdChar: "W") {
+                    _ = Self.postCommandKeyToPID(pid: item.pid, keyCode: CGKeyCode(kVK_ANSI_W))
+                }
+            }
+
+            if stepIndex + 1 < delays.count {
+                self.scheduleWindowCloseFollowUp(
+                    item: item,
+                    initialModalPresent: initialModalPresent,
+                    usedMenuFallback: nextUsedFallback,
+                    delays: delays,
+                    stepIndex: stepIndex + 1
+                )
+            } else {
+                self.rebuildFilteredItemsPreservingSelection()
+            }
+        }
     }
 
     func toggleMinimizeSelectedWindow() {
         guard let item = selectedItem, !item.isWindowlessApp else { return }
-        if let axWin = item.axWindow ?? item.windowID.flatMap({ Self.findAXWindow(pid: item.pid, targetWID: $0) }) {
+        refreshPermissionStates()
+        guard hasAccessibilityPermission else {
+            WindowSwitcherController.shared.dismissWithoutActivating(restorePreviousApp: false)
+            FloatingToastController.shared.showError(
+                title: "Cần bật lại quyền Trợ năng (Accessibility) để thu nhỏ cửa sổ (⌘M)",
+                subtitle: "Đang mở Cài đặt Trợ năng macOS — hãy bật công tắc DriveBar"
+            )
+            promptAccessibilityPermission()
+            return
+        }
+
+        if let axWin = resolveLiveAXWindow(for: item, timeout: 0.8) {
             let newState: CFBoolean = item.isMinimized ? kCFBooleanFalse : kCFBooleanTrue
             if AXUIElementSetAttributeValue(axWin, kAXMinimizedAttribute as CFString, newState) == .success {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
-                    self?.rebuildFilteredItemsPreservingSelection()
+                for delay in [0.12, 0.32] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                        guard let self, WindowSwitcherController.shared.isVisible else { return }
+                        self.rebuildFilteredItemsPreservingSelection()
+                    }
                 }
                 return
             }
@@ -1238,19 +1426,269 @@ final class WindowSwitcherService: ObservableObject {
         } else {
             app.hide()
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) { [weak self] in
-            self?.rebuildFilteredItemsPreservingSelection()
+        for delay in [0.10, 0.28] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, WindowSwitcherController.shared.isVisible else { return }
+                self.rebuildFilteredItemsPreservingSelection()
+            }
         }
     }
 
-    func quitSelectedApp() {
-        guard let item = selectedItem,
-              item.pid != ProcessInfo.processInfo.processIdentifier,
-              let app = NSRunningApplication(processIdentifier: item.pid) else { return }
-        app.terminate()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
-            self?.rebuildFilteredItemsPreservingSelection()
+    func quitSelectedApp(force: Bool = false) {
+        guard let item = selectedItem else { return }
+        quitApp(for: item, force: force)
+    }
+
+    func quitApp(for item: SwitchableWindowItem, force: Bool = false) {
+        guard item.pid != ProcessInfo.processInfo.processIdentifier else { return }
+
+        // Finder does not exit on NSRunningApplication.terminate(); close its open windows instead unless Force Quit (Relaunch)
+        if item.bundleIdentifier == "com.apple.finder" && !force {
+            refreshPermissionStates()
+            guard hasAccessibilityPermission else {
+                WindowSwitcherController.shared.dismissWithoutActivating(restorePreviousApp: false)
+                FloatingToastController.shared.showError(
+                    title: "Cần bật lại quyền Trợ năng (Accessibility) để đóng cửa sổ Finder",
+                    subtitle: "Đang mở Cài đặt Trợ năng macOS — hãy bật công tắc DriveBar"
+                )
+                promptAccessibilityPermission()
+                return
+            }
+            let finderWindows = allSessionItems.filter { $0.pid == item.pid && !$0.isWindowlessApp }
+            for fw in finderWindows {
+                if let axWin = resolveLiveAXWindow(for: fw, timeout: 0.65) {
+                    var closeBtnRef: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(axWin, kAXCloseButtonAttribute as CFString, &closeBtnRef) == .success,
+                       let closeBtn = closeBtnRef {
+                        let closeElem = closeBtn as! AXUIElement
+                        AXUIElementSetMessagingTimeout(closeElem, 0.65)
+                        _ = AXUIElementPerformAction(closeElem, kAXPressAction as CFString)
+                    }
+                }
+            }
+            for delay in [0.12, 0.30, 0.55] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    guard let self, WindowSwitcherController.shared.isVisible else { return }
+                    self.rebuildFilteredItemsPreservingSelection()
+                }
+            }
+            return
         }
+
+        guard let app = NSRunningApplication(processIdentifier: item.pid) else {
+            purgeSessionItemsForPID(item.pid)
+            return
+        }
+
+        if force {
+            _ = app.forceTerminate()
+            FloatingToastController.shared.showSuccess(
+                title: "Đã buộc thoát \(item.appName)",
+                subtitle: "Force Quit (⌥⌘Q)",
+                symbol: "xmark.octagon"
+            )
+            for delay in [0.08, 0.25, 0.50] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    guard let self else { return }
+                    if app.isTerminated {
+                        self.purgeSessionItemsForPID(item.pid)
+                    }
+                }
+            }
+            return
+        }
+
+        let initialModalPresent = AXIsProcessTrusted()
+            ? Self.appHasActiveModalOrSheet(pid: item.pid, targetWID: item.windowID)
+            : false
+
+        let accepted = app.terminate()
+        if !accepted && AXIsProcessTrusted() {
+            if !Self.pressMenuCommandChar(pid: item.pid, cmdChar: "Q") {
+                _ = Self.postCommandKeyToPID(pid: item.pid, keyCode: CGKeyCode(kVK_ANSI_Q))
+            }
+        }
+
+        // Multi-wave monitoring:
+        // - Clean apps exit within 40–1,000ms -> didTerminateApplicationNotification + wave checks purge immediately.
+        // - Apps with unsaved documents (e.g. Microsoft Word, Excel) open a Save prompt or wait for foreground activation ->
+        //   automatically hand focus to the app so the user can interact with the Save / Quit dialog!
+        for checkDelay in [0.16, 0.36, 0.68] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + checkDelay) { [weak self] in
+                guard let self, WindowSwitcherController.shared.isVisible else { return }
+                if app.isTerminated {
+                    self.purgeSessionItemsForPID(item.pid)
+                    return
+                }
+                if !item.isWindowlessApp,
+                   !Self.isWindowStillAlive(wid: item.windowID, pid: item.pid, wasMinimized: item.isMinimized) {
+                    self.purgeSessionItem(id: item.id)
+                }
+                if AXIsProcessTrusted(),
+                   !initialModalPresent,
+                   Self.appHasActiveModalOrSheet(pid: item.pid, targetWID: item.windowID) {
+                    WindowSwitcherController.shared.dismissWithoutActivating(restorePreviousApp: false)
+                    self.activateWindow(item)
+                }
+            }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.15) { [weak self] in
+            guard let self, WindowSwitcherController.shared.isVisible else { return }
+            if app.isTerminated {
+                self.purgeSessionItemsForPID(item.pid)
+                return
+            }
+            // App is still alive after 1.15s -> it blocked silent quit (unsaved changes / quit confirmation prompt).
+            // Bring the app forward so its confirmation dialog is visible and actionable!
+            WindowSwitcherController.shared.dismissWithoutActivating(restorePreviousApp: false)
+            self.activateWindow(item)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                if !app.isTerminated && (!AXIsProcessTrusted() || !Self.appHasActiveModalOrSheet(pid: item.pid, targetWID: item.windowID)) {
+                    _ = app.terminate()
+                }
+            }
+        }
+    }
+
+    private static func isWindowStillAlive(wid: CGWindowID?, pid: pid_t, wasMinimized: Bool) -> Bool {
+        if let app = NSRunningApplication(processIdentifier: pid), app.isTerminated {
+            return false
+        }
+
+        if AXIsProcessTrusted(), let wid {
+            let axApp = AXUIElementCreateApplication(pid)
+            AXUIElementSetMessagingTimeout(axApp, 0.12)
+            var winsRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &winsRef) == .success,
+               let wins = winsRef as? [AXUIElement] {
+                for w in wins {
+                    var foundWID: CGWindowID = 0
+                    if _AXUIElementGetWindow(w, &foundWID) == .success && foundWID == wid {
+                        return true
+                    }
+                }
+                if wasMinimized {
+                    return false
+                }
+            }
+        }
+
+        guard let wid else { return false }
+        let cgAll = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        for dict in cgAll {
+            guard let num = dict[kCGWindowNumber as String] as? CGWindowID, num == wid else { continue }
+            let layer = dict[kCGWindowLayer as String] as? Int ?? -1
+            let alpha = dict[kCGWindowAlpha as String] as? Double ?? 0
+            if layer == 0 && alpha > 0.05 {
+                let cid = _CGSMainConnectionID()
+                if cid != 0, !wasMinimized {
+                    let spaces = (_CGSCopySpacesForWindows(cid, 0x7, [NSNumber(value: wid)] as CFArray) as? [NSNumber]) ?? []
+                    if spaces.isEmpty {
+                        return false
+                    }
+                }
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func appHasActiveModalOrSheet(pid: pid_t, targetWID: CGWindowID?) -> Bool {
+        guard AXIsProcessTrusted() else { return false }
+        let axApp = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(axApp, 0.15)
+        var winsRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &winsRef) == .success,
+              let wins = winsRef as? [AXUIElement] else {
+            return false
+        }
+
+        for w in wins {
+            let role = axString(w, kAXRoleAttribute) ?? ""
+            let subrole = axString(w, kAXSubroleAttribute) ?? ""
+            if role == "AXSheet" || subrole == "AXDialog" || subrole == "AXSystemDialog" {
+                return true
+            }
+            if axBool(w, kAXModalAttribute) == true {
+                return true
+            }
+            var sheetsRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(w, "AXSheets" as CFString, &sheetsRef) == .success,
+               let sheets = sheetsRef as? [AXUIElement],
+               !sheets.isEmpty {
+                return true
+            }
+            if let targetWID {
+                var wid: CGWindowID = 0
+                if _AXUIElementGetWindow(w, &wid) == .success && wid == targetWID {
+                    var childrenRef: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(w, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+                       let children = childrenRef as? [AXUIElement],
+                       children.contains(where: { (axString($0, kAXRoleAttribute) ?? "") == "AXSheet" }) {
+                        return true
+                    }
+                }
+            }
+        }
+        return false
+    }
+
+    private static func pressMenuCommandChar(pid: pid_t, cmdChar: String) -> Bool {
+        guard AXIsProcessTrusted() else { return false }
+        let targetUpper = cmdChar.uppercased()
+        let axApp = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(axApp, 0.25)
+        var menuBarRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(axApp, kAXMenuBarAttribute as CFString, &menuBarRef) == .success,
+              let menuBar = menuBarRef else { return false }
+
+        var barItemsRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(menuBar as! AXUIElement, kAXChildrenAttribute as CFString, &barItemsRef) == .success,
+              let barItems = barItemsRef as? [AXUIElement] else { return false }
+
+        for barItem in barItems.prefix(8) {
+            var subMenusRef: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(barItem, kAXChildrenAttribute as CFString, &subMenusRef) == .success,
+                  let subMenus = subMenusRef as? [AXUIElement],
+                  let menu = subMenus.first else { continue }
+
+            var itemsRef: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(menu, kAXChildrenAttribute as CFString, &itemsRef) == .success,
+                  let menuItems = itemsRef as? [AXUIElement] else { continue }
+
+            for mi in menuItems {
+                let charAttr = (axString(mi, kAXMenuItemCmdCharAttribute) ?? "").uppercased()
+                guard charAttr == targetUpper else { continue }
+                var modsRef: CFTypeRef?
+                var modsVal = 0
+                if AXUIElementCopyAttributeValue(mi, kAXMenuItemCmdModifiersAttribute as CFString, &modsRef) == .success,
+                   let num = modsRef as? NSNumber {
+                    modsVal = num.intValue
+                }
+                // kAXMenuItemModifierNone (0) means pure Command+<char> without Shift/Option/Control!
+                guard modsVal == 0 else { continue }
+                if axBool(mi, kAXEnabledAttribute) == false { continue }
+                AXUIElementSetMessagingTimeout(mi, 0.5)
+                if AXUIElementPerformAction(mi, kAXPressAction as CFString) == .success {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private static func postCommandKeyToPID(pid: pid_t, keyCode: CGKeyCode) -> Bool {
+        guard let src = CGEventSource(stateID: .combinedSessionState),
+              let down = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: true),
+              let up = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: false) else {
+            return false
+        }
+        down.flags = .maskCommand
+        up.flags = .maskCommand
+        down.postToPid(pid)
+        up.postToPid(pid)
+        return true
     }
 
     // MARK: - Display Localized Names & Mission Control Desktop / Space Mapping
@@ -1488,9 +1926,9 @@ final class WindowSwitcherService: ObservableObject {
         return CGRect(origin: pt, size: sz)
     }
 
-    private static func findAXWindow(pid: pid_t, targetWID: CGWindowID) -> AXUIElement? {
+    private static func findAXWindow(pid: pid_t, targetWID: CGWindowID, timeout: Float = 0.12) -> AXUIElement? {
         let axApp = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(axApp, 0.08)
+        AXUIElementSetMessagingTimeout(axApp, timeout)
         var winsRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &winsRef) == .success,
               let wins = winsRef as? [AXUIElement] else { return nil }

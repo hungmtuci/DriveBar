@@ -8,6 +8,13 @@ final class WindowSwitcherStagePanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
     override var acceptsFirstResponder: Bool { true }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if MainActor.assumeIsolated({ WindowSwitcherController.shared.handleLocalNSEventShortcut(event) }) {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
 }
 
 private struct SharedTapConfig: Sendable {
@@ -48,6 +55,7 @@ final class WindowSwitcherController: NSObject, ObservableObject {
     private var previousFrontApp: NSRunningApplication?
     private var activeHoldModifierMask: CGEventFlags = []
     private var lastAcceptedHoverMouseLocation: NSPoint = .zero
+    private var lastQuickActionUptime: TimeInterval = 0
 
     // Dedicated off-main EventTap thread & lock-protected state (prevents WindowServer timeout stalls!)
     nonisolated(unsafe) private let tapStateLock = NSLock()
@@ -215,7 +223,7 @@ final class WindowSwitcherController: NSObject, ObservableObject {
 
     private func startPermissionWatchdogIfNeeded() {
         guard permissionPollTimer == nil else { return }
-        permissionPollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+        permissionPollTimer = Timer.scheduledTimer(withTimeInterval: 1.2, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
                 WindowSwitcherService.shared.refreshPermissionStates()
@@ -504,42 +512,38 @@ final class WindowSwitcherController: NSObject, ObservableObject {
             break
         }
 
+        // Option + Command + Q (⌥⌘Q) -> Force Quit selected application
+        if code == kVK_ANSI_Q && cleanFlags == [.maskCommand, .maskAlternate] {
+            DispatchQueue.main.async {
+                WindowSwitcherController.shared.triggerQuitSelectedApp(force: true)
+            }
+            return true
+        }
+
         // Strict single-modifier Quick Window Actions (NEVER swallow ⌘⇧1..4 screenshot chords or ⌘⌥ / ⌘⌃ system shortcuts!)
         if isExactCmdOrCtrl {
             switch code {
             case kVK_ANSI_W:
                 DispatchQueue.main.async {
-                    let ctrl = WindowSwitcherController.shared
-                    ctrl.clearScreenshotCaptureGrace()
-                    ctrl.pinOpenFromInteraction()
-                    WindowSwitcherService.shared.closeSelectedWindow()
+                    WindowSwitcherController.shared.triggerCloseSelectedWindow()
                 }
                 return true
 
             case kVK_ANSI_M:
                 DispatchQueue.main.async {
-                    let ctrl = WindowSwitcherController.shared
-                    ctrl.clearScreenshotCaptureGrace()
-                    ctrl.pinOpenFromInteraction()
-                    WindowSwitcherService.shared.toggleMinimizeSelectedWindow()
+                    WindowSwitcherController.shared.triggerMinimizeSelectedWindow()
                 }
                 return true
 
             case kVK_ANSI_H:
                 DispatchQueue.main.async {
-                    let ctrl = WindowSwitcherController.shared
-                    ctrl.clearScreenshotCaptureGrace()
-                    ctrl.pinOpenFromInteraction()
-                    WindowSwitcherService.shared.toggleHideSelectedApp()
+                    WindowSwitcherController.shared.triggerHideSelectedApp()
                 }
                 return true
 
             case kVK_ANSI_Q where isExactCmd:
                 DispatchQueue.main.async {
-                    let ctrl = WindowSwitcherController.shared
-                    ctrl.clearScreenshotCaptureGrace()
-                    ctrl.pinOpenFromInteraction()
-                    WindowSwitcherService.shared.quitSelectedApp()
+                    WindowSwitcherController.shared.triggerQuitSelectedApp(force: false)
                 }
                 return true
 
@@ -722,6 +726,9 @@ final class WindowSwitcherController: NSObject, ObservableObject {
             LauncherPanelController.shared.hide()
         }
 
+        // Verify live Accessibility / EventTap health right before presenting
+        refreshEventTapState()
+
         let ownPID = ProcessInfo.processInfo.processIdentifier
         if let front = NSWorkspace.shared.frontmostApplication,
            front.processIdentifier != ownPID {
@@ -760,9 +767,13 @@ final class WindowSwitcherController: NSObject, ObservableObject {
 
         isVisible = true
         syncSharedTapConfiguration()
-        installAuxiliaryMonitors(useLocalKeyboardFallback: !isEventTapActive)
+        installAuxiliaryMonitors()
 
+        if #available(macOS 14.0, *) {
+            NSApp.activate()
+        }
         NSApp.activate(ignoringOtherApps: true)
+        NSRunningApplication.current.activate(options: [.activateAllWindows])
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
         WindowSwitcherService.shared.triggerSearchInputFocus()
@@ -781,6 +792,104 @@ final class WindowSwitcherController: NSObject, ObservableObject {
                 NativeSearchInputField.focusTextField(tf, selectAll: false)
             }
         }
+    }
+
+    // MARK: - Deduplicated Quick Window / App Actions (⌘W, ⌘Q, ⌥⌘Q, ⌘M, ⌘H)
+
+    private func claimQuickActionGate(preserveHoldModeIfCommandDown: Bool = true) -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard (now - lastQuickActionUptime) >= 0.04 else { return false }
+        lastQuickActionUptime = now
+        clearScreenshotCaptureGrace()
+        if !(preserveHoldModeIfCommandDown && NSEvent.modifierFlags.contains(.command)) {
+            pinOpenFromInteraction()
+        }
+        return true
+    }
+
+    func triggerCloseSelectedWindow() {
+        guard isVisible, claimQuickActionGate() else { return }
+        WindowSwitcherService.shared.closeSelectedWindow()
+    }
+
+    func triggerCloseWindowItem(_ item: SwitchableWindowItem) {
+        guard isVisible, claimQuickActionGate(preserveHoldModeIfCommandDown: false) else { return }
+        WindowSwitcherService.shared.closeWindow(item)
+    }
+
+    func triggerQuitSelectedApp(force: Bool = false) {
+        guard isVisible, claimQuickActionGate() else { return }
+        WindowSwitcherService.shared.quitSelectedApp(force: force)
+    }
+
+    func triggerQuitAppForItem(_ item: SwitchableWindowItem, force: Bool = false) {
+        guard isVisible, claimQuickActionGate(preserveHoldModeIfCommandDown: false) else { return }
+        WindowSwitcherService.shared.quitApp(for: item, force: force)
+    }
+
+    func triggerMinimizeSelectedWindow() {
+        guard isVisible, claimQuickActionGate() else { return }
+        WindowSwitcherService.shared.toggleMinimizeSelectedWindow()
+    }
+
+    func triggerMinimizeWindowItem(_ item: SwitchableWindowItem) {
+        guard isVisible, claimQuickActionGate(preserveHoldModeIfCommandDown: false) else { return }
+        if let idx = WindowSwitcherService.shared.items.firstIndex(where: { $0.id == item.id }) {
+            WindowSwitcherService.shared.selectedIndex = idx
+        }
+        WindowSwitcherService.shared.toggleMinimizeSelectedWindow()
+    }
+
+    func triggerHideSelectedApp() {
+        guard isVisible, claimQuickActionGate() else { return }
+        WindowSwitcherService.shared.toggleHideSelectedApp()
+    }
+
+    func triggerHideAppForItem(_ item: SwitchableWindowItem) {
+        guard isVisible, claimQuickActionGate(preserveHoldModeIfCommandDown: false) else { return }
+        if let idx = WindowSwitcherService.shared.items.firstIndex(where: { $0.id == item.id }) {
+            WindowSwitcherService.shared.selectedIndex = idx
+        }
+        WindowSwitcherService.shared.toggleHideSelectedApp()
+    }
+
+    func handleLocalNSEventShortcut(_ event: NSEvent) -> Bool {
+        guard isVisible else { return false }
+        let cgFlags = Self.cgFlags(from: event.modifierFlags)
+        if Self.routeVisibleSwitcherKeyOffMain(code: Int(event.keyCode), cleanFlags: cgFlags, controller: self) {
+            return true
+        }
+
+        // Layout-independent character fallback for non-QWERTY keyboards
+        let ch = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        if cgFlags == [.maskCommand, .maskAlternate] && ch == "q" {
+            triggerQuitSelectedApp(force: true)
+            return true
+        }
+        if cgFlags == .maskCommand || cgFlags == .maskControl {
+            switch ch {
+            case "w":
+                triggerCloseSelectedWindow()
+                return true
+            case "q" where cgFlags == .maskCommand:
+                triggerQuitSelectedApp(force: false)
+                return true
+            case "m":
+                triggerMinimizeSelectedWindow()
+                return true
+            case "h":
+                triggerHideSelectedApp()
+                return true
+            case "y":
+                clearScreenshotCaptureGrace()
+                pinOpenFromInteraction()
+                AppSettings.shared.windowSwitcherShowZoomPreview.toggle()
+                return true
+            default:
+                break
+            }
+        }
+        return false
     }
 
     func selectAndActivateAtIndex(_ index: Int) {
@@ -859,11 +968,12 @@ final class WindowSwitcherController: NSObject, ObservableObject {
         let frame = NSScreen.main?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let p = WindowSwitcherStagePanel(
             contentRect: frame,
-            styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
+            styleMask: [.borderless, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         p.isFloatingPanel = true
+        p.becomesKeyOnlyIfNeeded = false
         p.level = .popUpMenu
         p.backgroundColor = .clear
         p.isOpaque = false
@@ -883,7 +993,7 @@ final class WindowSwitcherController: NSObject, ObservableObject {
         self.stagePanel = p
     }
 
-    private func installAuxiliaryMonitors(useLocalKeyboardFallback: Bool) {
+    private func installAuxiliaryMonitors() {
         removeAuxiliaryMonitors()
 
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .leftMouseUp]) { [weak self] event in
@@ -904,15 +1014,17 @@ final class WindowSwitcherController: NSObject, ObservableObject {
             }
         }
 
-        if useLocalKeyboardFallback {
-            localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self, self.isVisible else { return event }
-                let cgFlags = Self.cgFlags(from: event.modifierFlags)
-                if Self.routeVisibleSwitcherKeyOffMain(code: Int(event.keyCode), cleanFlags: cgFlags, controller: self) {
-                    return nil
-                }
-                return event
+        // Always install local keyboard monitor so shortcuts (⌘W, ⌘Q, ⌥⌘Q, ⌘M, ⌘H, ← →, Esc) work 100%
+        // even if CGEventTap is temporarily inactive or Accessibility is not yet toggled after an app update!
+        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, self.isVisible else { return event }
+            if self.handleLocalNSEventShortcut(event) {
+                return nil
             }
+            return event
+        }
+
+        if !isEventTapActive {
             localFlagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
                 guard let self,
                       self.isVisible,
