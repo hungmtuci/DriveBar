@@ -852,12 +852,20 @@ private struct GeneralSettingsPane: View {
                 // 1. Startup & Appearance
                 MacSettingsSection(title: "Khởi động & Giao diện") {
                     MacSettingsToggleRow(
-                        title: "Tự khởi động cùng macOS",
-                        subtitle: "Tự động chạy nền ngay khi đăng nhập vào máy Mac",
+                        title: "Khởi động cùng macOS",
+                        subtitle: "Tự động chạy nền DriveBar ngay khi đăng nhập vào máy Mac",
                         isOn: Binding(
                             get: { settings.launchAtLogin },
                             set: { settings.toggleLaunchAtLogin($0) }
                         )
+                    )
+
+                    MacSettingsRowDivider()
+
+                    MacSettingsToggleRow(
+                        title: "Bật bảng Tìm kiếm khi khởi động",
+                        subtitle: "Tự động mở sẵn bảng Tìm kiếm chính (\(settings.searchHotKey.readableDisplay)) ngay khi khởi động DriveBar",
+                        isOn: $settings.showLauncherOnStartup
                     )
 
                     MacSettingsRowDivider()

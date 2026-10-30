@@ -139,8 +139,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSApp.servicesProvider = self
 
-        if settings.isFirstLaunch {
-            LauncherPanelController.shared.toggleSearchPanel()
+        if settings.isFirstLaunch || settings.showLauncherOnStartup {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                LauncherViewModel.shared.prepareForSearchLaunch()
+                LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
+            }
         }
 
         // Silent background check against GitHub Releases (hungmtuci/DriveBar)

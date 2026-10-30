@@ -412,15 +412,17 @@ private struct SearchFooterBar: View {
     let folderCount: Int
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             FooterShortcutHint(key: "↩", label: "Mở")
             FooterShortcutHint(key: "⇥", label: "Actions")
-            FooterShortcutHint(key: "⇧", label: "Quick Look")
-            FooterShortcutHint(key: "⌘D", label: "Ghim")
+            if updater.availableVersion == nil {
+                FooterShortcutHint(key: "⇧", label: "Xem nhanh")
+                FooterShortcutHint(key: "⌘D", label: "Ghim")
+            }
 
             Spacer(minLength: 4)
 
-            if folderCount > 0 {
+            if folderCount > 0 && updater.availableVersion == nil {
                 Text("\(folderCount.formatted()) mục")
                     .lineLimit(1)
                     .foregroundStyle(.tertiary)
@@ -444,6 +446,32 @@ private struct SearchFooterBar: View {
                 .fixedSize(horizontal: true, vertical: false)
                 .help("Tự động tải và cập nhật phiên bản mới từ GitHub")
             }
+
+            Button {
+                settings.toggleLaunchAtLogin(!settings.launchAtLogin)
+                viewModel.triggerInputFocus(selectAll: false)
+            } label: {
+                footerCheckPill(
+                    title: "Khởi động cùng macOS",
+                    isChecked: settings.launchAtLogin
+                )
+            }
+            .buttonStyle(.plain)
+            .fixedSize(horizontal: true, vertical: false)
+            .help("Tự động chạy nền DriveBar ngay khi đăng nhập vào macOS")
+
+            Button {
+                settings.showLauncherOnStartup.toggle()
+                viewModel.triggerInputFocus(selectAll: false)
+            } label: {
+                footerCheckPill(
+                    title: "Bật bảng này khi khởi động",
+                    isChecked: settings.showLauncherOnStartup
+                )
+            }
+            .buttonStyle(.plain)
+            .fixedSize(horizontal: true, vertical: false)
+            .help("Tự động mở sẵn thanh Tìm kiếm này ngay khi khởi động DriveBar")
 
             Button {
                 LauncherPanelController.shared.hide()
@@ -486,6 +514,16 @@ private struct SearchFooterBar: View {
                     AppDelegate.shared?.openSettingsWindow()
                 }
                 Divider()
+                Button(settings.launchAtLogin ? "✓ Khởi động cùng macOS" : "Khởi động cùng macOS") {
+                    settings.toggleLaunchAtLogin(!settings.launchAtLogin)
+                }
+                Button(settings.showLauncherOnStartup ? "✓ Bật bảng này khi khởi động" : "Bật bảng này khi khởi động") {
+                    settings.showLauncherOnStartup.toggle()
+                }
+                Button(settings.showDockIcon ? "Ẩn khỏi thanh Dock" : "Hiện trên thanh Dock") {
+                    settings.showDockIcon.toggle()
+                }
+                Divider()
                 Button("Đổi phím tắt Tìm kiếm (\(settings.searchHotKey.readableDisplay))...") {
                     LauncherPanelController.shared.hide()
                     HotKeyService.shared.openSettingsAndRecord(.search)
@@ -495,22 +533,47 @@ private struct SearchFooterBar: View {
                     HotKeyService.shared.openSettingsAndRecord(.universalAction)
                 }
                 Divider()
-                Button(settings.showDockIcon ? "Ẩn khỏi thanh Dock" : "Hiện trên thanh Dock") {
-                    settings.showDockIcon.toggle()
-                }
                 Button("Kiểm tra cập nhật...") {
                     LauncherPanelController.shared.hide()
                     AppDelegate.shared?.openSettingsWindow()
                     UpdateCheckerService.shared.checkForUpdatesManually()
                 }
             }
-            .help("Cài đặt DriveBar (⌘,) • Chuột phải để truy cập nhanh phím tắt & thanh Dock")
+            .help("Cài đặt DriveBar (⌘,) • Chuột phải để truy cập nhanh tùy chọn khởi động & phím tắt")
         }
         .font(.system(size: 10.5, weight: .regular))
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 14)
         .padding(.vertical, 7.5)
         .background(Color.primary.opacity(0.02))
+        .onAppear {
+            settings.refreshLaunchAtLoginStatus()
+        }
+    }
+
+    private func footerCheckPill(title: String, isChecked: Bool) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: isChecked ? "checkmark.square.fill" : "square")
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(isChecked ? Color.accentColor : Color.secondary)
+            Text(title)
+                .font(.system(size: 10.5, weight: .medium))
+                .lineLimit(1)
+                .foregroundStyle(isChecked ? Color.primary : Color.secondary)
+        }
+        .padding(.horizontal, 6.5)
+        .padding(.vertical, 2.5)
+        .background(
+            isChecked ? Color.accentColor.opacity(0.11) : Color.primary.opacity(0.05),
+            in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .strokeBorder(
+                    isChecked ? Color.accentColor.opacity(0.32) : Color.primary.opacity(0.08),
+                    lineWidth: 0.5
+                )
+        )
     }
 
     private func footerActionPill(_ title: String, monospaced: Bool) -> some View {

@@ -108,8 +108,11 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
         positionPanelCenteredOnActiveScreen(panel)
         installKeyboardMonitorsIfNeeded()
 
+        if #available(macOS 14.0, *) {
+            NSApp.activate()
+        }
         NSApp.activate(ignoringOtherApps: true)
-        NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+        NSRunningApplication.current.activate(options: [.activateAllWindows])
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
 

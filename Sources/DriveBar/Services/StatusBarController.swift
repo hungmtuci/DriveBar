@@ -280,13 +280,22 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(showDockItem)
 
         let launchItem = NSMenuItem(
-            title: "Tự khởi động cùng macOS",
+            title: "Khởi động cùng macOS",
             action: #selector(toggleLaunchAtLoginAction),
             keyEquivalent: ""
         )
         launchItem.state = settings.launchAtLogin ? .on : .off
         launchItem.target = self
         menu.addItem(launchItem)
+
+        let showOnStartupItem = NSMenuItem(
+            title: "Bật bảng Tìm kiếm khi khởi động",
+            action: #selector(toggleShowLauncherOnStartupAction),
+            keyEquivalent: ""
+        )
+        showOnStartupItem.state = settings.showLauncherOnStartup ? .on : .off
+        showOnStartupItem.target = self
+        menu.addItem(showOnStartupItem)
 
         menu.addItem(.separator())
 
@@ -447,6 +456,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     @objc private func toggleLaunchAtLoginAction() {
         AppSettings.shared.toggleLaunchAtLogin(!AppSettings.shared.launchAtLogin)
+    }
+
+    @objc private func toggleShowLauncherOnStartupAction() {
+        AppSettings.shared.showLauncherOnStartup.toggle()
     }
 
     @objc private func installUpdateAction() {

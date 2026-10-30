@@ -23,6 +23,7 @@ final class AppSettings: ObservableObject {
         static let smartChunkMaxTokens = "drivebar.smartChunkMaxTokens"
         static let aiToolkitPath = "drivebar.aiToolkitPath"
         static let showDockIcon = "drivebar.showDockIcon"
+        static let showLauncherOnStartup = "drivebar.showLauncherOnStartup"
         static let includeMacAppsInSearch = "drivebar.includeMacAppsInSearch"
         static let enableActionLatching = "drivebar.enableActionLatching"
         static let enableRealtimeFSEvents = "drivebar.enableRealtimeFSEvents"
@@ -232,6 +233,12 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    @Published var showLauncherOnStartup: Bool {
+        didSet {
+            defaults.set(showLauncherOnStartup, forKey: Keys.showLauncherOnStartup)
+        }
+    }
+
     @Published var includeMacAppsInSearch: Bool {
         didSet {
             defaults.set(includeMacAppsInSearch, forKey: Keys.includeMacAppsInSearch)
@@ -379,6 +386,7 @@ final class AppSettings: ObservableObject {
         self.smartChunkMaxTokens = savedChunkMax > 2000 ? savedChunkMax : 25_000
 
         self.showDockIcon = defaults.object(forKey: Keys.showDockIcon) as? Bool ?? false
+        self.showLauncherOnStartup = defaults.object(forKey: Keys.showLauncherOnStartup) as? Bool ?? false
         self.includeMacAppsInSearch = defaults.object(forKey: Keys.includeMacAppsInSearch) as? Bool ?? true
         self.pinnedPaths = defaults.stringArray(forKey: Keys.pinnedPaths) ?? []
         self.enableClipboardHistory = defaults.object(forKey: Keys.enableClipboardHistory) as? Bool ?? true
@@ -524,21 +532,72 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    private var launchAgentPlistURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents/com.hunglx.DriveBar.plist")
+    }
+
     func refreshLaunchAtLoginStatus() {
-        launchAtLogin = (SMAppService.mainApp.status == .enabled)
+        let smEnabled = (SMAppService.mainApp.status == .enabled)
+        let plistExists = FileManager.default.fileExists(atPath: launchAgentPlistURL.path)
+        launchAtLogin = smEnabled || plistExists
     }
 
     func toggleLaunchAtLogin(_ enabled: Bool) {
-        do {
-            if enabled {
+        if enabled {
+            do {
+                if SMAppService.mainApp.status == .enabled {
+                    try? SMAppService.mainApp.unregister()
+                }
                 try SMAppService.mainApp.register()
-            } else {
-                try SMAppService.mainApp.unregister()
+                let status = SMAppService.mainApp.status
+                if status == .enabled {
+                    try? FileManager.default.removeItem(at: launchAgentPlistURL)
+                    refreshLaunchAtLoginStatus()
+                    return
+                } else if status == .requiresApproval {
+                    writeFallbackLaunchAgentPlist()
+                    refreshLaunchAtLoginStatus()
+                    SMAppService.openSystemSettingsLoginItems()
+                    statusBannerMessage = "Nếu macOS yêu cầu xác nhận, hãy bật công tắc DriveBar trong mục Login Items."
+                    return
+                }
+            } catch {
+                // Ad-hoc signed rebuilds or non-/Applications paths can be rejected by smd;
+                // fall back cleanly to standard per-user ~/Library/LaunchAgents plist.
             }
+            writeFallbackLaunchAgentPlist()
             refreshLaunchAtLoginStatus()
-        } catch {
-            statusBannerMessage = "Không thể cập nhật Launch at Login: \(error.localizedDescription)"
+        } else {
+            try? SMAppService.mainApp.unregister()
+            try? FileManager.default.removeItem(at: launchAgentPlistURL)
             refreshLaunchAtLoginStatus()
+        }
+    }
+
+    private func writeFallbackLaunchAgentPlist() {
+        let installedExec = "/Applications/DriveBar.app/Contents/MacOS/DriveBar"
+        let execPath: String
+        if FileManager.default.isExecutableFile(atPath: installedExec) {
+            execPath = installedExec
+        } else if let bundleExec = Bundle.main.executablePath {
+            execPath = bundleExec
+        } else {
+            return
+        }
+
+        let dir = launchAgentPlistURL.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        let plistDict: [String: Any] = [
+            "Label": "com.hunglx.DriveBar",
+            "ProgramArguments": [execPath],
+            "RunAtLoad": true,
+            "KeepAlive": false,
+            "ProcessType": "Interactive"
+        ]
+        if let data = try? PropertyListSerialization.data(fromPropertyList: plistDict, format: .xml, options: 0) {
+            try? data.write(to: launchAgentPlistURL, options: .atomic)
         }
     }
 
