@@ -1515,8 +1515,15 @@ private struct WindowSwitcherSettingsPane: View {
                 // 4. Compact Shortcut Reference Card
                 MacSettingsSection(title: "Phím thao tác trong Windows Preview") {
                     ShortcutHintGridRow(
-                        leftKey: "← → ↑ ↓ / ⇥",
+                        leftKey: "← → / ⇥",
                         leftDesc: "Di chuyển qua các cửa sổ",
+                        rightKey: "↑ / ↓",
+                        rightDesc: "Hiện cửa sổ cùng ứng dụng / Quay lại tất cả"
+                    )
+                    MacSettingsRowDivider()
+                    ShortcutHintGridRow(
+                        leftKey: "↩ / Bấm ⌘ / Click",
+                        leftDesc: "Mở ngay cửa sổ đang chọn",
                         rightKey: "⌃← ⌃→ ⌃↑ ⌃↓",
                         rightDesc: "Chia cửa sổ Trái / Phải / Tối đa / Giữa"
                     )
@@ -1526,13 +1533,6 @@ private struct WindowSwitcherSettingsPane: View {
                         leftDesc: "Lọc theo tên ứng dụng hoặc cửa sổ",
                         rightKey: "⌘W / ⌘M / ⌘H / ⌘Q",
                         rightDesc: "Đóng / Thu nhỏ / Ẩn / Thoát ứng dụng"
-                    )
-                    MacSettingsRowDivider()
-                    ShortcutHintGridRow(
-                        leftKey: "↩ / Nhấp chuột",
-                        leftDesc: "Nhảy tới cửa sổ đang chọn",
-                        rightKey: "⌘1 / ⌘2 / ⌘3 / ⌘4",
-                        rightDesc: "Đổi nhanh phạm vi & bộ lọc hiển thị"
                     )
                 }
             }

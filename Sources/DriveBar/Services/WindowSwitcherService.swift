@@ -46,7 +46,7 @@ final class WindowSwitcherService: ObservableObject {
     @Published private(set) var items: [SwitchableWindowItem] = []
     @Published var filterQuery: String = "" {
         didSet {
-            if filterQuery != oldValue {
+            if filterQuery != oldValue && !isSuppressingFilterDidSet {
                 applySearchFilterFromSessionCache(resetSelectionToFirst: true)
             }
         }
@@ -61,8 +61,23 @@ final class WindowSwitcherService: ObservableObject {
     @Published private(set) var zoomedPreviewWindowID: CGWindowID?
     @Published private(set) var hasScreenRecordingPermission: Bool = CGPreflightScreenCaptureAccess()
     @Published private(set) var hasAccessibilityPermission: Bool = AXIsProcessTrusted()
-    @Published var sessionSameAppPID: pid_t?
+    @Published var sessionSameAppPID: pid_t? {
+        didSet {
+            if sessionSameAppPID == nil {
+                sessionSameAppName = nil
+                sessionSameAppIcon = nil
+            } else if let pid = sessionSameAppPID,
+                      let app = NSRunningApplication(processIdentifier: pid) {
+                sessionSameAppName = app.localizedName ?? sessionSameAppName
+                sessionSameAppIcon = app.icon ?? sessionSameAppIcon
+            }
+        }
+    }
+    @Published private(set) var sessionSameAppName: String?
+    @Published private(set) var sessionSameAppIcon: NSImage?
     @Published var focusSearchTrigger: Int = 0
+
+    private var isSuppressingFilterDidSet: Bool = false
 
     private var allSessionItems: [SwitchableWindowItem] = []
     private var mruPIDs: [pid_t] = []
@@ -203,7 +218,9 @@ final class WindowSwitcherService: ObservableObject {
         }
         self.sessionSameAppPID = sameAppPID
         if !filterQuery.isEmpty {
+            isSuppressingFilterDidSet = true
             filterQuery = ""
+            isSuppressingFilterDidSet = false
         }
 
         let discovered = collectSwitchableWindows(
@@ -229,8 +246,40 @@ final class WindowSwitcherService: ObservableObject {
         startAsyncScreenCaptureRefresh()
     }
 
-    func rebuildFilteredItemsPreservingSelection() {
-        let previousID = selectedItem?.id
+    func focusSameAppWindows(for item: SwitchableWindowItem) {
+        let targetID = item.id
+        sessionSameAppName = item.appName
+        sessionSameAppIcon = item.appIcon
+        sessionSameAppPID = item.pid
+        if !filterQuery.isEmpty {
+            isSuppressingFilterDidSet = true
+            filterQuery = ""
+            isSuppressingFilterDidSet = false
+        }
+        rebuildFilteredItemsPreservingSelection(preferredItemID: targetID)
+    }
+
+    func focusSameAppPID(_ pid: pid_t, appName: String? = nil, appIcon: NSImage? = nil) {
+        let targetID = selectedItem?.id
+        if let appName { sessionSameAppName = appName }
+        if let appIcon { sessionSameAppIcon = appIcon }
+        sessionSameAppPID = pid
+        if !filterQuery.isEmpty {
+            isSuppressingFilterDidSet = true
+            filterQuery = ""
+            isSuppressingFilterDidSet = false
+        }
+        rebuildFilteredItemsPreservingSelection(preferredItemID: targetID)
+    }
+
+    func clearSameAppFilter() {
+        let targetID = selectedItem?.id
+        sessionSameAppPID = nil
+        rebuildFilteredItemsPreservingSelection(preferredItemID: targetID)
+    }
+
+    func rebuildFilteredItemsPreservingSelection(preferredItemID: String? = nil) {
+        let previousID = preferredItemID ?? selectedItem?.id
         let discovered = collectSwitchableWindows(
             sameAppPID: sessionSameAppPID,
             frontmostPID: mruPIDs.first
@@ -400,7 +449,7 @@ final class WindowSwitcherService: ObservableObject {
             let appIcon = app.icon ?? NSWorkspace.shared.icon(for: .applicationBundle)
             let appHidden = app.isHidden
 
-            if appHidden && !settings.windowSwitcherShowHiddenApps {
+            if appHidden && !settings.windowSwitcherShowHiddenApps && sameAppPID == nil {
                 continue
             }
 
@@ -450,7 +499,7 @@ final class WindowSwitcherService: ObservableObject {
                         guard subrole == "AXStandardWindow" || subrole == "AXDialog" else { continue }
 
                         let isMin = Self.axBool(axWin, kAXMinimizedAttribute) ?? false
-                        if isMin && !settings.windowSwitcherShowMinimized {
+                        if isMin && !settings.windowSwitcherShowMinimized && sameAppPID == nil {
                             continue
                         }
 
@@ -512,8 +561,11 @@ final class WindowSwitcherService: ObservableObject {
                             spaceCatalog: spaceCatalog
                         )
 
+                        let effectiveScope: WindowSwitcherScope = (sameAppPID != nil)
+                            ? .allSpacesAndDisplays
+                            : settings.windowSwitcherScope
                         if !Self.matchesScope(
-                            settings.windowSwitcherScope,
+                            effectiveScope,
                             isOnCurrentDisplay: resolvedLoc.display.isActiveDisplay,
                             isOnActiveDisplayCurrentSpace: resolvedLoc.isOnActiveDisplayCurrentSpace,
                             isMinimized: isMin,
@@ -642,8 +694,11 @@ final class WindowSwitcherService: ObservableObject {
                         abs(cgEntry.bounds.height - resolvedLoc.display.cgBounds.height) <= 40
                     )
 
+                    let effectiveCGScope: WindowSwitcherScope = (sameAppPID != nil)
+                        ? .allSpacesAndDisplays
+                        : settings.windowSwitcherScope
                     if !Self.matchesScope(
-                        settings.windowSwitcherScope,
+                        effectiveCGScope,
                         isOnCurrentDisplay: resolvedLoc.display.isActiveDisplay,
                         isOnActiveDisplayCurrentSpace: resolvedLoc.isOnActiveDisplayCurrentSpace,
                         isMinimized: false,

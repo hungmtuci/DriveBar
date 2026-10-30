@@ -26,6 +26,10 @@ private struct SharedTapConfig: Sendable {
     var isSwitcherVisible: Bool = false
     var isPinnedOpen: Bool = true
     var activeHoldModifierMaskRaw: UInt64 = 0
+    var lastModifierFlagsRaw: UInt64 = 0
+    var cmdTapStartUptime: TimeInterval = 0
+    var cmdTapInvalidated: Bool = true
+    var lastFlagsTimestamp: CGEventTimestamp = 0
     var recordingTarget: HotKeyService.RecordingTarget? = nil
     var screenshotGraceUntil: TimeInterval = 0
     var didResignDuringScreenshotGrace: Bool = false
@@ -38,6 +42,7 @@ final class WindowSwitcherController: NSObject, ObservableObject {
     @Published private(set) var isVisible: Bool = false
     @Published private(set) var isEventTapActive: Bool = false
     @Published var isPinnedOpen: Bool = true
+    @Published private(set) var openedDirectlyInSameAppMode: Bool = false
 
     var isSuppressingResignDismiss: Bool = false
     private var screenshotGraceUntil: TimeInterval = 0
@@ -95,6 +100,8 @@ final class WindowSwitcherController: NSObject, ObservableObject {
         sharedTapConfig.screenshotGraceUntil = graceUntil
         if !visible {
             sharedTapConfig.didResignDuringScreenshotGrace = false
+            sharedTapConfig.cmdTapStartUptime = 0
+            sharedTapConfig.cmdTapInvalidated = true
         }
         tapStateLock.unlock()
     }
@@ -264,30 +271,21 @@ final class WindowSwitcherController: NSObject, ObservableObject {
             }
         }
 
-        // 1. Optional Modifier-Release Commit (ONLY if user explicitly enabled releaseToActivate in Settings)
+        // 1. Modifier Flags Tracking:
+        //    - Standalone Command tap (bấm phím ⌘ sau khi duyệt cửa sổ -> mở ngay cửa sổ đang chọn)
+        //    - Optional Modifier-Release Commit (when releaseToActivate is enabled in Settings)
         if type == .flagsChanged {
-            let holdMask = CGEventFlags(rawValue: cfg.activeHoldModifierMaskRaw)
-            guard cfg.isSwitcherVisible,
-                  cfg.releaseToActivate,
-                  !cfg.isPinnedOpen,
-                  !holdMask.isEmpty else {
-                return false
-            }
+            let code = Int(event.getIntegerValueField(.keyboardEventKeycode))
             let currentMods = Self.cleanCGModifiers(event.flags)
-            if !currentMods.contains(holdMask) {
-                tapStateLock.lock()
-                sharedTapConfig.isSwitcherVisible = false
-                tapStateLock.unlock()
-                DispatchQueue.main.async {
-                    WindowSwitcherController.shared.commitSelectionAndDismiss()
-                }
-            }
+            processModifierFlagsChange(code: code, cleanMods: currentMods, timestamp: event.timestamp)
             return false
         }
 
         guard type == .keyDown else { return false }
         let code = Int(event.getIntegerValueField(.keyboardEventKeycode))
         let cleanFlags = Self.cleanCGModifiers(event.flags)
+        let isAutoRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+        invalidateStandaloneCmdTap()
 
         // 2. Primary Window Switcher Trigger (e.g. ⌘Tab or ⌘⇧Tab)
         if cfg.enableWindowSwitcher,
@@ -299,6 +297,9 @@ final class WindowSwitcherController: NSObject, ObservableObject {
                 sharedTapConfig.isSwitcherVisible = true
                 sharedTapConfig.isPinnedOpen = pinned
                 sharedTapConfig.activeHoldModifierMaskRaw = holdMask.rawValue
+                sharedTapConfig.lastModifierFlagsRaw = cleanFlags.rawValue
+                sharedTapConfig.cmdTapStartUptime = 0
+                sharedTapConfig.cmdTapInvalidated = true
                 tapStateLock.unlock()
 
                 DispatchQueue.main.async {
@@ -315,8 +316,7 @@ final class WindowSwitcherController: NSObject, ObservableObject {
                     let ctrl = WindowSwitcherController.shared
                     let svc = WindowSwitcherService.shared
                     if svc.sessionSameAppPID != nil {
-                        svc.sessionSameAppPID = nil
-                        svc.rebuildFilteredItemsPreservingSelection()
+                        svc.clearSameAppFilter()
                     }
                     ctrl.stepFromKeyboard(delta: backward ? -1 : 1)
                 }
@@ -334,6 +334,9 @@ final class WindowSwitcherController: NSObject, ObservableObject {
                 sharedTapConfig.isSwitcherVisible = true
                 sharedTapConfig.isPinnedOpen = pinned
                 sharedTapConfig.activeHoldModifierMaskRaw = holdMask.rawValue
+                sharedTapConfig.lastModifierFlagsRaw = cleanFlags.rawValue
+                sharedTapConfig.cmdTapStartUptime = 0
+                sharedTapConfig.cmdTapInvalidated = true
                 tapStateLock.unlock()
 
                 DispatchQueue.main.async {
@@ -358,13 +361,79 @@ final class WindowSwitcherController: NSObject, ObservableObject {
         return Self.routeVisibleSwitcherKeyOffMain(
             code: code,
             cleanFlags: cleanFlags,
+            isAutoRepeat: isAutoRepeat,
             controller: self
         )
+    }
+
+    nonisolated private func invalidateStandaloneCmdTap() {
+        tapStateLock.lock()
+        sharedTapConfig.cmdTapStartUptime = 0
+        sharedTapConfig.cmdTapInvalidated = true
+        tapStateLock.unlock()
+    }
+
+    nonisolated private func processModifierFlagsChange(
+        code: Int,
+        cleanMods: CGEventFlags,
+        timestamp: CGEventTimestamp
+    ) {
+        let now = ProcessInfo.processInfo.systemUptime
+        var shouldCommit = false
+
+        tapStateLock.lock()
+        if timestamp != 0 && timestamp == sharedTapConfig.lastFlagsTimestamp {
+            tapStateLock.unlock()
+            return
+        }
+        if timestamp != 0 {
+            sharedTapConfig.lastFlagsTimestamp = timestamp
+        }
+
+        let cfg = sharedTapConfig
+        let prevMods = CGEventFlags(rawValue: cfg.lastModifierFlagsRaw)
+        sharedTapConfig.lastModifierFlagsRaw = cleanMods.rawValue
+
+        if cfg.isSwitcherVisible {
+            let holdMask = CGEventFlags(rawValue: cfg.activeHoldModifierMaskRaw)
+            if cfg.releaseToActivate && !cfg.isPinnedOpen && !holdMask.isEmpty && !cleanMods.contains(holdMask) {
+                sharedTapConfig.isSwitcherVisible = false
+                sharedTapConfig.cmdTapStartUptime = 0
+                sharedTapConfig.cmdTapInvalidated = true
+                shouldCommit = true
+            } else if (code == kVK_Command || code == kVK_RightCommand)
+                        && cleanMods == .maskCommand
+                        && prevMods.isEmpty {
+                sharedTapConfig.cmdTapStartUptime = now
+                sharedTapConfig.cmdTapInvalidated = false
+            } else if cleanMods.isEmpty {
+                if !cfg.cmdTapInvalidated && cfg.cmdTapStartUptime > 0 && (now - cfg.cmdTapStartUptime) < 0.60 {
+                    sharedTapConfig.isSwitcherVisible = false
+                    sharedTapConfig.cmdTapStartUptime = 0
+                    sharedTapConfig.cmdTapInvalidated = true
+                    shouldCommit = true
+                } else {
+                    sharedTapConfig.cmdTapStartUptime = 0
+                    sharedTapConfig.cmdTapInvalidated = true
+                }
+            } else {
+                sharedTapConfig.cmdTapStartUptime = 0
+                sharedTapConfig.cmdTapInvalidated = true
+            }
+        }
+        tapStateLock.unlock()
+
+        if shouldCommit {
+            DispatchQueue.main.async {
+                WindowSwitcherController.shared.commitSelectionAndDismiss()
+            }
+        }
     }
 
     nonisolated private static func routeVisibleSwitcherKeyOffMain(
         code: Int,
         cleanFlags: CGEventFlags,
+        isAutoRepeat: Bool,
         controller: WindowSwitcherController
     ) -> Bool {
         let hasShift = cleanFlags.contains(.maskShift)
@@ -415,9 +484,11 @@ final class WindowSwitcherController: NSObject, ObservableObject {
             return true
 
         case kVK_Return, kVK_ANSI_KeypadEnter:
-            guard cleanFlags.isEmpty || cleanFlags == .maskShift else { break }
+            guard cleanFlags.isEmpty || cleanFlags == .maskShift || cleanFlags == .maskCommand else { break }
             controller.tapStateLock.lock()
             controller.sharedTapConfig.isSwitcherVisible = false
+            controller.sharedTapConfig.cmdTapStartUptime = 0
+            controller.sharedTapConfig.cmdTapInvalidated = true
             controller.sharedTapConfig.screenshotGraceUntil = 0
             controller.sharedTapConfig.didResignDuringScreenshotGrace = false
             controller.tapStateLock.unlock()
@@ -488,7 +559,7 @@ final class WindowSwitcherController: NSObject, ObservableObject {
             }
             return true
 
-        case kVK_RightArrow, kVK_DownArrow:
+        case kVK_RightArrow:
             guard !hasShift && !hasOpt && !hasCtrl else { break }
             DispatchQueue.main.async {
                 let ctrl = WindowSwitcherController.shared
@@ -498,13 +569,29 @@ final class WindowSwitcherController: NSObject, ObservableObject {
             }
             return true
 
-        case kVK_LeftArrow, kVK_UpArrow:
+        case kVK_LeftArrow:
             guard !hasShift && !hasOpt && !hasCtrl else { break }
             DispatchQueue.main.async {
                 let ctrl = WindowSwitcherController.shared
                 ctrl.clearScreenshotCaptureGrace()
                 ctrl.pinOpenFromInteraction()
                 ctrl.stepFromKeyboard(delta: -1)
+            }
+            return true
+
+        case kVK_UpArrow:
+            guard !hasShift && !hasOpt && !hasCtrl else { break }
+            if !isAutoRepeat {
+                DispatchQueue.main.async {
+                    WindowSwitcherController.shared.handleUpArrowSameApp()
+                }
+            }
+            return true
+
+        case kVK_DownArrow:
+            guard !hasShift && !hasOpt && !hasCtrl else { break }
+            DispatchQueue.main.async {
+                WindowSwitcherController.shared.handleDownArrowInSwitcher(isAutoRepeat: isAutoRepeat)
             }
             return true
 
@@ -676,11 +763,45 @@ final class WindowSwitcherController: NSObject, ObservableObject {
         WindowSwitcherService.shared.stepSelection(delta: delta)
     }
 
+    func handleUpArrowSameApp() {
+        guard isVisible else { return }
+        clearScreenshotCaptureGrace()
+        pinOpenFromInteraction()
+        lastAcceptedHoverMouseLocation = NSEvent.mouseLocation
+        let svc = WindowSwitcherService.shared
+        if svc.sessionSameAppPID != nil {
+            svc.clearSameAppFilter()
+        } else if let cur = svc.selectedItem {
+            svc.focusSameAppWindows(for: cur)
+        } else if let prev = previousFrontApp {
+            svc.focusSameAppPID(prev.processIdentifier, appName: prev.localizedName, appIcon: prev.icon)
+        }
+    }
+
+    func handleDownArrowInSwitcher(isAutoRepeat: Bool) {
+        guard isVisible else { return }
+        clearScreenshotCaptureGrace()
+        pinOpenFromInteraction()
+        lastAcceptedHoverMouseLocation = NSEvent.mouseLocation
+        let svc = WindowSwitcherService.shared
+        if svc.sessionSameAppPID != nil {
+            if !isAutoRepeat {
+                svc.clearSameAppFilter()
+            }
+        } else {
+            svc.stepSelection(delta: 1)
+        }
+    }
+
     func handleEscapeInSwitcher() {
         let svc = WindowSwitcherService.shared
         if !svc.filterQuery.isEmpty {
             lastAcceptedHoverMouseLocation = NSEvent.mouseLocation
             svc.filterQuery = ""
+            svc.triggerSearchInputFocus()
+        } else if svc.sessionSameAppPID != nil && !openedDirectlyInSameAppMode {
+            lastAcceptedHoverMouseLocation = NSEvent.mouseLocation
+            svc.clearSameAppFilter()
             svc.triggerSearchInputFocus()
         } else {
             dismissWithoutActivating(restorePreviousApp: true)
@@ -737,11 +858,19 @@ final class WindowSwitcherController: NSObject, ObservableObject {
 
         let targetSamePID: pid_t? = sameAppOnly ? previousFrontApp?.processIdentifier : nil
 
+        self.openedDirectlyInSameAppMode = sameAppOnly
         self.activeHoldModifierMask = holdModifierMask
         self.isPinnedOpen = pinnedOpen
         self.lastAcceptedHoverMouseLocation = NSEvent.mouseLocation
         self.isSuppressingResignDismiss = true
         self.screenshotGraceUntil = 0
+
+        let liveFlags = Self.cgFlags(from: NSEvent.modifierFlags)
+        tapStateLock.lock()
+        sharedTapConfig.lastModifierFlagsRaw = liveFlags.rawValue
+        sharedTapConfig.cmdTapStartUptime = 0
+        sharedTapConfig.cmdTapInvalidated = true
+        tapStateLock.unlock()
 
         WindowSwitcherService.shared.reloadSessionWindows(
             sameAppPID: targetSamePID,
@@ -855,8 +984,14 @@ final class WindowSwitcherController: NSObject, ObservableObject {
 
     func handleLocalNSEventShortcut(_ event: NSEvent) -> Bool {
         guard isVisible else { return false }
+        invalidateStandaloneCmdTap()
         let cgFlags = Self.cgFlags(from: event.modifierFlags)
-        if Self.routeVisibleSwitcherKeyOffMain(code: Int(event.keyCode), cleanFlags: cgFlags, controller: self) {
+        if Self.routeVisibleSwitcherKeyOffMain(
+            code: Int(event.keyCode),
+            cleanFlags: cgFlags,
+            isAutoRepeat: event.isARepeat,
+            controller: self
+        ) {
             return true
         }
 
@@ -917,16 +1052,16 @@ final class WindowSwitcherController: NSObject, ObservableObject {
         let svc = WindowSwitcherService.shared
         lastAcceptedHoverMouseLocation = NSEvent.mouseLocation
         if svc.sessionSameAppPID != nil {
-            svc.sessionSameAppPID = nil
+            svc.clearSameAppFilter()
         } else if let cur = svc.selectedItem {
-            svc.sessionSameAppPID = cur.pid
+            svc.focusSameAppWindows(for: cur)
         } else if let prev = previousFrontApp {
-            svc.sessionSameAppPID = prev.processIdentifier
+            svc.focusSameAppPID(prev.processIdentifier, appName: prev.localizedName, appIcon: prev.icon)
         }
-        svc.rebuildFilteredItemsPreservingSelection()
     }
 
     func commitSelectionAndDismiss() {
+        guard isVisible else { return }
         let chosen = WindowSwitcherService.shared.selectedItem
         dismissWithoutActivating(restorePreviousApp: false)
         if let chosen {
@@ -935,6 +1070,7 @@ final class WindowSwitcherController: NSObject, ObservableObject {
     }
 
     func commitSnapSelectionAndDismiss(_ placement: WindowSnapPlacement) {
+        guard isVisible else { return }
         let chosen = WindowSwitcherService.shared.selectedItem
         dismissWithoutActivating(restorePreviousApp: false)
         if let chosen {
@@ -1024,21 +1160,14 @@ final class WindowSwitcherController: NSObject, ObservableObject {
             return event
         }
 
-        if !isEventTapActive {
-            localFlagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-                guard let self,
-                      self.isVisible,
-                      AppSettings.shared.windowSwitcherReleaseToActivate,
-                      !self.isPinnedOpen,
-                      !self.activeHoldModifierMask.isEmpty else {
-                    return event
-                }
-                let cgFlags = Self.cgFlags(from: event.modifierFlags)
-                if !cgFlags.contains(self.activeHoldModifierMask) {
-                    self.commitSelectionAndDismiss()
-                }
-                return event
-            }
+        // Always install local flags monitor (deduplicated by hardware CGEventTimestamp) so standalone ⌘-tap
+        // and release-to-activate work 100% reliably even during Secure Input or when EventTap is offline.
+        localFlagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            guard let self, self.isVisible else { return event }
+            let cgFlags = Self.cgFlags(from: event.modifierFlags)
+            let ts = event.cgEvent?.timestamp ?? 0
+            self.processModifierFlagsChange(code: Int(event.keyCode), cleanMods: cgFlags, timestamp: ts)
+            return event
         }
     }
 

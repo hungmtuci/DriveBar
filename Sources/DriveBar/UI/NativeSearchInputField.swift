@@ -18,6 +18,8 @@ struct NativeSearchInputField: NSViewRepresentable {
     var onTab: @MainActor () -> Void
     var onEscape: @MainActor () -> Void
     var onBackspaceAtBoundary: (@MainActor () -> Bool)? = nil
+    var onUpArrow: (@MainActor () -> Bool)? = nil
+    var onDownArrow: (@MainActor () -> Bool)? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -132,12 +134,18 @@ struct NativeSearchInputField: NSViewRepresentable {
 
             if commandSelector == #selector(NSResponder.moveUp(_:)) {
                 if textView.hasMarkedText() { textView.unmarkText() }
+                if let onUpArrow = parent.onUpArrow, onUpArrow() {
+                    return true
+                }
                 parent.onMoveSelection(-1)
                 return true
             }
 
             if commandSelector == #selector(NSResponder.moveDown(_:)) {
                 if textView.hasMarkedText() { textView.unmarkText() }
+                if let onDownArrow = parent.onDownArrow, onDownArrow() {
+                    return true
+                }
                 parent.onMoveSelection(1)
                 return true
             }

@@ -297,7 +297,9 @@ private struct WindowThumbnailStripCard: View {
 
                 NativeSearchInputField(
                     text: $service.filterQuery,
-                    placeholder: "Gõ từ khóa lọc theo tên ứng dụng, tiêu đề cửa sổ, Desktop hoặc màn hình (hoặc dùng ← → / ⌘Tab)...",
+                    placeholder: service.sessionSameAppPID != nil
+                        ? "Lọc trong \(service.sessionSameAppName ?? "ứng dụng đang chọn") (bấm ↓ hoặc ↑ để hiện lại tất cả ứng dụng)..."
+                        : "Gõ từ khóa lọc cửa sổ (← → di chuyển • ↑ cửa sổ cùng ứng dụng • ⌘ / Enter để mở)...",
                     fontSize: 13,
                     focusTrigger: service.focusSearchTrigger,
                     selectAllOnFocus: false,
@@ -314,9 +316,53 @@ private struct WindowThumbnailStripCard: View {
                     },
                     onEscape: {
                         controller.handleEscapeInSwitcher()
+                    },
+                    onUpArrow: {
+                        controller.handleUpArrowSameApp()
+                        return true
+                    },
+                    onDownArrow: {
+                        controller.handleDownArrowInSwitcher(isAutoRepeat: false)
+                        return true
                     }
                 )
                 .frame(maxWidth: .infinity, minHeight: 20, maxHeight: 22)
+
+                if service.sessionSameAppPID != nil {
+                    Button {
+                        controller.pinOpenFromInteraction()
+                        service.clearSameAppFilter()
+                    } label: {
+                        HStack(spacing: 5) {
+                            if let icon = service.sessionSameAppIcon {
+                                Image(nsImage: icon)
+                                    .resizable()
+                                    .interpolation(.high)
+                                    .frame(width: 14, height: 14)
+                            }
+                            Text(service.sessionSameAppName ?? "Cùng ứng dụng")
+                                .font(.system(size: 11, weight: .semibold))
+                                .lineLimit(1)
+                            Image(systemName: "xmark")
+                                .font(.system(size: 8.5, weight: .bold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            Color.accentColor.opacity(0.12),
+                            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .strokeBorder(Color.accentColor.opacity(0.32), lineWidth: 0.5)
+                        )
+                        .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Đang lọc các cửa sổ của \(service.sessionSameAppName ?? "ứng dụng này") • Bấm ↓, ↑ hoặc click để quay lại tất cả ứng dụng")
+                }
 
                 if !service.filterQuery.isEmpty {
                     Button {
@@ -363,8 +409,7 @@ private struct WindowThumbnailStripCard: View {
                         if service.sessionSameAppPID != nil {
                             Button("Hiện tất cả ứng dụng") {
                                 controller.pinOpenFromInteraction()
-                                service.sessionSameAppPID = nil
-                                service.rebuildFilteredItemsPreservingSelection()
+                                service.clearSameAppFilter()
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
@@ -412,8 +457,19 @@ private struct WindowThumbnailStripCard: View {
                                     controller.selectAndActivateAtIndex(idx)
                                 }
                                 .contextMenu {
-                                    Button("Mở cửa sổ này (↩)") {
+                                    Button("Mở cửa sổ này (↩ / ⌘)") {
                                         controller.selectAndActivateAtIndex(idx)
+                                    }
+                                    if service.sessionSameAppPID == nil {
+                                        Button("Hiện các cửa sổ của \(item.appName) (↑)") {
+                                            controller.pinOpenFromInteraction()
+                                            service.focusSameAppWindows(for: item)
+                                        }
+                                    } else {
+                                        Button("Hiện lại tất cả ứng dụng (↓)") {
+                                            controller.pinOpenFromInteraction()
+                                            service.clearSameAppFilter()
+                                        }
                                     }
                                     if !item.isWindowlessApp {
                                         Divider()
@@ -457,15 +513,24 @@ private struct WindowThumbnailStripCard: View {
             Divider()
 
             // Subtle Single-Line Controls & Filter Toggles Footer
-            HStack(spacing: 9) {
-                FooterShortcutHint(key: "↩", label: "Mở")
+            HStack(spacing: 8) {
+                FooterShortcutHint(key: "↩ / ⌘", label: "Mở")
                 FooterShortcutHint(key: "← →", label: "Di chuyển")
-                FooterShortcutHint(key: "⌃←→↑", label: "Chia đôi/Tối đa")
+                FooterShortcutHint(
+                    key: service.sessionSameAppPID == nil ? "↑" : "↓",
+                    label: service.sessionSameAppPID == nil ? "Cùng App" : "Tất cả App"
+                )
+                FooterShortcutHint(key: "⌃←→↑", label: "Chia đôi")
                 FooterShortcutHint(key: "⌘Y", label: settings.windowSwitcherShowZoomPreview ? "Ẩn phóng to" : "Phóng to")
                 FooterShortcutHint(key: "⌘W", label: "Đóng")
-                FooterShortcutHint(key: "⌘Q", label: "Thoát App")
+                FooterShortcutHint(key: "⌘Q", label: "Thoát")
                 FooterShortcutHint(key: "⌘M", label: "Minimize")
-                FooterShortcutHint(key: "Esc", label: service.filterQuery.isEmpty ? "Đóng" : "Xóa lọc")
+                FooterShortcutHint(
+                    key: "Esc",
+                    label: !service.filterQuery.isEmpty
+                        ? "Xóa lọc"
+                        : (service.sessionSameAppPID != nil && !controller.openedDirectlyInSameAppMode ? "Tất cả App" : "Đóng")
+                )
 
                 Spacer(minLength: 8)
 
