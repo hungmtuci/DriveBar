@@ -1432,6 +1432,14 @@ private struct WindowSwitcherSettingsPane: View {
                     MacSettingsRowDivider()
 
                     MacSettingsToggleRow(
+                        title: "Bấm phím Space hoặc Option để mở cửa sổ",
+                        subtitle: "Mở và kích hoạt ngay cửa sổ đang chọn khi nhấn Space, Option, Command hoặc Enter",
+                        isOn: $settings.windowSwitcherSpaceToActivate
+                    )
+
+                    MacSettingsRowDivider()
+
+                    MacSettingsToggleRow(
                         title: "Phóng to nội dung cửa sổ đang chọn",
                         subtitle: "Hiển thị khung xem trước độ phân giải cao phía trên thanh chọn cửa sổ",
                         isOn: $settings.windowSwitcherShowZoomPreview
@@ -1530,7 +1538,7 @@ private struct WindowSwitcherSettingsPane: View {
                     )
                     MacSettingsRowDivider()
                     ShortcutHintGridRow(
-                        leftKey: "↩ / Bấm ⌘ / Click",
+                        leftKey: "↩ / ⌘ / ⌥ / Space / Click",
                         leftDesc: "Mở ngay cửa sổ đang chọn",
                         rightKey: "⌃← ⌃→ ⌃↑ ⌃↓",
                         rightDesc: "Chia cửa sổ Trái / Phải / Tối đa / Giữa"

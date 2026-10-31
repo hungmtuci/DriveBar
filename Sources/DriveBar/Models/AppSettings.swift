@@ -44,6 +44,7 @@ final class AppSettings: ObservableObject {
         static let windowSwitcherShowZoomPreview = "drivebar.windowSwitcherShowZoomPreview"
         static let windowSwitcherScope = "drivebar.windowSwitcherScope"
         static let windowSwitcherReleaseToActivate = "drivebar.windowSwitcherReleaseToActivate"
+        static let windowSwitcherSpaceToActivate = "drivebar.windowSwitcherSpaceToActivate"
         static let pinnedPaths = "drivebar.pinnedPaths"
         static let enableClipboardHistory = "drivebar.enableClipboardHistory"
         static let disabledSystemCommandIDs = "drivebar.disabledSystemCommandIDs"
@@ -125,6 +126,14 @@ final class AppSettings: ObservableObject {
     @Published var windowSwitcherReleaseToActivate: Bool {
         didSet {
             defaults.set(windowSwitcherReleaseToActivate, forKey: Keys.windowSwitcherReleaseToActivate)
+            WindowSwitcherController.shared.syncSharedTapConfiguration()
+        }
+    }
+
+    /// When true (default), pressing Space or Option in Windows Preview activates and opens the selected window (similar to Enter / Cmd).
+    @Published var windowSwitcherSpaceToActivate: Bool {
+        didSet {
+            defaults.set(windowSwitcherSpaceToActivate, forKey: Keys.windowSwitcherSpaceToActivate)
             WindowSwitcherController.shared.syncSharedTapConfiguration()
         }
     }
@@ -362,6 +371,7 @@ final class AppSettings: ObservableObject {
             self.windowSwitcherScope = .allSpacesAndDisplays
         }
         self.windowSwitcherReleaseToActivate = defaults.object(forKey: Keys.windowSwitcherReleaseToActivate) as? Bool ?? false
+        self.windowSwitcherSpaceToActivate = defaults.object(forKey: Keys.windowSwitcherSpaceToActivate) as? Bool ?? true
 
         let savedDisabled = defaults.stringArray(forKey: Keys.disabledActionIDs) ?? []
         self.disabledActionIDs = Set(savedDisabled)

@@ -1,6 +1,26 @@
 import SwiftUI
 import AppKit
 
+struct WindowSwitcherPreviewCardFrameKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next != .zero {
+            value = next
+        }
+    }
+}
+
+struct WindowSwitcherStripCardFrameKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next != .zero {
+            value = next
+        }
+    }
+}
+
 struct WindowSwitcherOverlayView: View {
     @ObservedObject var controller: WindowSwitcherController
     @ObservedObject var service: WindowSwitcherService
@@ -11,6 +31,7 @@ struct WindowSwitcherOverlayView: View {
             ZStack {
                 // Transparent click-outside backdrop to cancel & dismiss cleanly
                 Color.black.opacity(0.001)
+                    .contentShape(Rectangle())
                     .ignoresSafeArea()
                     .onTapGesture {
                         controller.dismissWithoutActivating(restorePreviousApp: true)
@@ -18,6 +39,10 @@ struct WindowSwitcherOverlayView: View {
 
                 VStack(spacing: 14) {
                     Spacer(minLength: 20)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            controller.dismissWithoutActivating(restorePreviousApp: true)
+                        }
 
                     // 1. Upper Center: Large High-Resolution Magnified Window Content Preview
                     if settings.windowSwitcherShowZoomPreview, let selected = service.selectedItem {
@@ -49,6 +74,14 @@ struct WindowSwitcherOverlayView: View {
                                 service.promptScreenRecordingPermission()
                             }
                         )
+                        .background(
+                            GeometryReader { previewGeo in
+                                Color.clear.preference(
+                                    key: WindowSwitcherPreviewCardFrameKey.self,
+                                    value: previewGeo.frame(in: .global)
+                                )
+                            }
+                        )
                         .transition(.opacity)
                     }
 
@@ -59,10 +92,28 @@ struct WindowSwitcherOverlayView: View {
                         settings: settings,
                         maxStripWidth: min(geo.size.width - 52, 1280)
                     )
+                    .background(
+                        GeometryReader { stripGeo in
+                            Color.clear.preference(
+                                key: WindowSwitcherStripCardFrameKey.self,
+                                value: stripGeo.frame(in: .global)
+                            )
+                        }
+                    )
 
                     Spacer(minLength: 22)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            controller.dismissWithoutActivating(restorePreviousApp: true)
+                        }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .onPreferenceChange(WindowSwitcherPreviewCardFrameKey.self) { frame in
+                controller.previewCardSwiftUIFrame = frame
+            }
+            .onPreferenceChange(WindowSwitcherStripCardFrameKey.self) { frame in
+                controller.stripCardSwiftUIFrame = frame
             }
         }
     }
@@ -514,7 +565,7 @@ private struct WindowThumbnailStripCard: View {
 
             // Subtle Single-Line Controls & Filter Toggles Footer
             HStack(spacing: 8) {
-                FooterShortcutHint(key: "↩ / ⌘", label: "Mở")
+                FooterShortcutHint(key: "↩ / ⌘ / ⌥ / Space", label: "Mở")
                 FooterShortcutHint(key: "← →", label: "Di chuyển")
                 FooterShortcutHint(
                     key: service.sessionSameAppPID == nil ? "↑" : "↓",
