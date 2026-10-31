@@ -354,6 +354,7 @@ private struct WindowThumbnailStripCard: View {
                     fontSize: 13,
                     focusTrigger: service.focusSearchTrigger,
                     selectAllOnFocus: false,
+                    autoFocusOnAppear: false,
                     interceptHorizontalArrows: true,
                     onMoveSelection: { delta in
                         controller.stepFromKeyboard(delta: delta)

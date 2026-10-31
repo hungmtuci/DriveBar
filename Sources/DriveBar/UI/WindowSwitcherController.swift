@@ -13,7 +13,7 @@ final class WindowSwitcherStagePanel: NSPanel {
         if event.type == .leftMouseDown || event.type == .rightMouseDown {
             let handled = MainActor.assumeIsolated { () -> Bool in
                 let ctrl = WindowSwitcherController.shared
-                guard ctrl.isVisible, !ctrl.shouldSuppressAutoDismiss else { return false }
+                guard ctrl.isVisible else { return false }
                 guard ctrl.stripCardSwiftUIFrame != .zero else { return false }
                 let loc = event.locationInWindow
                 let inPreview = ctrl.isPointInsidePreviewCard(loc, windowHeight: self.frame.height)
@@ -23,16 +23,22 @@ final class WindowSwitcherStagePanel: NSPanel {
                     return true
                 }
                 if event.type == .leftMouseDown {
-                    if ctrl.isPointInsidePreviewContentArea(loc, windowHeight: self.frame.height) {
-                        ctrl.commitSelectionAndDismiss()
-                        return true
-                    }
-                    if ctrl.isPointInsideStripThumbnailsArea(loc, windowHeight: self.frame.height) {
-                        if let clickedIdx = ctrl.resolveThumbnailIndexAtLocation(loc) {
-                            WindowSwitcherService.shared.selectedIndex = clickedIdx
+                    if inPreview {
+                        if ctrl.isPointInsidePreviewContentArea(loc, windowHeight: self.frame.height) {
+                            ctrl.commitSelectionAndDismiss()
+                            return true
                         }
-                        ctrl.commitSelectionAndDismiss()
-                        return true
+                        return false
+                    }
+                    if inStrip {
+                        if ctrl.isPointInsideStripThumbnailsArea(loc, windowHeight: self.frame.height) {
+                            if let clickedIdx = ctrl.resolveThumbnailIndexAtLocation(loc) {
+                                WindowSwitcherService.shared.selectedIndex = clickedIdx
+                            }
+                            ctrl.commitSelectionAndDismiss()
+                            return true
+                        }
+                        return false
                     }
                 }
                 return false
@@ -92,6 +98,10 @@ final class WindowSwitcherController: NSObject, ObservableObject {
     var previewCardSwiftUIFrame: CGRect = .zero
     var stripCardSwiftUIFrame: CGRect = .zero
 
+    var hasKnownCardFrames: Bool {
+        stripCardSwiftUIFrame != .zero
+    }
+
     func isPointInsidePreviewCard(_ loc: NSPoint, windowHeight: CGFloat) -> Bool {
         guard previewCardSwiftUIFrame != .zero else { return false }
         let appKitY = windowHeight - previewCardSwiftUIFrame.maxY
@@ -139,9 +149,9 @@ final class WindowSwitcherController: NSObject, ObservableObject {
         guard appKitRect.contains(loc) else { return false }
         let thumbnailArea = NSRect(
             x: stripCardSwiftUIFrame.minX,
-            y: appKitY + 36,
+            y: appKitY + 34,
             width: stripCardSwiftUIFrame.width,
-            height: max(0, stripCardSwiftUIFrame.height - 44 - 36)
+            height: max(0, stripCardSwiftUIFrame.height - 34 - 42)
         )
         return thumbnailArea.contains(loc)
     }
@@ -1049,9 +1059,6 @@ final class WindowSwitcherController: NSObject, ObservableObject {
         sharedTapConfig.optTapInvalidated = true
         tapStateLock.unlock()
 
-        self.previewCardSwiftUIFrame = .zero
-        self.stripCardSwiftUIFrame = .zero
-
         WindowSwitcherService.shared.reloadSessionWindows(
             sameAppPID: targetSamePID,
             frontmostPIDBeforePresentation: previousFrontApp?.processIdentifier,
@@ -1072,6 +1079,13 @@ final class WindowSwitcherController: NSObject, ObservableObject {
             ?? NSScreen.screens.first
         if let screen {
             panel.setFrame(screen.frame, display: true)
+            if self.stripCardSwiftUIFrame == .zero {
+                let cardW = min(screen.frame.width - 52, 1280)
+                let cardH: CGFloat = 224
+                let x = (screen.frame.width - cardW) / 2
+                let y = screen.frame.height - 22 - cardH
+                self.stripCardSwiftUIFrame = CGRect(x: x, y: y, width: cardW, height: cardH)
+            }
         }
 
         isVisible = true

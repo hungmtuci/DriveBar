@@ -12,6 +12,7 @@ struct NativeSearchInputField: NSViewRepresentable {
     let fontSize: CGFloat
     var focusTrigger: Int = 0
     var selectAllOnFocus: Bool = false
+    var autoFocusOnAppear: Bool = true
     var interceptHorizontalArrows: Bool = false
     var onMoveSelection: @MainActor (Int) -> Void
     var onSubmit: @MainActor (NSEvent.ModifierFlags) -> Void
@@ -42,8 +43,10 @@ struct NativeSearchInputField: NSViewRepresentable {
         tf.cell?.isScrollable = true
         tf.stringValue = text
 
-        DispatchQueue.main.async {
-            Self.focusTextField(tf, selectAll: selectAllOnFocus)
+        if autoFocusOnAppear {
+            DispatchQueue.main.async {
+                Self.focusTextField(tf, selectAll: selectAllOnFocus)
+            }
         }
         return tf
     }

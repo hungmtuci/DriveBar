@@ -7,8 +7,8 @@ cd "$PROJECT_DIR"
 
 APP_NAME="DriveBar"
 BUNDLE_ID="com.hunglx.DriveBar"
-VERSION="1.5.7"
-BUILD_NUMBER="22"
+VERSION="1.5.8"
+BUILD_NUMBER="23"
 APP_BUNDLE="$PROJECT_DIR/$APP_NAME.app"
 ROOT_APP_BUNDLE="$ROOT_WORKSPACE_DIR/$APP_NAME.app"
 DIST_DIR="$PROJECT_DIR/dist"
@@ -251,13 +251,23 @@ hdiutil create -volname "${APP_NAME} Installer" \
 ZIP_PATH="$DIST_DIR/${APP_NAME}-v${VERSION}-macOS.zip"
 ditto -c -k --norsrc --noextattr --keepParent "$STAGE_APP" "$ZIP_PATH"
 
-echo "==> [6/6] Đồng bộ $ROOT_APP_BUNDLE..."
+echo "==> [6/7] Đồng bộ $ROOT_APP_BUNDLE..."
 if [ "$ROOT_WORKSPACE_DIR" != "$PROJECT_DIR" ]; then
     rm -rf "$ROOT_APP_BUNDLE"
     ditto --noextattr "$STAGE_APP" "$ROOT_APP_BUNDLE"
 fi
 
+echo "==> [7/7] Cài đặt trực tiếp vào /Applications và khởi động lại DriveBar..."
+pkill -9 DriveBar 2>/dev/null || true
+sleep 0.5
+rm -rf "/Applications/$APP_NAME.app"
+ditto --noextattr "$STAGE_APP" "/Applications/$APP_NAME.app"
+xattr -cr "/Applications/$APP_NAME.app" 2>/dev/null || true
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/$APP_NAME.app" 2>/dev/null || true
+open "/Applications/$APP_NAME.app"
+
 echo "==> Hoàn tất!"
 echo "    - Ứng dụng: $APP_BUNDLE"
+echo "    - Đã cài đặt vào: /Applications/$APP_NAME.app (đang chạy)"
 echo "    - Bộ cài DMG: $DMG_PATH"
 echo "    - Bản nén ZIP: $ZIP_PATH"
