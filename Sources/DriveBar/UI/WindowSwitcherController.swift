@@ -22,9 +22,18 @@ final class WindowSwitcherStagePanel: NSPanel {
                     ctrl.dismissWithoutActivating(restorePreviousApp: true)
                     return true
                 }
-                if event.type == .leftMouseDown && ctrl.isPointInsidePreviewContentArea(loc, windowHeight: self.frame.height) {
-                    ctrl.commitSelectionAndDismiss()
-                    return true
+                if event.type == .leftMouseDown {
+                    if ctrl.isPointInsidePreviewContentArea(loc, windowHeight: self.frame.height) {
+                        ctrl.commitSelectionAndDismiss()
+                        return true
+                    }
+                    if ctrl.isPointInsideStripThumbnailsArea(loc, windowHeight: self.frame.height) {
+                        if let clickedIdx = ctrl.resolveThumbnailIndexAtLocation(loc) {
+                            WindowSwitcherService.shared.selectedIndex = clickedIdx
+                        }
+                        ctrl.commitSelectionAndDismiss()
+                        return true
+                    }
                 }
                 return false
             }
@@ -114,6 +123,41 @@ final class WindowSwitcherController: NSObject, ObservableObject {
             height: max(0, previewCardSwiftUIFrame.height - 38)
         )
         return contentArea.contains(loc)
+    }
+
+    /// Checks if a point is inside the middle thumbnail row of the bottom strip card
+    /// (excluding its top search field and bottom footer buttons).
+    func isPointInsideStripThumbnailsArea(_ loc: NSPoint, windowHeight: CGFloat) -> Bool {
+        guard stripCardSwiftUIFrame != .zero else { return false }
+        let appKitY = windowHeight - stripCardSwiftUIFrame.maxY
+        let appKitRect = NSRect(
+            x: stripCardSwiftUIFrame.minX,
+            y: appKitY,
+            width: stripCardSwiftUIFrame.width,
+            height: stripCardSwiftUIFrame.height
+        )
+        guard appKitRect.contains(loc) else { return false }
+        let thumbnailArea = NSRect(
+            x: stripCardSwiftUIFrame.minX,
+            y: appKitY + 36,
+            width: stripCardSwiftUIFrame.width,
+            height: max(0, stripCardSwiftUIFrame.height - 44 - 36)
+        )
+        return thumbnailArea.contains(loc)
+    }
+
+    /// Resolves which thumbnail card index was clicked in the thumbnail row.
+    func resolveThumbnailIndexAtLocation(_ loc: NSPoint) -> Int? {
+        let svc = WindowSwitcherService.shared
+        guard !svc.items.isEmpty, stripCardSwiftUIFrame != .zero else { return nil }
+        let relX = loc.x - (stripCardSwiftUIFrame.minX + 18)
+        guard relX >= 0 else { return nil }
+        let cardSpan: CGFloat = 196 + 10 // card width + spacing
+        let rawIdx = Int(relX / cardSpan)
+        if rawIdx >= 0 && rawIdx < svc.items.count {
+            return rawIdx
+        }
+        return nil
     }
 
     func isPointInsideStripCard(_ loc: NSPoint, windowHeight: CGFloat) -> Bool {
@@ -848,6 +892,11 @@ final class WindowSwitcherController: NSObject, ObservableObject {
                 ctrl.clearScreenshotCaptureGrace()
                 ctrl.pinOpenFromInteraction()
                 ctrl.lastAcceptedHoverMouseLocation = NSEvent.mouseLocation
+                if let panel = ctrl.stagePanel, let tf = Self.findEditableTextField(in: panel.contentView) {
+                    if panel.firstResponder !== tf && panel.firstResponder !== tf.currentEditor() {
+                        NativeSearchInputField.focusTextField(tf, selectAll: false)
+                    }
+                }
             }
         }
         return false
@@ -1036,21 +1085,10 @@ final class WindowSwitcherController: NSObject, ObservableObject {
         NSRunningApplication.current.activate(options: [.activateAllWindows])
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
-        WindowSwitcherService.shared.triggerSearchInputFocus()
 
-        DispatchQueue.main.async { [weak self, weak panel] in
-            guard let self, let panel, self.isVisible else { return }
-            if let tf = Self.findEditableTextField(in: panel.contentView) {
-                NativeSearchInputField.focusTextField(tf, selectAll: false)
-            }
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) { [weak self, weak panel] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) { [weak self] in
             guard let self else { return }
             self.isSuppressingResignDismiss = false
-            if self.isVisible, let panel, let tf = Self.findEditableTextField(in: panel.contentView) {
-                NativeSearchInputField.focusTextField(tf, selectAll: false)
-            }
         }
     }
 
@@ -1174,6 +1212,7 @@ final class WindowSwitcherController: NSObject, ObservableObject {
         }
         lastAcceptedHoverMouseLocation = cur
         let svc = WindowSwitcherService.shared
+        svc.isKeyboardNavigating = false
         if index >= 0 && index < svc.items.count && svc.selectedIndex != index {
             svc.selectedIndex = index
         }

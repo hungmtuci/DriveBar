@@ -73,6 +73,10 @@ final class WindowSwitcherService: ObservableObject {
             }
         }
     }
+
+    /// True only when user is navigating windows using keyboard shortcuts (Tab / Arrow keys).
+    /// Used by SwiftUI ScrollView to prevent jarring automatic scroll jumps during mouse hover!
+    @Published var isKeyboardNavigating: Bool = false
     @Published private(set) var sessionSameAppName: String?
     @Published private(set) var sessionSameAppIcon: NSImage?
     @Published var focusSearchTrigger: Int = 0
@@ -356,6 +360,7 @@ final class WindowSwitcherService: ObservableObject {
 
     func stepSelection(delta: Int) {
         guard !items.isEmpty else { return }
+        isKeyboardNavigating = true
         let count = items.count
         selectedIndex = ((selectedIndex + delta) % count + count) % count
     }

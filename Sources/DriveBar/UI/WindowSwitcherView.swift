@@ -574,8 +574,10 @@ private struct WindowThumbnailStripCard: View {
                     }
                     .onChange(of: service.selectedItem?.id) { _, selectedID in
                         guard let selectedID else { return }
-                        withAnimation(.easeOut(duration: 0.12)) {
-                            proxy.scrollTo(selectedID, anchor: .center)
+                        if service.isKeyboardNavigating {
+                            withAnimation(.easeOut(duration: 0.12)) {
+                                proxy.scrollTo(selectedID, anchor: .center)
+                            }
                         }
                     }
                 }
