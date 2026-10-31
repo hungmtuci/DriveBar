@@ -495,7 +495,8 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
                 }()
                 switch vm.screenMode {
                 case .search:
-                    let inBrowseWithChildSelected = (vm.searchText.hasPrefix("/") || vm.searchText.hasPrefix("~/")) && vm.selectedIndex > 0
+                    let isBrowse = vm.activeBrowseDirectory != nil || vm.searchText.hasPrefix("/") || vm.searchText.hasPrefix("~/") || vm.searchText.hasPrefix("…") || vm.searchText.hasPrefix("...")
+                    let inBrowseWithChildSelected = isBrowse && vm.selectedIndex > 0
                     if vm.searchText.isEmpty || isCursorAtEnd || inBrowseWithChildSelected {
                         if vm.openUniversalActionsForSelectedSearchItem() {
                             return true

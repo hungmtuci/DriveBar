@@ -256,63 +256,63 @@ private struct ZoomedWindowPreviewCard: View {
             Divider()
 
             // Magnified Window Content Area
-            ZStack {
-                Color.primary.opacity(0.025)
+            Button(action: onActivate) {
+                ZStack {
+                    Color.primary.opacity(0.025)
 
-                if let previewImage {
-                    Image(nsImage: previewImage)
-                        .resizable()
-                        .interpolation(.high)
-                        .scaledToFit()
-                        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                        .shadow(color: .black.opacity(0.14), radius: 6, y: 2)
-                        .padding(12)
-                } else {
-                    VStack(spacing: 12) {
-                        Image(nsImage: item.appIcon)
+                    if let previewImage {
+                        Image(nsImage: previewImage)
                             .resizable()
                             .interpolation(.high)
-                            .frame(width: 72, height: 72)
-                            .shadow(color: .black.opacity(0.12), radius: 5, y: 2)
+                            .scaledToFit()
+                            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                            .shadow(color: .black.opacity(0.14), radius: 6, y: 2)
+                            .padding(12)
+                    } else {
+                        VStack(spacing: 12) {
+                            Image(nsImage: item.appIcon)
+                                .resizable()
+                                .interpolation(.high)
+                                .frame(width: 72, height: 72)
+                                .shadow(color: .black.opacity(0.12), radius: 5, y: 2)
 
-                        Text(item.zoomedHeaderTitle)
-                            .font(.system(size: 14.5, weight: .medium))
-                            .foregroundStyle(.primary)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 24)
+                            Text(item.zoomedHeaderTitle)
+                                .font(.system(size: 14.5, weight: .medium))
+                                .foregroundStyle(.primary)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 24)
 
-                        if !item.cardLocationSubtitle.isEmpty {
-                            Text(item.cardLocationSubtitle)
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
-                        }
-
-                        if !hasScreenRecordingPermission && !item.isWindowlessApp {
-                            Button(action: onRequestScreenRecording) {
-                                Text("Cấp quyền Ghi màn hình để xem ảnh chụp nội dung trực tiếp")
-                                    .font(.system(size: 11.5, weight: .medium))
+                            if !item.cardLocationSubtitle.isEmpty {
+                                Text(item.cardLocationSubtitle)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
                             }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        } else if item.isMinimized {
-                            Text("Cửa sổ đang thu nhỏ dưới thanh Dock • Nhấn Enter hoặc click để khôi phục ngay")
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(.secondary)
-                        } else if item.isWindowlessApp {
-                            Text("Ứng dụng đang chạy nền chưa có cửa sổ mở • Nhấn Enter hoặc click để mở")
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(.secondary)
+
+                            if !hasScreenRecordingPermission && !item.isWindowlessApp {
+                                Button(action: onRequestScreenRecording) {
+                                    Text("Cấp quyền Ghi màn hình để xem ảnh chụp nội dung trực tiếp")
+                                        .font(.system(size: 11.5, weight: .medium))
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            } else if item.isMinimized {
+                                Text("Cửa sổ đang thu nhỏ dưới thanh Dock • Nhấn Enter hoặc click để khôi phục ngay")
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(.secondary)
+                            } else if item.isWindowlessApp {
+                                Text("Ứng dụng đang chạy nền chưa có cửa sổ mở • Nhấn Enter hoặc click để mở")
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(.secondary)
+                            }
                         }
+                        .padding(24)
                     }
-                    .padding(24)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                onActivate()
-            }
+            .buttonStyle(.plain)
         }
         .frame(width: maxWidth, height: maxHeight)
         .background(
@@ -490,22 +490,42 @@ private struct WindowThumbnailStripCard: View {
                                         .padding(.horizontal, 2)
                                 }
 
-                                WindowThumbnailItemCard(
-                                    item: item,
-                                    thumbnail: item.windowID.flatMap { service.thumbnails[$0] },
-                                    isSelected: idx == service.selectedIndex,
-                                    onQuickClose: {
-                                        controller.triggerCloseWindowItem(item)
+                                ZStack(alignment: .topLeading) {
+                                    Button {
+                                        controller.selectAndActivateAtIndex(idx)
+                                    } label: {
+                                        WindowThumbnailItemCard(
+                                            item: item,
+                                            thumbnail: item.windowID.flatMap { service.thumbnails[$0] },
+                                            isSelected: idx == service.selectedIndex
+                                        )
                                     }
-                                )
+                                    .buttonStyle(.plain)
+
+                                    if idx == service.selectedIndex && !item.isWindowlessApp {
+                                        Button {
+                                            controller.triggerCloseWindowItem(item)
+                                        } label: {
+                                            Image(systemName: "xmark")
+                                                .font(.system(size: 8.5, weight: .bold))
+                                                .foregroundStyle(.secondary)
+                                                .frame(width: 17, height: 17)
+                                                .background(.regularMaterial, in: Circle())
+                                                .overlay(
+                                                    Circle()
+                                                        .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+                                                )
+                                        }
+                                        .buttonStyle(.plain)
+                                        .padding(13)
+                                        .help("Đóng cửa sổ này (⌘W)")
+                                    }
+                                }
                                 .id(item.id)
                                 .onHover { hovering in
                                     if hovering {
                                         controller.hoverItemAtIndex(idx)
                                     }
-                                }
-                                .onTapGesture {
-                                    controller.selectAndActivateAtIndex(idx)
                                 }
                                 .contextMenu {
                                     Button("Mở cửa sổ này (↩ / ⌘)") {
@@ -724,7 +744,6 @@ private struct WindowThumbnailItemCard: View {
     let item: SwitchableWindowItem
     let thumbnail: NSImage?
     let isSelected: Bool
-    let onQuickClose: () -> Void
 
     var body: some View {
         VStack(spacing: 6) {
@@ -768,26 +787,6 @@ private struct WindowThumbnailItemCard: View {
                         .padding(.vertical, 1.5)
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
                         .padding(5)
-                }
-
-                if isSelected && !item.isWindowlessApp {
-                    HStack {
-                        Button(action: onQuickClose) {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 8.5, weight: .bold))
-                                .foregroundStyle(.secondary)
-                                .frame(width: 17, height: 17)
-                                .background(.regularMaterial, in: Circle())
-                                .overlay(
-                                    Circle()
-                                        .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .help("Đóng cửa sổ này (⌘W)")
-                        Spacer()
-                    }
-                    .padding(5)
                 }
             }
             .frame(width: 180, height: 104)

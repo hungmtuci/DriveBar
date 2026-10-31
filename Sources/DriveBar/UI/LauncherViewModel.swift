@@ -24,6 +24,9 @@ final class LauncherViewModel: ObservableObject {
 
     @Published var searchText: String = "" {
         didSet {
+            if searchText.isEmpty {
+                activeBrowseDirectory = nil
+            }
             refreshSearchResults()
         }
     }
@@ -36,7 +39,66 @@ final class LauncherViewModel: ObservableObject {
 
     @Published var destinationSearchText: String = "" {
         didSet {
+            if destinationSearchText.isEmpty {
+                activeDestinationBrowseDirectory = nil
+            }
             refreshDestinationFolders()
+        }
+    }
+
+    /// Full canonical directory path currently being browsed in search mode.
+    @Published var activeBrowseDirectory: String? = nil
+    /// Full canonical directory path currently being browsed in destination picker mode.
+    @Published var activeDestinationBrowseDirectory: String? = nil
+
+    // MARK: - Breadcrumb / Path Shortening Helpers
+
+    /// Formats a directory path for display in browse mode, hiding the long common root
+    /// (e.g. `~/Library/CloudStorage/GoogleDrive-account`) and showing starting from at most
+    /// the 3 nearest folders leading to the selected directory.
+    func formatBrowseDisplayPath(_ path: String) -> String {
+        let clean = path.hasSuffix("/") ? String(path.dropLast()) : path
+        let drive = GoogleDriveIndexService.shared
+
+        // 1. Inside a Google Drive account:
+        if let acc = drive.accountForPath(clean) {
+            let root = acc.rootPath
+            if clean.hasPrefix(root) {
+                let rel = String(clean.dropFirst(root.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                let parts = rel.split(separator: "/").map(String.init)
+                if parts.count > 3 {
+                    let lastThree = parts.suffix(3).joined(separator: "/")
+                    return "…/\(lastThree)/"
+                } else if !parts.isEmpty {
+                    return "…/\(parts.joined(separator: "/"))/"
+                } else {
+                    return "…/Google Drive/"
+                }
+            }
+        }
+
+        // 2. Inside user home directory:
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if clean.hasPrefix(home) {
+            let rel = String(clean.dropFirst(home.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let parts = rel.split(separator: "/").map(String.init)
+            if parts.count > 3 {
+                let lastThree = parts.suffix(3).joined(separator: "/")
+                return "…/\(lastThree)/"
+            } else if !parts.isEmpty {
+                return "…/\(parts.joined(separator: "/"))/"
+            }
+        }
+
+        // 3. Fallback for any other path:
+        let parts = clean.split(separator: "/").map(String.init)
+        if parts.count > 3 {
+            let lastThree = parts.suffix(3).joined(separator: "/")
+            return "…/\(lastThree)/"
+        } else if !parts.isEmpty {
+            return "…/\(parts.joined(separator: "/"))/"
+        } else {
+            return "/"
         }
     }
 
@@ -284,8 +346,22 @@ final class LauncherViewModel: ObservableObject {
     func popParentFolderIfAtSlashBoundary() -> Bool {
         switch screenMode {
         case .search:
+            if let activeDir = activeBrowseDirectory {
+                let trimmedSlash = activeDir.hasSuffix("/") ? String(activeDir.dropLast()) : activeDir
+                let parent = (trimmedSlash as NSString).deletingLastPathComponent
+                let myDrive = GoogleDriveIndexService.shared.myDrivePath
+                let driveRoot = GoogleDriveIndexService.shared.accountForPath(trimmedSlash)?.rootPath
+                if parent == "/" || parent.isEmpty || (myDrive != nil && trimmedSlash == myDrive) || (driveRoot != nil && trimmedSlash == driveRoot) {
+                    activeBrowseDirectory = nil
+                    searchText = ""
+                } else {
+                    enterBrowseMode(at: parent)
+                }
+                triggerInputFocus(selectAll: false)
+                return true
+            }
             let s = searchText
-            if s.hasPrefix("/"), s.hasSuffix("/"), s.count > 1 {
+            if (s.hasPrefix("/") || s.hasPrefix("…") || s.hasPrefix("...")), s.hasSuffix("/"), s.count > 1 {
                 let trimmedSlash = String(s.dropLast())
                 let parent = (trimmedSlash as NSString).deletingLastPathComponent
                 let myDrive = GoogleDriveIndexService.shared.myDrivePath
@@ -300,8 +376,24 @@ final class LauncherViewModel: ObservableObject {
             return false
 
         case .destinationPicker:
+            if let activeDir = activeDestinationBrowseDirectory {
+                let trimmedSlash = activeDir.hasSuffix("/") ? String(activeDir.dropLast()) : activeDir
+                let parent = (trimmedSlash as NSString).deletingLastPathComponent
+                let myDrive = GoogleDriveIndexService.shared.myDrivePath
+                let driveRoot = GoogleDriveIndexService.shared.accountForPath(trimmedSlash)?.rootPath
+                if parent == "/" || parent.isEmpty || (myDrive != nil && trimmedSlash == myDrive) || (driveRoot != nil && trimmedSlash == driveRoot) {
+                    activeDestinationBrowseDirectory = nil
+                    destinationSearchText = ""
+                } else {
+                    let clean = parent.hasSuffix("/") ? parent : parent + "/"
+                    activeDestinationBrowseDirectory = clean
+                    destinationSearchText = formatBrowseDisplayPath(clean)
+                }
+                triggerInputFocus(selectAll: false)
+                return true
+            }
             let s = destinationSearchText
-            if s.hasPrefix("/"), s.hasSuffix("/"), s.count > 1 {
+            if (s.hasPrefix("/") || s.hasPrefix("…") || s.hasPrefix("...")), s.hasSuffix("/"), s.count > 1 {
                 let trimmedSlash = String(s.dropLast())
                 let parent = (trimmedSlash as NSString).deletingLastPathComponent
                 let myDrive = GoogleDriveIndexService.shared.myDrivePath
@@ -327,7 +419,9 @@ final class LauncherViewModel: ObservableObject {
               let path = destinationFolders[selectedIndex].path else {
             return false
         }
-        destinationSearchText = path.hasSuffix("/") ? path : path + "/"
+        let clean = path.hasSuffix("/") ? path : path + "/"
+        activeDestinationBrowseDirectory = clean
+        destinationSearchText = formatBrowseDisplayPath(clean)
         triggerInputFocus(selectAll: false)
         return true
     }
@@ -362,7 +456,8 @@ final class LauncherViewModel: ObservableObject {
         screenMode = .search
         let clean = folderPath.hasSuffix("/") ? folderPath : folderPath + "/"
         GoogleDriveIndexService.shared.recordUsed(folderPath)
-        searchText = clean
+        activeBrowseDirectory = clean
+        searchText = formatBrowseDisplayPath(clean)
         triggerInputFocus(selectAll: false)
         if LauncherPanelController.shared.isVisible {
             DispatchQueue.main.async {
@@ -374,6 +469,7 @@ final class LauncherViewModel: ObservableObject {
     func returnToSearchMode() {
         screenMode = .search
         actionFilterText = ""
+        activeBrowseDirectory = nil
         refreshSearchResults()
         triggerInputFocus(selectAll: false)
         if LauncherPanelController.shared.isVisible {
@@ -497,7 +593,7 @@ final class LauncherViewModel: ObservableObject {
         if lowerTrimmed.hasPrefix("http://") || lowerTrimmed.hasPrefix("https://") {
             return ("Web → AI MD", .secondary)
         }
-        if searchText.hasPrefix("/") || searchText.hasPrefix("~/") {
+        if activeBrowseDirectory != nil || searchText.hasPrefix("/") || searchText.hasPrefix("~/") || searchText.hasPrefix("…") || searchText.hasPrefix("...") {
             return ("Duyệt thư mục", .secondary)
         }
         if lowerTrimmed == "a" || lowerRaw.hasPrefix("a ") {
@@ -670,21 +766,32 @@ final class LauncherViewModel: ObservableObject {
             return
         }
 
-        // 3. Browse Mode (`/path/...` or `~/...`) — 0ms RAM folders + async background POSIX readdir!
-        if raw.hasPrefix("/") || raw.hasPrefix("~/") {
-            let expanded = raw.hasPrefix("~/")
-                ? FileManager.default.homeDirectoryForCurrentUser.path + String(raw.dropFirst(1))
-                : raw
-
+        // 3. Browse Mode (`/path/...`, `~/...`, or `…/...`) — 0ms RAM folders + async background POSIX readdir!
+        if activeBrowseDirectory != nil || raw.hasPrefix("/") || raw.hasPrefix("~/") || raw.hasPrefix("…") || raw.hasPrefix("...") {
             let currentDir: String
             let filterPart: String
-            if let lastSlash = expanded.lastIndex(of: "/") {
-                let dirPart = String(expanded[..<lastSlash])
-                currentDir = dirPart.isEmpty ? "/" : dirPart
-                filterPart = String(expanded[expanded.index(after: lastSlash)...])
+            if let activeDir = activeBrowseDirectory {
+                currentDir = activeDir.hasSuffix("/") ? String(activeDir.dropLast()) : activeDir
+                let displayPrefix = formatBrowseDisplayPath(activeDir)
+                if raw.hasPrefix(displayPrefix) {
+                    filterPart = String(raw.dropFirst(displayPrefix.count))
+                } else if let lastSlash = raw.lastIndex(of: "/") {
+                    filterPart = String(raw[raw.index(after: lastSlash)...])
+                } else {
+                    filterPart = ""
+                }
             } else {
-                currentDir = expanded
-                filterPart = ""
+                let expanded = raw.hasPrefix("~/")
+                    ? FileManager.default.homeDirectoryForCurrentUser.path + String(raw.dropFirst(1))
+                    : raw
+                if let lastSlash = expanded.lastIndex(of: "/") {
+                    let dirPart = String(expanded[..<lastSlash])
+                    currentDir = dirPart.isEmpty ? "/" : dirPart
+                    filterPart = String(expanded[expanded.index(after: lastSlash)...])
+                } else {
+                    currentDir = expanded
+                    filterPart = ""
+                }
             }
 
             let words = filterPart.split(separator: " ").map(String.init)
@@ -1354,19 +1461,31 @@ final class LauncherViewModel: ObservableObject {
         let raw = destinationSearchText
         let q = raw.trimmingCharacters(in: .whitespaces)
 
-        if raw.hasPrefix("/") || raw.hasPrefix("~/") {
-            let expanded = raw.hasPrefix("~/")
-                ? FileManager.default.homeDirectoryForCurrentUser.path + String(raw.dropFirst(1))
-                : raw
+        if activeDestinationBrowseDirectory != nil || raw.hasPrefix("/") || raw.hasPrefix("~/") || raw.hasPrefix("…") || raw.hasPrefix("...") {
             let currentDir: String
             let filterPart: String
-            if let lastSlash = expanded.lastIndex(of: "/") {
-                let dirPart = String(expanded[..<lastSlash])
-                currentDir = dirPart.isEmpty ? "/" : dirPart
-                filterPart = String(expanded[expanded.index(after: lastSlash)...])
+            if let activeDir = activeDestinationBrowseDirectory {
+                currentDir = activeDir.hasSuffix("/") ? String(activeDir.dropLast()) : activeDir
+                let displayPrefix = formatBrowseDisplayPath(activeDir)
+                if raw.hasPrefix(displayPrefix) {
+                    filterPart = String(raw.dropFirst(displayPrefix.count))
+                } else if let lastSlash = raw.lastIndex(of: "/") {
+                    filterPart = String(raw[raw.index(after: lastSlash)...])
+                } else {
+                    filterPart = ""
+                }
             } else {
-                currentDir = expanded
-                filterPart = ""
+                let expanded = raw.hasPrefix("~/")
+                    ? FileManager.default.homeDirectoryForCurrentUser.path + String(raw.dropFirst(1))
+                    : raw
+                if let lastSlash = expanded.lastIndex(of: "/") {
+                    let dirPart = String(expanded[..<lastSlash])
+                    currentDir = dirPart.isEmpty ? "/" : dirPart
+                    filterPart = String(expanded[expanded.index(after: lastSlash)...])
+                } else {
+                    currentDir = expanded
+                    filterPart = ""
+                }
             }
 
             let words = filterPart.split(separator: " ").map(String.init)

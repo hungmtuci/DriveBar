@@ -14,11 +14,16 @@ final class WindowSwitcherStagePanel: NSPanel {
             let handled = MainActor.assumeIsolated { () -> Bool in
                 let ctrl = WindowSwitcherController.shared
                 guard ctrl.isVisible, !ctrl.shouldSuppressAutoDismiss else { return false }
+                guard ctrl.stripCardSwiftUIFrame != .zero else { return false }
                 let loc = event.locationInWindow
                 let inPreview = ctrl.isPointInsidePreviewCard(loc, windowHeight: self.frame.height)
                 let inStrip = ctrl.isPointInsideStripCard(loc, windowHeight: self.frame.height)
                 if !inPreview && !inStrip {
                     ctrl.dismissWithoutActivating(restorePreviousApp: true)
+                    return true
+                }
+                if event.type == .leftMouseDown && ctrl.isPointInsidePreviewContentArea(loc, windowHeight: self.frame.height) {
+                    ctrl.commitSelectionAndDismiss()
                     return true
                 }
                 return false
@@ -88,6 +93,27 @@ final class WindowSwitcherController: NSObject, ObservableObject {
             height: previewCardSwiftUIFrame.height
         ).insetBy(dx: -8, dy: -8)
         return appKitRect.contains(loc)
+    }
+
+    /// Checks if a location is specifically inside the magnified preview content area of the preview card
+    /// (excluding its top 38pt window header which contains close/quit/minimize buttons).
+    func isPointInsidePreviewContentArea(_ loc: NSPoint, windowHeight: CGFloat) -> Bool {
+        guard previewCardSwiftUIFrame != .zero else { return false }
+        let appKitY = windowHeight - previewCardSwiftUIFrame.maxY
+        let appKitRect = NSRect(
+            x: previewCardSwiftUIFrame.minX,
+            y: appKitY,
+            width: previewCardSwiftUIFrame.width,
+            height: previewCardSwiftUIFrame.height
+        )
+        guard appKitRect.contains(loc) else { return false }
+        let contentArea = NSRect(
+            x: previewCardSwiftUIFrame.minX,
+            y: appKitY,
+            width: previewCardSwiftUIFrame.width,
+            height: max(0, previewCardSwiftUIFrame.height - 38)
+        )
+        return contentArea.contains(loc)
     }
 
     func isPointInsideStripCard(_ loc: NSPoint, windowHeight: CGFloat) -> Bool {

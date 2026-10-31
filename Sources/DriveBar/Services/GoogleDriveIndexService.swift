@@ -240,7 +240,7 @@ final class GoogleDriveIndexService: ObservableObject {
         availableAccounts.contains { path.hasPrefix($0.rootPath) }
     }
 
-    private func accountForPath(_ path: String) -> DriveAccountMount? {
+    func accountForPath(_ path: String) -> DriveAccountMount? {
         availableAccounts.first { path.hasPrefix($0.rootPath) }
     }
 
