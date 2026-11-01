@@ -530,6 +530,23 @@ enum UniversalActionCatalog {
             priority: 835
         ),
         UniversalActionDefinition(
+            id: "file.toggle_custom_mac_folder",
+            title: "Thêm vào danh sách thư mục Mac (m)",
+            subtitle: "Đưa thư mục này vào danh sách tìm kiếm nhanh bằng tiền tố 'm'",
+            keywords: "mac folder search them thu muc tim kiem m",
+            category: .fileSystem,
+            sfSymbol: "folder.badge.plus",
+            tintHex: "#10B981",
+            acceptsFiles: false,
+            acceptsFolders: true,
+            acceptsMulti: true,
+            acceptsText: false,
+            acceptsURL: false,
+            requiresGoogleDrive: false,
+            requiresBundle: false,
+            priority: 832
+        ),
+        UniversalActionDefinition(
             id: "file.quicklook",
             title: "Quick Look",
             subtitle: "Mở cửa sổ Xem nhanh (Quick Look) chuẩn của macOS (⌘Y)",

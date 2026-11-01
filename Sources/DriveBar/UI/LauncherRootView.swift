@@ -99,7 +99,7 @@ private struct SearchModeContentView: View {
 
                 NativeSearchInputField(
                     text: $viewModel.searchText,
-                    placeholder: "Tìm thư mục, tệp & ứng dụng ('c ' danh bạ, 'cb ' clipboard, 'a ' app, 'ff ' tệp, 's ' lệnh)...",
+                    placeholder: "Tìm thư mục, tệp & ứng dụng ('m ' mục Mac, 'c ' danh bạ, 'cb ' clipboard, 'a ' app, 's ' lệnh)...",
                     fontSize: 18,
                     focusTrigger: viewModel.focusTrigger,
                     selectAllOnFocus: viewModel.selectAllOnFocus,

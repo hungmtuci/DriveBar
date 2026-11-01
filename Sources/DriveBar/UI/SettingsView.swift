@@ -984,10 +984,100 @@ private struct GeneralSettingsPane: View {
                     }
                 }
 
+                // 2.5. Custom Mac Folders ('m' prefix search mode)
+                MacSettingsSection(
+                    title: "Thư mục tìm kiếm trên Mac ('m')",
+                    headerTrailing: {
+                        Button {
+                            settings.promptAddCustomMacFolder()
+                        } label: {
+                            Label("Thêm thư mục...", systemImage: "folder.badge.plus")
+                                .font(.system(size: 11.5, weight: .medium))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                ) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Các thư mục trên máy Mac được đưa vào phạm vi tìm kiếm nhanh khi bạn gõ tiền tố 'm' hoặc 'm <từ khóa>' trong thanh tìm kiếm.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .padding(.bottom, 4)
+
+                        if settings.customMacFolders.isEmpty {
+                            HStack {
+                                Spacer()
+                                VStack(spacing: 6) {
+                                    Image(systemName: "folder.badge.questionmark")
+                                        .font(.system(size: 24))
+                                        .foregroundStyle(.tertiary)
+                                    Text("Chưa có thư mục nào được thêm")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(.secondary)
+                                    Button("Chọn thư mục trên Mac...") {
+                                        settings.promptAddCustomMacFolder()
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .controlSize(.small)
+                                }
+                                .padding(.vertical, 14)
+                                Spacer()
+                            }
+                        } else {
+                            ForEach(Array(settings.customMacFolders.enumerated()), id: \.element) { idx, folderPath in
+                                if idx > 0 {
+                                    MacSettingsRowDivider()
+                                }
+                                HStack(spacing: 10) {
+                                    Image(systemName: "folder.fill")
+                                        .font(.system(size: 16))
+                                        .foregroundStyle(Color.accentColor)
+
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text((folderPath as NSString).lastPathComponent)
+                                            .font(.system(size: 13, weight: .medium))
+                                            .foregroundStyle(.primary)
+
+                                        Text(folderPath.replacingOccurrences(of: FileManager.default.homeDirectoryForCurrentUser.path, with: "~"))
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                            .truncationMode(.middle)
+                                    }
+
+                                    Spacer()
+
+                                    Button {
+                                        let url = URL(fileURLWithPath: folderPath)
+                                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                                    } label: {
+                                        Image(systemName: "arrow.up.forward.app")
+                                            .font(.system(size: 12))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Mở thư mục trong Finder")
+
+                                    Button {
+                                        settings.removeCustomMacFolder(folderPath)
+                                    } label: {
+                                        Image(systemName: "trash")
+                                            .font(.system(size: 12))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Xóa khỏi danh sách tìm kiếm (m)")
+                                }
+                                .padding(.vertical, 3)
+                            }
+                        }
+                    }
+                }
+
                 // 3. Clipboard History & Pinned Items
                 MacSettingsSection(
                     title: "Lịch sử Clipboard & Mục đã ghim",
-                    footer: "Cú pháp tra cứu nhanh trong thanh tìm kiếm: 'c ' Danh bạ không dấu • 'cb ' Lịch sử Clipboard • 'a ' Ứng dụng • 'ff ' Tệp tin • 's ' Lệnh hệ thống • 'ocr' nhận diện chữ từ ảnh • nhập phép tính trực tiếp."
+                    footer: "Cú pháp tra cứu nhanh trong thanh tìm kiếm: 'm ' Thư mục Mac • 'c ' Danh bạ không dấu • 'cb ' Lịch sử Clipboard • 'a ' Ứng dụng • 'ff ' Tệp tin • 's ' Lệnh hệ thống • 'ocr' nhận diện chữ từ ảnh • nhập phép tính trực tiếp."
                 ) {
                     MacSettingsToggleRow(
                         title: "Lưu lịch sử Clipboard",

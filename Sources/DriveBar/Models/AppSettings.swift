@@ -46,6 +46,7 @@ final class AppSettings: ObservableObject {
         static let windowSwitcherReleaseToActivate = "drivebar.windowSwitcherReleaseToActivate"
         static let windowSwitcherSpaceToActivate = "drivebar.windowSwitcherSpaceToActivate"
         static let pinnedPaths = "drivebar.pinnedPaths"
+        static let customMacFolders = "drivebar.customMacFolders"
         static let enableClipboardHistory = "drivebar.enableClipboardHistory"
         static let disabledSystemCommandIDs = "drivebar.disabledSystemCommandIDs"
         static let confirmSystemCommandIDs = "drivebar.confirmSystemCommandIDs"
@@ -262,6 +263,13 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    @Published var customMacFolders: [String] {
+        didSet {
+            defaults.set(customMacFolders, forKey: Keys.customMacFolders)
+            notifyPortableSettingsChanged()
+        }
+    }
+
     @Published var enableClipboardHistory: Bool {
         didSet {
             defaults.set(enableClipboardHistory, forKey: Keys.enableClipboardHistory)
@@ -399,12 +407,23 @@ final class AppSettings: ObservableObject {
         self.showLauncherOnStartup = defaults.object(forKey: Keys.showLauncherOnStartup) as? Bool ?? false
         self.includeMacAppsInSearch = defaults.object(forKey: Keys.includeMacAppsInSearch) as? Bool ?? true
         self.pinnedPaths = defaults.stringArray(forKey: Keys.pinnedPaths) ?? []
+
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if let savedMacFolders = defaults.stringArray(forKey: Keys.customMacFolders) {
+            self.customMacFolders = savedMacFolders
+        } else {
+            let defaultDirs = [
+                "\(home)/Documents",
+                "\(home)/Downloads",
+                "\(home)/Desktop"
+            ].filter { FileManager.default.fileExists(atPath: $0) }
+            self.customMacFolders = defaultDirs
+        }
         self.enableClipboardHistory = defaults.object(forKey: Keys.enableClipboardHistory) as? Bool ?? true
         self.enableActionLatching = defaults.object(forKey: Keys.enableActionLatching) as? Bool ?? true
         self.enableRealtimeFSEvents = defaults.object(forKey: Keys.enableRealtimeFSEvents) as? Bool ?? true
         self.selectedDriveAccountFilter = defaults.string(forKey: Keys.selectedDriveAccountFilter) ?? "ALL"
 
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
         let syncRootExists = FileManager.default.fileExists(atPath: "\(home)/Sync")
         self.enableSyncthingSync = defaults.object(forKey: Keys.enableSyncthingSync) as? Bool ?? syncRootExists
 
@@ -522,6 +541,49 @@ final class AppSettings: ObservableObject {
         } else {
             pinnedPaths.insert(normalized, at: 0)
             return true
+        }
+    }
+
+    // MARK: - Custom Mac Folders ('m' prefix search mode)
+
+    func isCustomMacFolder(_ path: String) -> Bool {
+        let normalized = path.hasSuffix("/") && path.count > 1 ? String(path.dropLast()) : path
+        return customMacFolders.contains(normalized)
+    }
+
+    @discardableResult
+    func addCustomMacFolder(_ path: String) -> Bool {
+        let normalized = path.hasSuffix("/") && path.count > 1 ? String(path.dropLast()) : path
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: normalized, isDirectory: &isDir), isDir.boolValue else {
+            return false
+        }
+        if !customMacFolders.contains(normalized) {
+            customMacFolders.append(normalized)
+            return true
+        }
+        return false
+    }
+
+    func removeCustomMacFolder(_ path: String) {
+        let normalized = path.hasSuffix("/") && path.count > 1 ? String(path.dropLast()) : path
+        customMacFolders.removeAll { $0 == normalized }
+    }
+
+    func promptAddCustomMacFolder(completion: (() -> Void)? = nil) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.canCreateDirectories = false
+        panel.prompt = "Thêm thư mục"
+        panel.message = "Chọn một hoặc nhiều thư mục trên máy Mac để tìm kiếm nhanh bằng tiền tố 'm'"
+        panel.begin { [weak self] response in
+            guard let self, response == .OK else { return }
+            for url in panel.urls {
+                _ = self.addCustomMacFolder(url.path)
+            }
+            completion?()
         }
     }
 

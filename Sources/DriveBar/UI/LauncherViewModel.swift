@@ -850,6 +850,176 @@ final class LauncherViewModel: ObservableObject {
             return
         }
 
+        // 3.1. Custom Mac Folders Search Mode (`m` or `m <từ khóa>`) — User-configured Mac folders!
+        if trimmed.lowercased() == "m" || raw.lowercased().hasPrefix("m ") {
+            let macQuery = trimmed.lowercased() == "m"
+                ? ""
+                : String(raw.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+
+            let configuredDirs = AppSettings.shared.customMacFolders
+            let validDirs = configuredDirs.filter { FileManager.default.fileExists(atPath: $0) }
+
+            if macQuery.isEmpty {
+                var items: [SearchResultItem] = [
+                    SearchResultItem(
+                        id: "mac_folder:add_prompt",
+                        title: "Thêm thư mục trên Mac vào danh sách tìm kiếm...",
+                        subtitle: "Bấm ↩ để chọn thêm thư mục từ máy Mac (tìm nhanh qua tiền tố 'm <từ khóa>')",
+                        path: nil,
+                        isDirectory: true,
+                        kind: .addCustomMacFolder,
+                        badge: "+ Thêm",
+                        sfSymbolFallback: "folder.badge.plus"
+                    )
+                ]
+
+                for dir in validDirs {
+                    let folderName = (dir as NSString).lastPathComponent
+                    let home = FileManager.default.homeDirectoryForCurrentUser.path
+                    let prettyPath = dir.replacingOccurrences(of: home, with: "~")
+                    items.append(
+                        SearchResultItem(
+                            id: "mac_folder:\(dir)",
+                            title: folderName,
+                            subtitle: "\(prettyPath)  •  ↩ Duyệt thư mục • ⌘↩ Xem trong Finder",
+                            path: dir,
+                            isDirectory: true,
+                            kind: .driveFolder(path: dir),
+                            badge: "Thư mục Mac",
+                            sfSymbolFallback: "folder.fill"
+                        )
+                    )
+                }
+
+                if validDirs.isEmpty {
+                    items.append(
+                        SearchResultItem(
+                            id: "mac_folder:empty_hint",
+                            title: "Chưa có thư mục nào trên Mac được thêm",
+                            subtitle: "Nhấn ↩ vào mục trên để chọn thư mục đầu tiên (hoặc vào Cài đặt > Cài đặt chung)",
+                            path: nil,
+                            isDirectory: false,
+                            kind: .infoBanner,
+                            badge: "Hướng dẫn",
+                            sfSymbolFallback: "info.circle"
+                        )
+                    )
+                }
+
+                searchResults = items
+                selectedIndex = 0
+                return
+            }
+
+            // User typed `m <từ khóa>` -> Search files and folders inside validDirs!
+            let tokens = macQuery.split(separator: " ").map(String.init).filter { !$0.isEmpty }
+            let searchScopeDirs = validDirs.isEmpty ? {
+                let home = FileManager.default.homeDirectoryForCurrentUser.path
+                return ["\(home)/Documents", "\(home)/Downloads", "\(home)/Desktop"].filter { FileManager.default.fileExists(atPath: $0) }
+            }() : validDirs
+
+            // 1. Direct folder name matches
+            var immediateMatches: [SearchResultItem] = []
+            for dir in searchScopeDirs {
+                let folderName = (dir as NSString).lastPathComponent
+                let cleanFolder = GoogleDriveIndexService.cleanString(folderName)
+                if tokens.allSatisfy({ cleanFolder.contains(GoogleDriveIndexService.cleanString($0)) }) {
+                    let home = FileManager.default.homeDirectoryForCurrentUser.path
+                    let prettyPath = dir.replacingOccurrences(of: home, with: "~")
+                    immediateMatches.append(
+                        SearchResultItem(
+                            id: "mac_folder_hit:\(dir)",
+                            title: folderName,
+                            subtitle: "\(prettyPath)  •  ↩ Duyệt thư mục • ⌘↩ Mở trong Finder",
+                            path: dir,
+                            isDirectory: true,
+                            kind: .driveFolder(path: dir),
+                            badge: "Thư mục Mac",
+                            sfSymbolFallback: "folder.fill"
+                        )
+                    )
+                }
+            }
+
+            let addPromptItem = SearchResultItem(
+                id: "mac_folder:add_prompt",
+                title: "Thêm thư mục trên Mac...",
+                subtitle: "Bấm ↩ để chọn thêm thư mục vào danh sách tìm kiếm 'm'",
+                path: nil,
+                isDirectory: true,
+                kind: .addCustomMacFolder,
+                badge: "+ Thêm",
+                sfSymbolFallback: "folder.badge.plus"
+            )
+
+            if !immediateMatches.isEmpty {
+                searchResults = immediateMatches + [addPromptItem]
+                selectedIndex = 0
+            }
+
+            // 2. Fast background Spotlight search scoped to the configured folders
+            Self.searchQueue.async {
+                let foundPaths = GoogleDriveIndexService.spotlightFallbackFilePaths(
+                    query: macQuery,
+                    scopeDirs: searchScopeDirs,
+                    limit: 50
+                )
+
+                Task { @MainActor in
+                    let vm = LauncherViewModel.shared
+                    guard vm.searchGeneration == gen else { return }
+
+                    var results = immediateMatches
+                    var seenPaths = Set(results.compactMap(\.path))
+
+                    for p in foundPaths where seenPaths.insert(p).inserted {
+                        let name = (p as NSString).lastPathComponent
+                        var isDir: ObjCBool = false
+                        let exists = FileManager.default.fileExists(atPath: p, isDirectory: &isDir)
+                        guard exists else { continue }
+
+                        let home = FileManager.default.homeDirectoryForCurrentUser.path
+                        let pretty = p.replacingOccurrences(of: home, with: "~")
+
+                        results.append(
+                            SearchResultItem(
+                                id: "mac_file:\(p)",
+                                title: name,
+                                subtitle: "\(pretty)  •  ↩ Mở • Space Xem trước • ⌘K Universal Actions",
+                                path: p,
+                                isDirectory: isDir.boolValue,
+                                kind: isDir.boolValue ? .driveFolder(path: p) : .driveFile(path: p),
+                                badge: isDir.boolValue ? "Thư mục" : "Tệp Mac",
+                                sfSymbolFallback: isDir.boolValue ? "folder.fill" : "doc.fill"
+                            )
+                        )
+                    }
+
+                    results.append(addPromptItem)
+
+                    if results.count == 1 {
+                        results.insert(
+                            SearchResultItem(
+                                id: "mac_search:no_results",
+                                title: "Không tìm thấy tệp nào khớp '\(macQuery)' trong các thư mục Mac",
+                                subtitle: "Đang tìm trong: \(searchScopeDirs.map { ($0 as NSString).lastPathComponent }.joined(separator: ", "))",
+                                path: nil,
+                                isDirectory: false,
+                                kind: .infoBanner,
+                                badge: "Không có kết quả",
+                                sfSymbolFallback: "magnifyingglass"
+                            ),
+                            at: 0
+                        )
+                    }
+
+                    vm.searchResults = results
+                    vm.selectedIndex = 0
+                }
+            }
+            return
+        }
+
         // 3.2. Contacts Lookup Mode (`c` or `c <từ khóa>`) — Vietnamese accent-insensitive!
         if trimmed.lowercased() == "c" || raw.lowercased().hasPrefix("c ") {
             let contactQuery = trimmed.lowercased() == "c"
@@ -2022,6 +2192,20 @@ final class LauncherViewModel: ObservableObject {
     private func handleSearchItemExecution(_ item: SearchResultItem, modifiers: NSEvent.ModifierFlags) {
         switch item.kind {
         case .infoBanner:
+            return
+
+        case .addCustomMacFolder:
+            LauncherPanelController.shared.hide()
+            AppSettings.shared.promptAddCustomMacFolder {
+                DispatchQueue.main.async {
+                    LauncherViewModel.shared.refreshSearchResults()
+                    FloatingToastController.shared.showSuccess(
+                        title: "Đã cập nhật thư mục Mac",
+                        subtitle: "Gõ 'm' để xem hoặc 'm <từ khóa>' để tìm kiếm các tệp",
+                        symbol: "folder.badge.plus"
+                    )
+                }
+            }
             return
 
         case .calculatorResult(let expr, let rawVal, let prettyVal):

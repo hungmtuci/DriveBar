@@ -370,6 +370,35 @@ final class UniversalActionExecutor {
             let browseDir = isDir ? first.path : first.deletingLastPathComponent().path
             viewModel.enterBrowseMode(at: browseDir)
 
+        case "file.toggle_custom_mac_folder":
+            LauncherPanelController.shared.hide()
+            var addedCount = 0
+            var removedCount = 0
+            for u in urls {
+                let p = u.path
+                if AppSettings.shared.isCustomMacFolder(p) {
+                    AppSettings.shared.removeCustomMacFolder(p)
+                    removedCount += 1
+                } else {
+                    if AppSettings.shared.addCustomMacFolder(p) {
+                        addedCount += 1
+                    }
+                }
+            }
+            if addedCount > 0 {
+                FloatingToastController.shared.showSuccess(
+                    title: "Đã thêm vào thư mục Mac (m)",
+                    subtitle: "\(addedCount) thư mục đã được bổ sung vào phạm vi tìm kiếm 'm'",
+                    symbol: "folder.badge.plus"
+                )
+            } else if removedCount > 0 {
+                FloatingToastController.shared.showSuccess(
+                    title: "Đã xóa khỏi thư mục Mac (m)",
+                    subtitle: "\(removedCount) thư mục đã được xóa khỏi phạm vi tìm kiếm 'm'",
+                    symbol: "folder.badge.minus"
+                )
+            }
+
         case "file.quicklook":
             QuickLookCoordinator.shared.toggleQuickLook(for: urls)
 
