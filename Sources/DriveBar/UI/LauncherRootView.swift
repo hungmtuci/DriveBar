@@ -130,7 +130,7 @@ private struct SearchModeContentView: View {
                     .help("Xóa nội dung tìm kiếm (Esc)")
                 }
 
-                if driveService.isRebuildingFolders || driveService.isRebuildingShared || driveService.isRebuildingFiles {
+                if driveService.isRebuildingFolders || driveService.isRebuildingShared || driveService.isRebuildingFiles || driveService.isRebuildingMacFolders {
                     HStack(spacing: 5) {
                         ProgressView().controlSize(.small)
                         Text(driveService.rebuildProgressText ?? "Đang đồng bộ...")

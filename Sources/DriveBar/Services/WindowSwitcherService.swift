@@ -46,6 +46,9 @@ final class WindowSwitcherService: ObservableObject {
     @Published private(set) var items: [SwitchableWindowItem] = []
     @Published var filterQuery: String = "" {
         didSet {
+            if filterQuery.isEmpty != oldValue.isEmpty {
+                WindowSwitcherController.shared.syncSharedTapConfiguration()
+            }
             if filterQuery != oldValue && !isSuppressingFilterDidSet {
                 applySearchFilterFromSessionCache(resetSelectionToFirst: true)
             }

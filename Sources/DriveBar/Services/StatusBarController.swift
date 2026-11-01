@@ -79,6 +79,15 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         openWinPreview.target = self
         menu.addItem(openWinPreview)
 
+        let openMacFoldersItem = NSMenuItem(
+            title: "Tìm kiếm Thư mục trên Mac ('m ' — \(settings.customMacFolders.count) thư mục gốc)",
+            action: #selector(openMacFoldersSearchAction),
+            keyEquivalent: ""
+        )
+        openMacFoldersItem.image = NSImage(systemSymbolName: "folder.badge.gearshape", accessibilityDescription: nil)
+        openMacFoldersItem.target = self
+        menu.addItem(openMacFoldersItem)
+
         let openContactsItem = NSMenuItem(
             title: "Tra cứu Danh bạ — Tiếng Việt không dấu ('c ')",
             action: #selector(openContactsLookupAction),
@@ -360,6 +369,12 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     @objc private func openWindowsPreviewAction() {
         WindowSwitcherController.shared.openPinnedFromMenuOrSearch()
+    }
+
+    @objc private func openMacFoldersSearchAction() {
+        LauncherViewModel.shared.prepareForSearchLaunch()
+        LauncherViewModel.shared.searchText = "m "
+        LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
     }
 
     @objc private func openContactsLookupAction() {

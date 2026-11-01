@@ -80,6 +80,12 @@ struct SharedCachePayload: Codable, Sendable {
     let items: [SharedDriveEntry]
 }
 
+struct MacFoldersCachePayload: Codable, Sendable {
+    let timestamp: Double
+    let roots: [String]
+    let items: [SharedDriveEntry]
+}
+
 /// Compact representation of a cached file (`[path, ext, cleanName, acronym, cleanParent]`).
 struct DriveFileEntry: Sendable {
     let path: String

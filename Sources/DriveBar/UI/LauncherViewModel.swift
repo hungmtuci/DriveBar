@@ -24,8 +24,11 @@ final class LauncherViewModel: ObservableObject {
 
     @Published var searchText: String = "" {
         didSet {
-            if searchText.isEmpty {
-                activeBrowseDirectory = nil
+            if let activeDir = activeBrowseDirectory {
+                let displayPrefix = formatBrowseDisplayPath(activeDir)
+                if searchText.isEmpty || !searchText.hasPrefix(displayPrefix) {
+                    activeBrowseDirectory = nil
+                }
             }
             refreshSearchResults()
         }
@@ -39,8 +42,11 @@ final class LauncherViewModel: ObservableObject {
 
     @Published var destinationSearchText: String = "" {
         didSet {
-            if destinationSearchText.isEmpty {
-                activeDestinationBrowseDirectory = nil
+            if let activeDir = activeDestinationBrowseDirectory {
+                let displayPrefix = formatBrowseDisplayPath(activeDir)
+                if destinationSearchText.isEmpty || !destinationSearchText.hasPrefix(displayPrefix) {
+                    activeDestinationBrowseDirectory = nil
+                }
             }
             refreshDestinationFolders()
         }
@@ -57,11 +63,25 @@ final class LauncherViewModel: ObservableObject {
     /// (e.g. `~/Library/CloudStorage/GoogleDrive-account`) and showing starting from at most
     /// the 3 nearest folders leading to the selected directory.
     func formatBrowseDisplayPath(_ path: String) -> String {
-        let clean = path.hasSuffix("/") ? String(path.dropLast()) : path
+        let clean = path.hasSuffix("/") && path.count > 1 ? String(path.dropLast()) : path
+        if clean == "/" { return "/" }
         let drive = GoogleDriveIndexService.shared
 
-        // 1. Inside a Google Drive account:
+        // 1. Inside a Google Drive account (including My Drive, Shared drives, and .shortcut-targets-by-id):
         if let acc = drive.accountForPath(clean) {
+            if let st = acc.shortcutTargetsPath, clean.hasPrefix(st + "/") {
+                let relSt = String(clean.dropFirst(st.count + 1))
+                let stParts = relSt.split(separator: "/").map(String.init)
+                let visibleParts = stParts.count > 1 ? Array(stParts.dropFirst()) : stParts
+                if visibleParts.count > 3 {
+                    return "…/\(visibleParts.suffix(3).joined(separator: "/"))/"
+                } else if !visibleParts.isEmpty {
+                    return "…/\(visibleParts.joined(separator: "/"))/"
+                } else {
+                    return "…/Được chia sẻ/"
+                }
+            }
+
             let root = acc.rootPath
             if clean.hasPrefix(root) {
                 let rel = String(clean.dropFirst(root.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -87,6 +107,8 @@ final class LauncherViewModel: ObservableObject {
                 return "…/\(lastThree)/"
             } else if !parts.isEmpty {
                 return "…/\(parts.joined(separator: "/"))/"
+            } else {
+                return "~/"
             }
         }
 
@@ -96,7 +118,7 @@ final class LauncherViewModel: ObservableObject {
             let lastThree = parts.suffix(3).joined(separator: "/")
             return "…/\(lastThree)/"
         } else if !parts.isEmpty {
-            return "…/\(parts.joined(separator: "/"))/"
+            return "/\(parts.joined(separator: "/"))/"
         } else {
             return "/"
         }
@@ -184,6 +206,36 @@ final class LauncherViewModel: ObservableObject {
                         maxResults: 60
                     )
                     searchResults = matched.isEmpty ? Self.emptyAppSearchBanner(for: appQuery) : matched
+                }
+                selectedIndex = 0
+            } else if lowerTrimmed == "m" || lowerLive.hasPrefix("m ") {
+                let macQuery = lowerTrimmed == "m" ? "" : String(live.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                searchGeneration &+= 1
+                let drive = GoogleDriveIndexService.shared
+                let validDirs = AppSettings.shared.customMacFolders.filter { FileManager.default.fileExists(atPath: $0) }
+                if macQuery.isEmpty {
+                    searchResults = drive.defaultCustomMacFolderResultItems(validDirs: validDirs)
+                } else {
+                    let macTokens = macQuery.split(separator: " ").map(String.init)
+                    let hits = GoogleDriveIndexService.evaluateMacFolderSearchHits(
+                        tokens: macTokens,
+                        fastIndex: drive.fastMacFolderIndex,
+                        historySnapshot: drive.history,
+                        pinnedSet: Set(AppSettings.shared.pinnedPaths),
+                        maxResults: 50
+                    )
+                    let built = drive.buildCustomMacSearchResultItems(from: hits, maxResults: 50)
+                    let addPrompt = SearchResultItem(
+                        id: "mac_folder:add_prompt",
+                        title: "Thêm thư mục trên Mac...",
+                        subtitle: "Bấm ↩ để chọn thêm thư mục vào danh sách tìm kiếm 'm'",
+                        path: nil,
+                        isDirectory: true,
+                        kind: .addCustomMacFolder,
+                        badge: "+ Thêm",
+                        sfSymbolFallback: "folder.badge.plus"
+                    )
+                    searchResults = built + [addPrompt]
                 }
                 selectedIndex = 0
             } else if lowerTrimmed == "ff" || lowerLive.hasPrefix("ff ") {
@@ -347,7 +399,12 @@ final class LauncherViewModel: ObservableObject {
         switch screenMode {
         case .search:
             if let activeDir = activeBrowseDirectory {
-                let trimmedSlash = activeDir.hasSuffix("/") ? String(activeDir.dropLast()) : activeDir
+                let displayPrefix = formatBrowseDisplayPath(activeDir)
+                // Only pop up to parent folder when cursor is at the trailing `/` boundary (no filter text after displayPrefix)
+                guard searchText == displayPrefix else {
+                    return false
+                }
+                let trimmedSlash = activeDir.hasSuffix("/") && activeDir.count > 1 ? String(activeDir.dropLast()) : activeDir
                 let parent = (trimmedSlash as NSString).deletingLastPathComponent
                 let myDrive = GoogleDriveIndexService.shared.myDrivePath
                 let driveRoot = GoogleDriveIndexService.shared.accountForPath(trimmedSlash)?.rootPath
@@ -361,11 +418,11 @@ final class LauncherViewModel: ObservableObject {
                 return true
             }
             let s = searchText
-            if (s.hasPrefix("/") || s.hasPrefix("…") || s.hasPrefix("...")), s.hasSuffix("/"), s.count > 1 {
+            if (s.hasPrefix("/") || s.hasPrefix("~/")), s.hasSuffix("/"), s.count > 1 {
                 let trimmedSlash = String(s.dropLast())
                 let parent = (trimmedSlash as NSString).deletingLastPathComponent
                 let myDrive = GoogleDriveIndexService.shared.myDrivePath
-                if parent == "/" || (myDrive != nil && trimmedSlash == myDrive) {
+                if parent == "/" || parent.isEmpty || trimmedSlash == "~" || (myDrive != nil && trimmedSlash == myDrive) {
                     searchText = ""
                 } else {
                     searchText = parent.hasSuffix("/") ? parent : parent + "/"
@@ -377,7 +434,11 @@ final class LauncherViewModel: ObservableObject {
 
         case .destinationPicker:
             if let activeDir = activeDestinationBrowseDirectory {
-                let trimmedSlash = activeDir.hasSuffix("/") ? String(activeDir.dropLast()) : activeDir
+                let displayPrefix = formatBrowseDisplayPath(activeDir)
+                guard destinationSearchText == displayPrefix else {
+                    return false
+                }
+                let trimmedSlash = activeDir.hasSuffix("/") && activeDir.count > 1 ? String(activeDir.dropLast()) : activeDir
                 let parent = (trimmedSlash as NSString).deletingLastPathComponent
                 let myDrive = GoogleDriveIndexService.shared.myDrivePath
                 let driveRoot = GoogleDriveIndexService.shared.accountForPath(trimmedSlash)?.rootPath
@@ -393,11 +454,11 @@ final class LauncherViewModel: ObservableObject {
                 return true
             }
             let s = destinationSearchText
-            if (s.hasPrefix("/") || s.hasPrefix("…") || s.hasPrefix("...")), s.hasSuffix("/"), s.count > 1 {
+            if (s.hasPrefix("/") || s.hasPrefix("~/")), s.hasSuffix("/"), s.count > 1 {
                 let trimmedSlash = String(s.dropLast())
                 let parent = (trimmedSlash as NSString).deletingLastPathComponent
                 let myDrive = GoogleDriveIndexService.shared.myDrivePath
-                if parent == "/" || (myDrive != nil && trimmedSlash == myDrive) {
+                if parent == "/" || parent.isEmpty || trimmedSlash == "~" || (myDrive != nil && trimmedSlash == myDrive) {
                     destinationSearchText = ""
                 } else {
                     destinationSearchText = parent.hasSuffix("/") ? parent : parent + "/"
@@ -598,6 +659,9 @@ final class LauncherViewModel: ObservableObject {
         }
         if lowerTrimmed == "a" || lowerRaw.hasPrefix("a ") {
             return ("Ứng dụng", .secondary)
+        }
+        if lowerTrimmed == "m" || lowerRaw.hasPrefix("m ") {
+            return ("Thư mục Mac", .secondary)
         }
         if lowerTrimmed == "ff" || lowerRaw.hasPrefix("ff ") {
             return ("Tệp tin", .secondary)
@@ -850,7 +914,7 @@ final class LauncherViewModel: ObservableObject {
             return
         }
 
-        // 3.1. Custom Mac Folders Search Mode (`m` or `m <từ khóa>`) — User-configured Mac folders!
+        // 3.1. Custom Mac Folders Search Mode (`m` or `m <từ khóa>`) — Instant <0.5ms RAM Index (Vietnamese & Acronym aware)!
         if trimmed.lowercased() == "m" || raw.lowercased().hasPrefix("m ") {
             let macQuery = trimmed.lowercased() == "m"
                 ? ""
@@ -860,159 +924,94 @@ final class LauncherViewModel: ObservableObject {
             let validDirs = configuredDirs.filter { FileManager.default.fileExists(atPath: $0) }
 
             if macQuery.isEmpty {
-                var items: [SearchResultItem] = [
-                    SearchResultItem(
-                        id: "mac_folder:add_prompt",
-                        title: "Thêm thư mục trên Mac vào danh sách tìm kiếm...",
-                        subtitle: "Bấm ↩ để chọn thêm thư mục từ máy Mac (tìm nhanh qua tiền tố 'm <từ khóa>')",
-                        path: nil,
-                        isDirectory: true,
-                        kind: .addCustomMacFolder,
-                        badge: "+ Thêm",
-                        sfSymbolFallback: "folder.badge.plus"
-                    )
-                ]
-
-                for dir in validDirs {
-                    let folderName = (dir as NSString).lastPathComponent
-                    let home = FileManager.default.homeDirectoryForCurrentUser.path
-                    let prettyPath = dir.replacingOccurrences(of: home, with: "~")
-                    items.append(
-                        SearchResultItem(
-                            id: "mac_folder:\(dir)",
-                            title: folderName,
-                            subtitle: "\(prettyPath)  •  ↩ Duyệt thư mục • ⌘↩ Xem trong Finder",
-                            path: dir,
-                            isDirectory: true,
-                            kind: .driveFolder(path: dir),
-                            badge: "Thư mục Mac",
-                            sfSymbolFallback: "folder.fill"
-                        )
-                    )
+                if !validDirs.isEmpty && drive.fastMacFolderIndex.records.isEmpty && !drive.isRebuildingMacFolders {
+                    drive.rebuildMacFoldersCacheInBackground()
                 }
-
-                if validDirs.isEmpty {
-                    items.append(
-                        SearchResultItem(
-                            id: "mac_folder:empty_hint",
-                            title: "Chưa có thư mục nào trên Mac được thêm",
-                            subtitle: "Nhấn ↩ vào mục trên để chọn thư mục đầu tiên (hoặc vào Cài đặt > Cài đặt chung)",
-                            path: nil,
-                            isDirectory: false,
-                            kind: .infoBanner,
-                            badge: "Hướng dẫn",
-                            sfSymbolFallback: "info.circle"
-                        )
-                    )
-                }
-
-                searchResults = items
+                searchResults = drive.defaultCustomMacFolderResultItems(validDirs: validDirs)
                 selectedIndex = 0
                 return
             }
 
-            // User typed `m <từ khóa>` -> Search files and folders inside validDirs!
             let tokens = macQuery.split(separator: " ").map(String.init).filter { !$0.isEmpty }
-            let searchScopeDirs = validDirs.isEmpty ? {
-                let home = FileManager.default.homeDirectoryForCurrentUser.path
-                return ["\(home)/Documents", "\(home)/Downloads", "\(home)/Desktop"].filter { FileManager.default.fileExists(atPath: $0) }
-            }() : validDirs
-
-            // 1. Direct folder name matches
-            var immediateMatches: [SearchResultItem] = []
-            for dir in searchScopeDirs {
-                let folderName = (dir as NSString).lastPathComponent
-                let cleanFolder = GoogleDriveIndexService.cleanString(folderName)
-                if tokens.allSatisfy({ cleanFolder.contains(GoogleDriveIndexService.cleanString($0)) }) {
-                    let home = FileManager.default.homeDirectoryForCurrentUser.path
-                    let prettyPath = dir.replacingOccurrences(of: home, with: "~")
-                    immediateMatches.append(
-                        SearchResultItem(
-                            id: "mac_folder_hit:\(dir)",
-                            title: folderName,
-                            subtitle: "\(prettyPath)  •  ↩ Duyệt thư mục • ⌘↩ Mở trong Finder",
-                            path: dir,
-                            isDirectory: true,
-                            kind: .driveFolder(path: dir),
-                            badge: "Thư mục Mac",
-                            sfSymbolFallback: "folder.fill"
-                        )
-                    )
-                }
+            if !validDirs.isEmpty && drive.fastMacFolderIndex.records.isEmpty && !drive.isRebuildingMacFolders {
+                drive.rebuildMacFoldersCacheInBackground()
             }
 
-            let addPromptItem = SearchResultItem(
-                id: "mac_folder:add_prompt",
-                title: "Thêm thư mục trên Mac...",
-                subtitle: "Bấm ↩ để chọn thêm thư mục vào danh sách tìm kiếm 'm'",
-                path: nil,
-                isDirectory: true,
-                kind: .addCustomMacFolder,
-                badge: "+ Thêm",
-                sfSymbolFallback: "folder.badge.plus"
-            )
+            let fastMac = drive.fastMacFolderIndex
+            let histSnap = drive.history
+            let pinSet = Set(AppSettings.shared.pinnedPaths)
+            let scopeNames = validDirs.map { ($0 as NSString).lastPathComponent }.joined(separator: ", ")
+            let isIndexingNow = drive.isRebuildingMacFolders && fastMac.records.isEmpty
 
-            if !immediateMatches.isEmpty {
-                searchResults = immediateMatches + [addPromptItem]
-                selectedIndex = 0
-            }
-
-            // 2. Fast background Spotlight search scoped to the configured folders
             Self.searchQueue.async {
-                let foundPaths = GoogleDriveIndexService.spotlightFallbackFilePaths(
-                    query: macQuery,
-                    scopeDirs: searchScopeDirs,
-                    limit: 50
+                let hits = GoogleDriveIndexService.evaluateMacFolderSearchHits(
+                    tokens: tokens,
+                    fastIndex: fastMac,
+                    historySnapshot: histSnap,
+                    pinnedSet: pinSet,
+                    maxResults: 50
                 )
 
                 Task { @MainActor in
                     let vm = LauncherViewModel.shared
                     guard vm.searchGeneration == gen else { return }
 
-                    var results = immediateMatches
-                    var seenPaths = Set(results.compactMap(\.path))
+                    var results = GoogleDriveIndexService.shared.buildCustomMacSearchResultItems(from: hits, maxResults: 50)
+                    let addPromptItem = SearchResultItem(
+                        id: "mac_folder:add_prompt",
+                        title: "Thêm thư mục trên Mac...",
+                        subtitle: "Bấm ↩ để chọn thêm thư mục vào danh sách tìm kiếm 'm'",
+                        path: nil,
+                        isDirectory: true,
+                        kind: .addCustomMacFolder,
+                        badge: "+ Thêm",
+                        sfSymbolFallback: "folder.badge.plus"
+                    )
 
-                    for p in foundPaths where seenPaths.insert(p).inserted {
-                        let name = (p as NSString).lastPathComponent
-                        var isDir: ObjCBool = false
-                        let exists = FileManager.default.fileExists(atPath: p, isDirectory: &isDir)
-                        guard exists else { continue }
-
-                        let home = FileManager.default.homeDirectoryForCurrentUser.path
-                        let pretty = p.replacingOccurrences(of: home, with: "~")
-
-                        results.append(
-                            SearchResultItem(
-                                id: "mac_file:\(p)",
-                                title: name,
-                                subtitle: "\(pretty)  •  ↩ Mở • Space Xem trước • ⌘K Universal Actions",
-                                path: p,
-                                isDirectory: isDir.boolValue,
-                                kind: isDir.boolValue ? .driveFolder(path: p) : .driveFile(path: p),
-                                badge: isDir.boolValue ? "Thư mục" : "Tệp Mac",
-                                sfSymbolFallback: isDir.boolValue ? "folder.fill" : "doc.fill"
+                    if results.isEmpty {
+                        if validDirs.isEmpty {
+                            results.append(
+                                SearchResultItem(
+                                    id: "mac_folder:empty_hint",
+                                    title: "Chưa có thư mục nào trên Mac được thêm",
+                                    subtitle: "Nhấn ↩ vào mục bên dưới để chọn thư mục trên Mac muốn tìm kiếm",
+                                    path: nil,
+                                    isDirectory: false,
+                                    kind: .infoBanner,
+                                    badge: "Hướng dẫn",
+                                    sfSymbolFallback: "info.circle"
+                                )
                             )
-                        )
+                        } else if isIndexingNow {
+                            results.append(
+                                SearchResultItem(
+                                    id: "mac_search:indexing",
+                                    title: "Đang lập chỉ mục nhanh các thư mục Mac ở nền...",
+                                    subtitle: "Kết quả cho '\(macQuery)' sẽ tự động hiển thị ngay khi hoàn tất",
+                                    path: nil,
+                                    isDirectory: false,
+                                    kind: .infoBanner,
+                                    badge: "Đang quét",
+                                    sfSymbolFallback: "arrow.triangle.2.circlepath"
+                                )
+                            )
+                        } else {
+                            results.append(
+                                SearchResultItem(
+                                    id: "mac_search:no_results",
+                                    title: "Không tìm thấy thư mục hoặc tệp khớp '\(macQuery)'",
+                                    subtitle: "Đang tìm trong: \(scopeNames)",
+                                    path: nil,
+                                    isDirectory: false,
+                                    kind: .infoBanner,
+                                    badge: "Không có kết quả",
+                                    sfSymbolFallback: "magnifyingglass"
+                                )
+                            )
+                        }
                     }
 
                     results.append(addPromptItem)
-
-                    if results.count == 1 {
-                        results.insert(
-                            SearchResultItem(
-                                id: "mac_search:no_results",
-                                title: "Không tìm thấy tệp nào khớp '\(macQuery)' trong các thư mục Mac",
-                                subtitle: "Đang tìm trong: \(searchScopeDirs.map { ($0 as NSString).lastPathComponent }.joined(separator: ", "))",
-                                path: nil,
-                                isDirectory: false,
-                                kind: .infoBanner,
-                                badge: "Không có kết quả",
-                                sfSymbolFallback: "magnifyingglass"
-                            ),
-                            at: 0
-                        )
-                    }
-
                     vm.searchResults = results
                     vm.selectedIndex = 0
                 }
@@ -1581,9 +1580,10 @@ final class LauncherViewModel: ObservableObject {
         let drive = GoogleDriveIndexService.shared
         let inGDrive = target.fileURLs.first.map { drive.isPathInGoogleDrive($0.path) } ?? false
 
-        let candidates = UniversalActionCatalog.all.filter { def in
-            guard settings.isActionEnabled(def.id) else { return false }
-            return def.matches(target: target, isInsideGoogleDrive: inGDrive)
+        let candidates = UniversalActionCatalog.all.compactMap { def -> UniversalActionDefinition? in
+            guard settings.isActionEnabled(def.id) else { return nil }
+            guard def.matches(target: target, isInsideGoogleDrive: inGDrive) else { return nil }
+            return def.customized(for: target, settings: settings)
         }
 
         let latcher = SyncAndLatchingService.shared

@@ -546,10 +546,16 @@ final class LauncherPanelController: NSObject, NSWindowDelegate {
             }
         }
 
-        // 10. Backspace at trailing `/` in Browse Mode pops up one parent folder
+        // 10. Backspace at trailing `/` in Browse Mode pops up one parent folder (only when no text is selected and cursor is at end)
         if code == kVK_Delete && flags.isEmpty {
-            let hasMarked = (panel?.firstResponder as? NSTextView)?.hasMarkedText() ?? false
-            if !hasMarked && vm.popParentFolderIfAtSlashBoundary() {
+            let editor = panel?.firstResponder as? NSTextView
+            let hasMarked = editor?.hasMarkedText() ?? false
+            let isUnselectedAtEnd: Bool = {
+                guard let editor else { return true }
+                let sel = editor.selectedRange()
+                return sel.length == 0 && sel.location >= (editor.string as NSString).length
+            }()
+            if !hasMarked && isUnselectedAtEnd && vm.popParentFolderIfAtSlashBoundary() {
                 return true
             }
         }

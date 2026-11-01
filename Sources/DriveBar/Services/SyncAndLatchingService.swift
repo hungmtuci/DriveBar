@@ -24,6 +24,7 @@ struct PortableSyncSettingsPayload: Codable, Sendable {
     var enableActionLatching: Bool
     var enableClipboardHistory: Bool?
     var pinnedPaths: [String]?
+    var customMacFolders: [String]?
     var disabledSystemCommandIDs: [String]?
     var confirmSystemCommandIDs: [String]?
 }
@@ -215,6 +216,7 @@ final class SyncAndLatchingService: ObservableObject {
             enableActionLatching: s.enableActionLatching,
             enableClipboardHistory: s.enableClipboardHistory,
             pinnedPaths: GoogleDriveIndexService.shared.exportPortablePathList(s.pinnedPaths),
+            customMacFolders: GoogleDriveIndexService.shared.exportPortablePathList(s.customMacFolders),
             disabledSystemCommandIDs: Array(s.disabledSystemCommandIDs).sorted(),
             confirmSystemCommandIDs: Array(s.confirmSystemCommandIDs).sorted()
         )
@@ -286,6 +288,12 @@ final class SyncAndLatchingService: ObservableObject {
             let resolved = GoogleDriveIndexService.shared.resolvePortablePathList(remotePinned)
             if s.pinnedPaths != resolved {
                 s.pinnedPaths = resolved
+            }
+        }
+        if let remoteMacFolders = remote.customMacFolders {
+            let resolved = GoogleDriveIndexService.shared.resolvePortablePathList(remoteMacFolders)
+            if s.customMacFolders != resolved {
+                s.customMacFolders = resolved
             }
         }
         if let remoteDisabledSys = remote.disabledSystemCommandIDs {

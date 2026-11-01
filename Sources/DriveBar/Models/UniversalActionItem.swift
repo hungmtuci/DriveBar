@@ -70,11 +70,11 @@ enum FileTransferOperation: String, Equatable {
 
 struct UniversalActionDefinition: Identifiable, Equatable, Sendable {
     let id: String
-    let title: String
-    let subtitle: String
+    var title: String
+    var subtitle: String
     let keywords: String
     let category: ActionCategory
-    let sfSymbol: String
+    var sfSymbol: String
     let tintHex: String
     let acceptsFiles: Bool
     let acceptsFolders: Bool
@@ -84,6 +84,36 @@ struct UniversalActionDefinition: Identifiable, Equatable, Sendable {
     let requiresGoogleDrive: Bool
     let requiresBundle: Bool
     let priority: Int
+
+    @MainActor
+    func customized(for target: ActionTarget, settings: AppSettings) -> UniversalActionDefinition {
+        let urls = target.fileURLs
+        guard !urls.isEmpty else { return self }
+        if id == "file.toggle_custom_mac_folder" {
+            let allIncluded = urls.allSatisfy { settings.isCustomMacFolder($0.path) }
+            if allIncluded {
+                var copy = self
+                copy.title = "Gỡ khỏi danh sách thư mục Mac (m)"
+                copy.subtitle = "Xóa thư mục này khỏi phạm vi tìm kiếm nhanh của tiền tố 'm'"
+                copy.sfSymbol = "folder.badge.minus"
+                return copy
+            }
+        } else if id == "file.toggle_pin" {
+            let allPinned = urls.allSatisfy { settings.isPinned($0.path) }
+            var copy = self
+            if allPinned {
+                copy.title = "Bỏ ghim khỏi đầu DriveBar (⌘D)"
+                copy.subtitle = "Gỡ mục này khỏi danh sách ghim đầu tiên trong thanh tìm kiếm"
+                copy.sfSymbol = "pin.slash.fill"
+            } else {
+                copy.title = "Ghim lên đầu DriveBar (⌘D)"
+                copy.subtitle = "Luôn hiển thị mục này đầu tiên khi mở DriveBar (đồng bộ qua Syncthing)"
+                copy.sfSymbol = "pin.fill"
+            }
+            return copy
+        }
+        return self
+    }
 
     @MainActor
     func matches(target: ActionTarget, isInsideGoogleDrive: Bool) -> Bool {

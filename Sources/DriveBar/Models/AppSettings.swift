@@ -266,6 +266,8 @@ final class AppSettings: ObservableObject {
     @Published var customMacFolders: [String] {
         didSet {
             defaults.set(customMacFolders, forKey: Keys.customMacFolders)
+            GoogleDriveIndexService.shared.updateRealtimeWatcherState()
+            GoogleDriveIndexService.shared.rebuildMacFoldersCacheInBackground()
             notifyPortableSettingsChanged()
         }
     }

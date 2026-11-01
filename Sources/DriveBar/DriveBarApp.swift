@@ -71,6 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(withTitle: "Cài đặt DriveBar...", action: #selector(openSettingsWindow), keyEquivalent: ",").target = self
         appMenu.addItem(withTitle: "Mở Thanh Tìm Kiếm", action: #selector(toggleLauncherFromMenu), keyEquivalent: "f").target = self
         appMenu.addItem(withTitle: "Mở Windows Preview (Chuyển cửa sổ)", action: #selector(openWindowSwitcherFromMenu), keyEquivalent: "").target = self
+        appMenu.addItem(withTitle: "Tìm kiếm Thư mục trên Mac ('m ')", action: #selector(openMacFoldersFromMenu), keyEquivalent: "").target = self
         appMenu.addItem(withTitle: "Tra cứu Danh bạ ('c ')", action: #selector(openContactsFromMenu), keyEquivalent: "").target = self
         appMenu.addItem(withTitle: "Mở Lịch sử Clipboard ('cb ')", action: #selector(openClipboardHistoryFromMenu), keyEquivalent: "").target = self
         appMenu.addItem(withTitle: "Mở Lệnh Hệ thống ('s ')", action: #selector(openSystemCommandsFromMenu), keyEquivalent: "").target = self
@@ -207,6 +208,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func openWindowSwitcherFromMenu() {
         WindowSwitcherController.shared.openPinnedFromMenuOrSearch()
+    }
+
+    @objc func openMacFoldersFromMenu() {
+        LauncherViewModel.shared.prepareForSearchLaunch()
+        LauncherViewModel.shared.searchText = "m "
+        LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
     }
 
     @objc func openContactsFromMenu() {

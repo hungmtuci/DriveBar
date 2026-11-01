@@ -11,40 +11,15 @@ final class WindowSwitcherStagePanel: NSPanel {
 
     override func sendEvent(_ event: NSEvent) {
         if event.type == .leftMouseDown || event.type == .rightMouseDown {
-            let handled = MainActor.assumeIsolated { () -> Bool in
-                let ctrl = WindowSwitcherController.shared
-                guard ctrl.isVisible else { return false }
-                guard ctrl.stripCardSwiftUIFrame != .zero else { return false }
-                let loc = event.locationInWindow
-                let inPreview = ctrl.isPointInsidePreviewCard(loc, windowHeight: self.frame.height)
-                let inStrip = ctrl.isPointInsideStripCard(loc, windowHeight: self.frame.height)
-                if !inPreview && !inStrip {
-                    ctrl.dismissWithoutActivating(restorePreviousApp: true)
-                    return true
-                }
-                if event.type == .leftMouseDown {
-                    if inPreview {
-                        if ctrl.isPointInsidePreviewContentArea(loc, windowHeight: self.frame.height) {
-                            ctrl.commitSelectionAndDismiss()
-                            return true
-                        }
-                        return false
-                    }
-                    if inStrip {
-                        if ctrl.isPointInsideStripThumbnailsArea(loc, windowHeight: self.frame.height) {
-                            if let clickedIdx = ctrl.resolveThumbnailIndexAtLocation(loc) {
-                                WindowSwitcherService.shared.selectedIndex = clickedIdx
-                            }
-                            ctrl.commitSelectionAndDismiss()
-                            return true
-                        }
-                        return false
-                    }
-                }
-                return false
+            let handled = MainActor.assumeIsolated {
+                WindowSwitcherController.shared.handlePanelMouseDown(event, in: self)
             }
             if handled {
                 return
+            }
+        } else if event.type == .keyDown {
+            MainActor.assumeIsolated {
+                WindowSwitcherController.shared.prepareSearchFocusForKeyDownIfNeeded(event)
             }
         }
         super.sendEvent(event)
@@ -65,6 +40,7 @@ private struct SharedTapConfig: Sendable {
     var sameAppSwitcherHotKey: HotKeyBinding = .defaultSameAppSwitcher
     var releaseToActivate: Bool = false
     var spaceToActivate: Bool = true
+    var hasActiveFilterQuery: Bool = false
     var isSwitcherVisible: Bool = false
     var isPinnedOpen: Bool = true
     var activeHoldModifierMaskRaw: UInt64 = 0
@@ -95,91 +71,135 @@ final class WindowSwitcherController: NSObject, ObservableObject {
         isSuppressingResignDismiss || ProcessInfo.processInfo.systemUptime < screenshotGraceUntil
     }
 
-    var previewCardSwiftUIFrame: CGRect = .zero
-    var stripCardSwiftUIFrame: CGRect = .zero
+    var layoutSnapshot = WindowSwitcherLayoutSnapshot()
 
-    var hasKnownCardFrames: Bool {
-        stripCardSwiftUIFrame != .zero
-    }
+    func handlePanelMouseDown(_ event: NSEvent, in panel: WindowSwitcherStagePanel) -> Bool {
+        guard isVisible else { return false }
+        let snap = layoutSnapshot
+        guard snap.stripCardFrame != .zero else { return false }
 
-    func isPointInsidePreviewCard(_ loc: NSPoint, windowHeight: CGFloat) -> Bool {
-        guard previewCardSwiftUIFrame != .zero else { return false }
-        let appKitY = windowHeight - previewCardSwiftUIFrame.maxY
-        let appKitRect = NSRect(
-            x: previewCardSwiftUIFrame.minX,
-            y: appKitY,
-            width: previewCardSwiftUIFrame.width,
-            height: previewCardSwiftUIFrame.height
-        ).insetBy(dx: -8, dy: -8)
-        return appKitRect.contains(loc)
-    }
+        let loc = event.locationInWindow
+        let pt = CGPoint(x: loc.x, y: panel.frame.height - loc.y)
+        let inPreview = snap.previewCardFrame != .zero
+            && snap.previewCardFrame.insetBy(dx: -8, dy: -8).contains(pt)
+        let inStrip = snap.stripCardFrame.insetBy(dx: -8, dy: -8).contains(pt)
 
-    /// Checks if a location is specifically inside the magnified preview content area of the preview card
-    /// (excluding its top 38pt window header which contains close/quit/minimize buttons).
-    func isPointInsidePreviewContentArea(_ loc: NSPoint, windowHeight: CGFloat) -> Bool {
-        guard previewCardSwiftUIFrame != .zero else { return false }
-        let appKitY = windowHeight - previewCardSwiftUIFrame.maxY
-        let appKitRect = NSRect(
-            x: previewCardSwiftUIFrame.minX,
-            y: appKitY,
-            width: previewCardSwiftUIFrame.width,
-            height: previewCardSwiftUIFrame.height
-        )
-        guard appKitRect.contains(loc) else { return false }
-        let contentArea = NSRect(
-            x: previewCardSwiftUIFrame.minX,
-            y: appKitY,
-            width: previewCardSwiftUIFrame.width,
-            height: max(0, previewCardSwiftUIFrame.height - 38)
-        )
-        return contentArea.contains(loc)
-    }
+        // 1. Click outside both preview & thumbnail strip cards -> cancel & dismiss cleanly
+        if !inPreview && !inStrip {
+            dismissWithoutActivating(restorePreviousApp: true)
+            return true
+        }
 
-    /// Checks if a point is inside the middle thumbnail row of the bottom strip card
-    /// (excluding its top search field and bottom footer buttons).
-    func isPointInsideStripThumbnailsArea(_ loc: NSPoint, windowHeight: CGFloat) -> Bool {
-        guard stripCardSwiftUIFrame != .zero else { return false }
-        let appKitY = windowHeight - stripCardSwiftUIFrame.maxY
-        let appKitRect = NSRect(
-            x: stripCardSwiftUIFrame.minX,
-            y: appKitY,
-            width: stripCardSwiftUIFrame.width,
-            height: stripCardSwiftUIFrame.height
-        )
-        guard appKitRect.contains(loc) else { return false }
-        let thumbnailArea = NSRect(
-            x: stripCardSwiftUIFrame.minX,
-            y: appKitY + 34,
-            width: stripCardSwiftUIFrame.width,
-            height: max(0, stripCardSwiftUIFrame.height - 34 - 42)
-        )
-        return thumbnailArea.contains(loc)
-    }
+        // Allow right-clicks inside cards to reach SwiftUI .contextMenu
+        guard event.type == .leftMouseDown else {
+            return false
+        }
 
-    /// Resolves which thumbnail card index was clicked in the thumbnail row.
-    func resolveThumbnailIndexAtLocation(_ loc: NSPoint) -> Int? {
         let svc = WindowSwitcherService.shared
-        guard !svc.items.isEmpty, stripCardSwiftUIFrame != .zero else { return nil }
-        let relX = loc.x - (stripCardSwiftUIFrame.minX + 18)
-        guard relX >= 0 else { return nil }
-        let cardSpan: CGFloat = 196 + 10 // card width + spacing
-        let rawIdx = Int(relX / cardSpan)
-        if rawIdx >= 0 && rawIdx < svc.items.count {
-            return rawIdx
+
+        // 2. Direct 1-click hit-testing inside the live horizontal thumbnail strip viewport
+        if !svc.items.isEmpty, snap.stripViewportFrame != .zero, snap.stripViewportFrame.contains(pt) {
+            if let closeRect = snap.selectedCloseButtonFrame,
+               snap.stripViewportFrame.intersects(closeRect),
+               closeRect.insetBy(dx: -5, dy: -5).contains(pt),
+               let selected = svc.selectedItem,
+               !selected.isWindowlessApp {
+                triggerCloseWindowItem(selected)
+                return true
+            }
+
+            if let clickedIdx = resolveClickedThumbnailIndex(
+                at: pt,
+                snapshot: snap,
+                itemCount: svc.items.count,
+                selectedIndex: svc.selectedIndex
+            ) {
+                svc.selectedIndex = clickedIdx
+                commitSelectionAndDismiss()
+                return true
+            }
+        }
+
+        // 3. Direct 1-click activation inside the magnified window preview content area
+        if inPreview,
+           !svc.items.isEmpty,
+           snap.previewContentFrame != .zero,
+           snap.previewContentFrame.contains(pt),
+           (svc.hasScreenRecordingPermission || svc.selectedItem?.isWindowlessApp == true) {
+            commitSelectionAndDismiss()
+            return true
+        }
+
+        // 4. Resign search NSTextField before forwarding clicks to header/footer/empty-state buttons
+        if let tf = Self.findEditableTextField(in: panel.contentView) {
+            let tfPoint = tf.convert(loc, from: nil)
+            if !tf.bounds.insetBy(dx: -6, dy: -4).contains(tfPoint),
+               (panel.firstResponder === tf || panel.firstResponder === tf.currentEditor()) {
+                panel.makeFirstResponder(nil)
+            }
+        }
+
+        return false
+    }
+
+    private func resolveClickedThumbnailIndex(
+        at pt: CGPoint,
+        snapshot: WindowSwitcherLayoutSnapshot,
+        itemCount: Int,
+        selectedIndex: Int
+    ) -> Int? {
+        if selectedIndex >= 0,
+           selectedIndex < itemCount,
+           let selRect = snapshot.thumbnailFrames[selectedIndex],
+           selRect.insetBy(dx: -5, dy: -4).contains(pt) {
+            return selectedIndex
+        }
+        for (idx, rect) in snapshot.thumbnailFrames where idx >= 0 && idx < itemCount {
+            if rect.contains(pt) {
+                return idx
+            }
         }
         return nil
     }
 
-    func isPointInsideStripCard(_ loc: NSPoint, windowHeight: CGFloat) -> Bool {
-        guard stripCardSwiftUIFrame != .zero else { return true }
-        let appKitY = windowHeight - stripCardSwiftUIFrame.maxY
-        let appKitRect = NSRect(
-            x: stripCardSwiftUIFrame.minX,
-            y: appKitY,
-            width: stripCardSwiftUIFrame.width,
-            height: stripCardSwiftUIFrame.height
-        ).insetBy(dx: -8, dy: -8)
-        return appKitRect.contains(loc)
+    func prepareSearchFocusForKeyDownIfNeeded(_ event: NSEvent) {
+        guard isVisible, let panel = stagePanel else { return }
+        let code = Int(event.keyCode)
+        guard !Self.isPureModifierKeyCode(code) else { return }
+
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let hasCmd = mods.contains(.command)
+        let hasCtrl = mods.contains(.control)
+        let hasOpt = mods.contains(.option)
+
+        let shouldFocusSearch: Bool
+        if !hasCmd && !hasCtrl && !hasOpt {
+            switch code {
+            case kVK_Escape, kVK_Return, kVK_ANSI_KeypadEnter, kVK_Tab,
+                 kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow:
+                shouldFocusSearch = false
+            case kVK_Space:
+                let spaceActivates = AppSettings.shared.windowSwitcherSpaceToActivate
+                    && WindowSwitcherService.shared.filterQuery.isEmpty
+                shouldFocusSearch = !spaceActivates
+            default:
+                shouldFocusSearch = !(code >= kVK_F1 && code <= kVK_F19)
+            }
+        } else if mods == .command {
+            let ch = event.charactersIgnoringModifiers?.lowercased() ?? ""
+            shouldFocusSearch = (ch == "v" || ch == "a" || ch == "x" || ch == "c")
+        } else {
+            shouldFocusSearch = false
+        }
+
+        guard shouldFocusSearch else { return }
+        clearScreenshotCaptureGrace()
+        pinOpenFromInteraction()
+        lastAcceptedHoverMouseLocation = NSEvent.mouseLocation
+        if let tf = Self.findEditableTextField(in: panel.contentView),
+           panel.firstResponder !== tf && panel.firstResponder !== tf.currentEditor() {
+            NativeSearchInputField.focusTextField(tf, selectAll: false)
+        }
     }
 
     private var stagePanel: WindowSwitcherStagePanel?
@@ -194,7 +214,7 @@ final class WindowSwitcherController: NSObject, ObservableObject {
     private var lastQuickActionUptime: TimeInterval = 0
 
     // Dedicated off-main EventTap thread & lock-protected state (prevents WindowServer timeout stalls!)
-    nonisolated(unsafe) private let tapStateLock = NSLock()
+    private let tapStateLock = NSLock()
     nonisolated(unsafe) private var sharedTapConfig = SharedTapConfig()
     nonisolated(unsafe) fileprivate var eventTap: CFMachPort?
     nonisolated(unsafe) private var tapRunLoop: CFRunLoop?
@@ -217,6 +237,7 @@ final class WindowSwitcherController: NSObject, ObservableObject {
         let pinned = self.isPinnedOpen
         let holdRaw = self.activeHoldModifierMask.rawValue
         let graceUntil = self.screenshotGraceUntil
+        let hasFilter = !WindowSwitcherService.shared.filterQuery.isEmpty
 
         tapStateLock.lock()
         sharedTapConfig.enableWindowSwitcher = settings.enableWindowSwitcher
@@ -225,6 +246,7 @@ final class WindowSwitcherController: NSObject, ObservableObject {
         sharedTapConfig.sameAppSwitcherHotKey = settings.sameAppSwitcherHotKey
         sharedTapConfig.releaseToActivate = settings.windowSwitcherReleaseToActivate
         sharedTapConfig.spaceToActivate = settings.windowSwitcherSpaceToActivate
+        sharedTapConfig.hasActiveFilterQuery = visible ? hasFilter : false
         sharedTapConfig.isSwitcherVisible = visible
         sharedTapConfig.isPinnedOpen = pinned
         sharedTapConfig.activeHoldModifierMaskRaw = holdRaw
@@ -316,10 +338,17 @@ final class WindowSwitcherController: NSObject, ObservableObject {
                 readySemaphore.signal()
                 return
             }
+            self.tapStateLock.lock()
+            let tap = self.eventTap
+            self.tapStateLock.unlock()
+            guard let tap else {
+                readySemaphore.signal()
+                return
+            }
             let rl = CFRunLoopGetCurrent()
-            let src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, createdTap, 0)
+            let src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
             CFRunLoopAddSource(rl, src, .commonModes)
-            CGEvent.tapEnable(tap: createdTap, enable: true)
+            CGEvent.tapEnable(tap: tap, enable: true)
 
             self.tapStateLock.lock()
             self.tapRunLoop = rl
@@ -430,6 +459,7 @@ final class WindowSwitcherController: NSObject, ObservableObject {
                 tapStateLock.lock()
                 sharedTapConfig.isSwitcherVisible = true
                 sharedTapConfig.isPinnedOpen = pinned
+                sharedTapConfig.hasActiveFilterQuery = false
                 sharedTapConfig.activeHoldModifierMaskRaw = holdMask.rawValue
                 sharedTapConfig.lastModifierFlagsRaw = cleanFlags.rawValue
                 sharedTapConfig.cmdTapStartUptime = 0
@@ -469,6 +499,7 @@ final class WindowSwitcherController: NSObject, ObservableObject {
                 tapStateLock.lock()
                 sharedTapConfig.isSwitcherVisible = true
                 sharedTapConfig.isPinnedOpen = pinned
+                sharedTapConfig.hasActiveFilterQuery = false
                 sharedTapConfig.activeHoldModifierMaskRaw = holdMask.rawValue
                 sharedTapConfig.lastModifierFlagsRaw = cleanFlags.rawValue
                 sharedTapConfig.cmdTapStartUptime = 0
@@ -666,11 +697,14 @@ final class WindowSwitcherController: NSObject, ObservableObject {
                 }
                 return true
             }
-            let validSpaceMods = cleanFlags.isEmpty || cleanFlags == .maskShift || cleanFlags == .maskCommand || cleanFlags == .maskAlternate
             controller.tapStateLock.lock()
             let spaceEnabled = controller.sharedTapConfig.spaceToActivate
+            let hasActiveFilterQuery = controller.sharedTapConfig.hasActiveFilterQuery
             controller.tapStateLock.unlock()
-            if validSpaceMods && (spaceEnabled || cleanFlags == .maskAlternate || cleanFlags == .maskCommand) {
+            let isBareOrShiftSpace = (cleanFlags.isEmpty || cleanFlags == .maskShift)
+            let shouldActivateOnSpace = (cleanFlags == .maskAlternate || cleanFlags == .maskCommand)
+                || (isBareOrShiftSpace && spaceEnabled && !hasActiveFilterQuery)
+            if shouldActivateOnSpace {
                 controller.tapStateLock.lock()
                 controller.sharedTapConfig.isSwitcherVisible = false
                 controller.sharedTapConfig.cmdTapStartUptime = 0
@@ -1059,6 +1093,7 @@ final class WindowSwitcherController: NSObject, ObservableObject {
         sharedTapConfig.optTapInvalidated = true
         tapStateLock.unlock()
 
+        self.layoutSnapshot = WindowSwitcherLayoutSnapshot()
         WindowSwitcherService.shared.reloadSessionWindows(
             sameAppPID: targetSamePID,
             frontmostPIDBeforePresentation: previousFrontApp?.processIdentifier,
@@ -1079,12 +1114,15 @@ final class WindowSwitcherController: NSObject, ObservableObject {
             ?? NSScreen.screens.first
         if let screen {
             panel.setFrame(screen.frame, display: true)
-            if self.stripCardSwiftUIFrame == .zero {
+            panel.contentView?.frame = NSRect(origin: .zero, size: screen.frame.size)
+            panel.contentView?.needsLayout = true
+            panel.contentView?.layoutSubtreeIfNeeded()
+            if self.layoutSnapshot.stripCardFrame == .zero {
                 let cardW = min(screen.frame.width - 52, 1280)
                 let cardH: CGFloat = 224
                 let x = (screen.frame.width - cardW) / 2
                 let y = screen.frame.height - 22 - cardH
-                self.stripCardSwiftUIFrame = CGRect(x: x, y: y, width: cardW, height: cardH)
+                self.layoutSnapshot.stripCardFrame = CGRect(x: x, y: y, width: cardW, height: cardH)
             }
         }
 
@@ -1308,7 +1346,8 @@ final class WindowSwitcherController: NSObject, ObservableObject {
             settings: AppSettings.shared
         )
         let hosting = FirstMouseHostingView(rootView: root)
-        hosting.frame = frame
+        hosting.frame = NSRect(origin: .zero, size: frame.size)
+        hosting.autoresizingMask = [.width, .height]
         p.contentView = hosting
         self.stagePanel = p
     }

@@ -134,18 +134,24 @@ final class GoogleDriveIndexService: ObservableObject {
     @Published private(set) var folderCount: Int = 0
     @Published private(set) var sharedCount: Int = 0
     @Published private(set) var fileCount: Int = 0
+    @Published private(set) var macFolderItemCount: Int = 0
     @Published private(set) var isRebuildingFolders: Bool = false
     @Published private(set) var isRebuildingShared: Bool = false
     @Published private(set) var isRebuildingFiles: Bool = false
+    @Published private(set) var isRebuildingMacFolders: Bool = false
     @Published private(set) var rebuildProgressText: String?
     @Published private(set) var lastCacheUpdate: Date?
 
     private var folderEntries: [DriveFolderEntry] = []
     private var sharedEntries: [SharedDriveEntry] = []
     private var fileEntries: [DriveFileEntry] = []
+    private var macFolderEntries: [SharedDriveEntry] = []
+    private var macFolderRootsSnapshot: [String] = []
     private(set) var fastFolderIndex: FastFolderIndex = .empty
     private(set) var fastSharedIndex: FastSharedIndex = .empty
     private(set) var fastFileIndex: FastFileIndex = .empty
+    private(set) var fastMacFolderIndex: FastSharedIndex = .empty
+    private var macFoldersRebuildGen: UInt64 = 0
     private(set) var history: [String: HistoryRecord] = [:]
     private(set) var installedApps: [InstalledAppEntry] = []
     private var lastAppScanUptime: TimeInterval = 0
@@ -162,6 +168,7 @@ final class GoogleDriveIndexService: ObservableObject {
     private var folderCachePath: String { "\(cacheDir)/folder_cache.json" }
     private var sharedCachePath: String { "\(cacheDir)/shared_cache.json" }
     private var fileCachePath: String { "\(cacheDir)/file_cache.json" }
+    private var macFoldersCachePath: String { "\(cacheDir)/mac_folders_cache.json" }
     private var historyPath: String { "\(cacheDir)/folder_history.json" }
 
     nonisolated private static let skipExtensions: Set<String> = [
@@ -220,7 +227,7 @@ final class GoogleDriveIndexService: ObservableObject {
             myDrivePath = nil
             sharedDrivesPath = nil
             shortcutTargetsPath = nil
-            stopRealtimeDriveWatcher()
+            updateRealtimeWatcherState()
             return
         }
 
@@ -270,7 +277,8 @@ final class GoogleDriveIndexService: ObservableObject {
     // MARK: - Real-time FSEvents Incremental Indexer
 
     func updateRealtimeWatcherState() {
-        if AppSettings.shared.enableRealtimeFSEvents, !activeAccounts.isEmpty {
+        let hasCustomMac = !AppSettings.shared.customMacFolders.isEmpty
+        if AppSettings.shared.enableRealtimeFSEvents, (!activeAccounts.isEmpty || hasCustomMac) {
             startRealtimeDriveWatcher()
         } else {
             stopRealtimeDriveWatcher()
@@ -280,43 +288,54 @@ final class GoogleDriveIndexService: ObservableObject {
     private func startRealtimeDriveWatcher() {
         stopRealtimeDriveWatcher()
         var candidateRoots: [String] = []
+        var seenRoots = Set<String>()
         for acc in activeAccounts {
-            if let md = acc.myDrivePath { candidateRoots.append(md) }
-            if let sd = acc.sharedDrivesPath { candidateRoots.append(sd) }
+            if let md = acc.myDrivePath, seenRoots.insert(md).inserted { candidateRoots.append(md) }
+            if let sd = acc.sharedDrivesPath, seenRoots.insert(sd).inserted { candidateRoots.append(sd) }
+        }
+        let macRoots = AppSettings.shared.customMacFolders.map {
+            $0.hasSuffix("/") && $0.count > 1 ? String($0.dropLast()) : $0
+        }
+        for mr in macRoots where seenRoots.insert(mr).inserted {
+            candidateRoots.append(mr)
         }
         guard !candidateRoots.isEmpty else { return }
 
         let rootsSnapshot = candidateRoots
+        let macRootsSet = macRoots
         let queue = driveFSQueue
         queue.async {
             let validPaths = rootsSnapshot.filter { FileManager.default.fileExists(atPath: $0) }
             guard !validPaths.isEmpty else { return }
             let cfPaths = validPaths as CFArray
 
-            let callback: FSEventStreamCallback = { _, _, numEvents, eventPathsPtr, eventFlagsPtr, _ in
+            let callback: FSEventStreamCallback = { _, clientCallBackInfo, numEvents, eventPathsPtr, eventFlagsPtr, _ in
                 guard numEvents > 0 else { return }
                 let cfArray = unsafeBitCast(eventPathsPtr, to: CFArray.self)
                 guard let paths = cfArray as? [String] else { return }
 
-                var dirCandidates: [String] = []
+                var eventCandidates: [String] = []
                 for i in 0..<min(numEvents, paths.count) {
                     let flags = eventFlagsPtr[i]
+                    let cleanPath = paths[i].hasSuffix("/") && paths[i].count > 1
+                        ? String(paths[i].dropLast())
+                        : paths[i]
                     let isDirEvent = (flags & UInt32(kFSEventStreamEventFlagItemIsDir)) != 0
                     let isMustScanSubDirs = (flags & UInt32(kFSEventStreamEventFlagMustScanSubDirs)) != 0
-                    if isDirEvent || isMustScanSubDirs {
-                        let cleanPath = paths[i].hasSuffix("/") && paths[i].count > 1
-                            ? String(paths[i].dropLast())
-                            : paths[i]
-                        dirCandidates.append(cleanPath)
+                    let isLocalNonCloud = !cleanPath.contains("/Library/CloudStorage/")
+                    if isDirEvent || isMustScanSubDirs || isLocalNonCloud {
+                        eventCandidates.append(cleanPath)
                     }
                 }
-                guard !dirCandidates.isEmpty else { return }
-                let capturedCandidates = dirCandidates
+                guard !eventCandidates.isEmpty else { return }
+                let capturedCandidates = eventCandidates
+                _ = clientCallBackInfo
 
                 Task { @MainActor in
                     GoogleDriveIndexService.shared.enqueueIncrementalFolderEvents(capturedCandidates)
                 }
             }
+            _ = macRootsSet
 
             let flags = FSEventStreamCreateFlags(
                 kFSEventStreamCreateFlagUseCFTypes |
@@ -385,15 +404,58 @@ final class GoogleDriveIndexService: ObservableObject {
         let accountsSnap = activeAccounts
         let currentFolders = folderEntries
         let currentShared = sharedEntries
+        let currentMacEntries = macFolderEntries
+        let macRootsSnap = AppSettings.shared.customMacFolders.map {
+            $0.hasSuffix("/") && $0.count > 1 ? String($0.dropLast()) : $0
+        }
+        let homeSnap = homePath
 
         Task.detached(priority: .utility) {
             let fm = FileManager.default
             var folderMap = Dictionary(uniqueKeysWithValues: currentFolders.map { ($0.path, $0) })
             var sharedMap = Dictionary(uniqueKeysWithValues: currentShared.map { ($0.path, $0) })
+            var macMap = Dictionary(uniqueKeysWithValues: currentMacEntries.map { ($0.path, $0) })
             var didMutateFolders = false
             var didMutateShared = false
+            var didMutateMac = false
 
             for eventPath in batch {
+                // 1. Check Custom Mac Folders incremental updates (files & subfolders)
+                if let matchedMacRoot = macRootsSnap.first(where: { eventPath == $0 || eventPath.hasPrefix($0 + "/") }) {
+                    var isDirObj: ObjCBool = false
+                    let exists = fm.fileExists(atPath: eventPath, isDirectory: &isDirObj)
+                    if exists {
+                        if isDirObj.boolValue {
+                            var freshMac: [SharedDriveEntry] = []
+                            Self.scanMacFolderSubtreePOSIX(
+                                startDir: eventPath,
+                                rootDir: matchedMacRoot,
+                                homePath: homeSnap,
+                                maxSubDepth: 3,
+                                maxLimit: 5_000,
+                                into: &freshMac
+                            )
+                            let prefix = eventPath + "/"
+                            macMap = macMap.filter { key, _ in key != eventPath && !key.hasPrefix(prefix) }
+                            for entry in freshMac {
+                                macMap[entry.path] = entry
+                            }
+                            didMutateMac = true
+                        } else if let fileEntry = Self.makeSingleMacEntry(path: eventPath, isDir: false, rootDir: matchedMacRoot, homePath: homeSnap) {
+                            macMap[eventPath] = fileEntry
+                            didMutateMac = true
+                        }
+                    } else {
+                        let prefix = eventPath + "/"
+                        let beforeCount = macMap.count
+                        macMap = macMap.filter { key, _ in key != eventPath && !key.hasPrefix(prefix) }
+                        if macMap.count != beforeCount {
+                            didMutateMac = true
+                        }
+                    }
+                }
+
+                // 2. Check Google Drive incremental updates
                 guard let acc = accountsSnap.first(where: { eventPath.hasPrefix($0.rootPath) }) else { continue }
 
                 var isDir: ObjCBool = false
@@ -451,7 +513,7 @@ final class GoogleDriveIndexService: ObservableObject {
                 }
             }
 
-            guard didMutateFolders || didMutateShared else { return }
+            guard didMutateFolders || didMutateShared || didMutateMac else { return }
 
             let updatedFolders = didMutateFolders
                 ? folderMap.values.sorted { $0.path < $1.path }
@@ -461,6 +523,10 @@ final class GoogleDriveIndexService: ObservableObject {
                 ? sharedMap.values.sorted { $0.path < $1.path }
                 : nil
             let updatedFastShared = updatedShared.map { FastSharedIndex.build(from: $0) }
+            let updatedMac = didMutateMac
+                ? macMap.values.sorted { $0.path < $1.path }
+                : nil
+            let updatedFastMac = updatedMac.map { FastSharedIndex.build(from: $0) }
 
             await MainActor.run {
                 let svc = GoogleDriveIndexService.shared
@@ -476,6 +542,12 @@ final class GoogleDriveIndexService: ObservableObject {
                     svc.fastSharedIndex = updatedFastShared
                     svc.sharedCount = updatedShared.count
                     svc.scheduleSharedCachePersist()
+                }
+                if let updatedMac, let updatedFastMac {
+                    svc.macFolderEntries = updatedMac
+                    svc.fastMacFolderIndex = updatedFastMac
+                    svc.macFolderItemCount = updatedMac.count
+                    svc.scheduleMacFoldersCachePersist()
                 }
                 if LauncherPanelController.shared.isVisible {
                     LauncherViewModel.shared.refreshSearchResults()
@@ -550,14 +622,34 @@ final class GoogleDriveIndexService: ObservableObject {
         }
     }
 
+    private func scheduleMacFoldersCachePersist() {
+        let itemsSnap = macFolderEntries
+        let rootsSnap = AppSettings.shared.customMacFolders.map {
+            $0.hasSuffix("/") && $0.count > 1 ? String($0.dropLast()) : $0
+        }
+        let targetPath = macFoldersCachePath
+        Task.detached(priority: .background) {
+            let payload = MacFoldersCachePayload(
+                timestamp: Date().timeIntervalSince1970,
+                roots: rootsSnap,
+                items: itemsSnap
+            )
+            Self.writeCodableAtomic(payload, to: targetPath)
+        }
+    }
+
     // MARK: - Initial Load
 
     private func loadInitialDataAsync() {
         let fCache = folderCachePath
         let sCache = sharedCachePath
         let flCache = fileCachePath
+        let mCache = macFoldersCachePath
         let hPath = historyPath
         let currentAccount = accountRoot
+        let configuredMacRoots = AppSettings.shared.customMacFolders.map {
+            $0.hasSuffix("/") && $0.count > 1 ? String($0.dropLast()) : $0
+        }
 
         Task.detached(priority: .userInitiated) {
             let loadedHistory = Self.readHistoryDisk(at: hPath)
@@ -567,6 +659,8 @@ final class GoogleDriveIndexService: ObservableObject {
             let builtFastShared = loadedShared.map { FastSharedIndex.build(from: $0.0) }
             let loadedFiles = Self.readFileCacheDisk(at: flCache)
             let builtFastFiles = loadedFiles.map { FastFileIndex.build(from: $0.0) }
+            let loadedMac = Self.readMacFoldersCacheDisk(at: mCache)
+            let builtFastMac = loadedMac.map { FastSharedIndex.build(from: $0.items) }
             let scannedApps = Self.scanInstalledApplications()
 
             await MainActor.run {
@@ -609,10 +703,30 @@ final class GoogleDriveIndexService: ObservableObject {
                     service.rebuildFileCacheInBackground()
                 }
 
+                if let macPayload = loadedMac, let builtFastMac {
+                    service.macFolderEntries = macPayload.items
+                    service.fastMacFolderIndex = builtFastMac
+                    service.macFolderItemCount = macPayload.items.count
+                    service.macFolderRootsSnapshot = macPayload.roots
+                    if macPayload.roots != configuredMacRoots || Date().timeIntervalSince1970 - macPayload.timestamp > 86_400 {
+                        service.rebuildMacFoldersCacheInBackground()
+                    }
+                } else if !configuredMacRoots.isEmpty {
+                    service.rebuildMacFoldersCacheInBackground()
+                }
+
                 SyncAndLatchingService.shared.start()
                 LauncherViewModel.shared.refreshSearchResults()
             }
         }
+    }
+
+    private nonisolated static func readMacFoldersCacheDisk(at path: String) -> MacFoldersCachePayload? {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let payload = try? JSONDecoder().decode(MacFoldersCachePayload.self, from: data) else {
+            return nil
+        }
+        return payload
     }
 
     private nonisolated static func readFileCacheDisk(at path: String) -> ([DriveFileEntry], Double)? {
@@ -969,6 +1083,219 @@ final class GoogleDriveIndexService: ObservableObject {
         rebuildFolderCacheInBackground()
         rebuildSharedCacheInBackground()
         rebuildFileCacheInBackground()
+        rebuildMacFoldersCacheInBackground()
+    }
+
+    func rebuildMacFoldersCacheInBackground() {
+        macFoldersRebuildGen &+= 1
+        let gen = macFoldersRebuildGen
+        let rawRoots = AppSettings.shared.customMacFolders.map {
+            $0.hasSuffix("/") && $0.count > 1 ? String($0.dropLast()) : $0
+        }
+        var uniqueRoots: [String] = []
+        var seenRoots = Set<String>()
+        for r in rawRoots where !r.isEmpty && seenRoots.insert(r).inserted {
+            uniqueRoots.append(r)
+        }
+
+        if uniqueRoots.isEmpty {
+            macFolderEntries = []
+            fastMacFolderIndex = .empty
+            macFolderItemCount = 0
+            macFolderRootsSnapshot = []
+            isRebuildingMacFolders = false
+            let targetCache = macFoldersCachePath
+            Task.detached(priority: .background) {
+                try? FileManager.default.removeItem(atPath: targetCache)
+            }
+            if LauncherPanelController.shared.isVisible {
+                LauncherViewModel.shared.refreshSearchResults()
+            }
+            return
+        }
+
+        isRebuildingMacFolders = true
+        let targetCache = macFoldersCachePath
+        let homeSnap = homePath
+
+        Task.detached(priority: .utility) {
+            var collected: [SharedDriveEntry] = []
+            collected.reserveCapacity(16_384)
+            let maxItems = 120_000
+            var seenPaths = Set<String>()
+
+            for root in uniqueRoots {
+                guard collected.count < maxItems else { break }
+                var subItems: [SharedDriveEntry] = []
+                Self.scanMacFolderSubtreePOSIX(
+                    startDir: root,
+                    rootDir: root,
+                    homePath: homeSnap,
+                    maxSubDepth: 8,
+                    maxLimit: maxItems - collected.count,
+                    into: &subItems
+                )
+                for item in subItems where seenPaths.insert(item.path).inserted {
+                    collected.append(item)
+                }
+            }
+
+            let now = Date().timeIntervalSince1970
+            let payload = MacFoldersCachePayload(timestamp: now, roots: uniqueRoots, items: collected)
+            Self.writeCodableAtomic(payload, to: targetCache)
+
+            let finalItems = collected
+            let builtFast = FastSharedIndex.build(from: finalItems)
+            await MainActor.run {
+                let svc = GoogleDriveIndexService.shared
+                guard svc.macFoldersRebuildGen == gen else { return }
+                svc.macFolderEntries = finalItems
+                svc.fastMacFolderIndex = builtFast
+                svc.macFolderItemCount = finalItems.count
+                svc.macFolderRootsSnapshot = uniqueRoots
+                svc.isRebuildingMacFolders = false
+                if LauncherPanelController.shared.isVisible {
+                    LauncherViewModel.shared.refreshSearchResults()
+                }
+            }
+        }
+    }
+
+    private nonisolated static let skippedMacIndexDirNames: Set<String> = [
+        "node_modules", ".git", ".svn", ".hg", ".venv", "venv", "__pycache__",
+        ".build", "build", "deriveddata", "pods", "library", ".trash", "trash",
+        ".cache", ".npm", ".gradle", ".cargo"
+    ]
+
+    private nonisolated static func makeSingleMacEntry(
+        path: String,
+        isDir: Bool,
+        rootDir: String,
+        homePath: String
+    ) -> SharedDriveEntry? {
+        let name = (path as NSString).lastPathComponent
+        if name.isEmpty || name.hasPrefix(".") || name == "Icon\r" { return nil }
+        if !isDir {
+            let ext = (name as NSString).pathExtension.lowercased()
+            if ext == "tmp" || ext == "part" || ext == "crdownload" || ext == "ds_store" { return nil }
+        }
+
+        let rootParent = (rootDir as NSString).deletingLastPathComponent
+        let rel: String
+        if rootParent != "/" && path.hasPrefix(rootParent + "/") {
+            rel = String(path.dropFirst(rootParent.count + 1))
+        } else {
+            rel = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        }
+
+        let segs = rel.split(separator: "/").map(String.init)
+        var cleanSegs: [String] = []
+        var acrSegs: [String] = []
+        cleanSegs.reserveCapacity(segs.count)
+        acrSegs.reserveCapacity(segs.count)
+
+        for (idx, seg) in segs.enumerated() {
+            let isLeafFile = (!isDir && idx == segs.count - 1)
+            if isLeafFile {
+                let ext = (seg as NSString).pathExtension.lowercased()
+                let stem = ext.isEmpty ? seg : (seg as NSString).deletingPathExtension
+                let (cStem, acr) = extractSignatures(stem)
+                cleanSegs.append(ext.isEmpty ? cStem : "\(cStem)\(ext)")
+                acrSegs.append(acr)
+            } else {
+                let (c, a) = extractSignatures(seg)
+                cleanSegs.append(c)
+                acrSegs.append(a)
+            }
+        }
+
+        let displaySub = path.replacingOccurrences(of: homePath, with: "~")
+        return SharedDriveEntry(
+            path: path,
+            isDir: isDir,
+            displaySub: displaySub,
+            cleanSegs: cleanSegs,
+            acrSegs: acrSegs
+        )
+    }
+
+    private nonisolated static func scanMacFolderSubtreePOSIX(
+        startDir: String,
+        rootDir: String,
+        homePath: String,
+        maxSubDepth: Int,
+        maxLimit: Int,
+        into out: inout [SharedDriveEntry]
+    ) {
+        guard maxLimit > 0 else { return }
+        var stRoot = Darwin.stat()
+        guard Darwin.lstat(startDir, &stRoot) == 0, (stRoot.st_mode & S_IFMT) == S_IFDIR else { return }
+
+        if let rootEntry = makeSingleMacEntry(path: startDir, isDir: true, rootDir: rootDir, homePath: homePath) {
+            out.append(rootEntry)
+        }
+
+        var stack: [(dir: String, depth: Int)] = [(startDir, 0)]
+        let initialCount = out.count
+
+        while let (curDir, depth) = stack.popLast() {
+            if (out.count - initialCount) >= maxLimit { break }
+            guard let dirPtr = Darwin.opendir(curDir) else { continue }
+            var childDirs: [String] = []
+
+            while let ent = Darwin.readdir(dirPtr) {
+                let nameLen = Int(ent.pointee.d_namlen)
+                guard nameLen > 0 else { continue }
+                let dType = ent.pointee.d_type
+
+                let name: String = withUnsafePointer(to: ent.pointee.d_name) { ptr in
+                    ptr.withMemoryRebound(to: UInt8.self, capacity: nameLen) { utf8Ptr in
+                        String(decoding: UnsafeBufferPointer(start: utf8Ptr, count: nameLen), as: UTF8.self)
+                    }
+                }
+                if name.isEmpty || name.hasPrefix(".") || name == "Icon\r" { continue }
+
+                let fullPath = curDir == "/" ? "/\(name)" : "\(curDir)/\(name)"
+                let isDirectory: Bool
+                if dType == DT_DIR {
+                    isDirectory = true
+                } else if dType == DT_REG || dType == DT_LNK {
+                    isDirectory = false
+                } else {
+                    if fullPath.contains("/Library/CloudStorage/") {
+                        isDirectory = (name as NSString).pathExtension.isEmpty
+                    } else {
+                        var st = Darwin.stat()
+                        isDirectory = (Darwin.lstat(fullPath, &st) == 0) && ((st.st_mode & S_IFMT) == S_IFDIR)
+                    }
+                }
+
+                if isDirectory {
+                    let lowerName = name.lowercased()
+                    if skippedMacIndexDirNames.contains(lowerName) { continue }
+                    let ext = (name as NSString).pathExtension.lowercased()
+                    let isPackageBundle = skipExtensions.contains(ext)
+                    if let dirEntry = makeSingleMacEntry(path: fullPath, isDir: !isPackageBundle, rootDir: rootDir, homePath: homePath) {
+                        out.append(dirEntry)
+                        if (out.count - initialCount) >= maxLimit { break }
+                    }
+                    if !isPackageBundle && depth < maxSubDepth {
+                        childDirs.append(fullPath)
+                    }
+                } else {
+                    if let fileEntry = makeSingleMacEntry(path: fullPath, isDir: false, rootDir: rootDir, homePath: homePath) {
+                        out.append(fileEntry)
+                        if (out.count - initialCount) >= maxLimit { break }
+                    }
+                }
+            }
+            Darwin.closedir(dirPtr)
+
+            childDirs.sort()
+            for sub in childDirs.reversed() {
+                stack.append((sub, depth + 1))
+            }
+        }
     }
 
     func rebuildFolderCacheInBackground() {
@@ -1188,12 +1515,22 @@ final class GoogleDriveIndexService: ObservableObject {
         let home = homePath
         let targetCache = fileCachePath
         var scanRoots: [(path: String, maxDepth: Int)] = []
+        var seenScanRoots = Set<String>()
         for acc in activeAccounts {
-            if let md = acc.myDrivePath { scanRoots.append((md, 10)) }
-            if let sd = acc.sharedDrivesPath { scanRoots.append((sd, 8)) }
+            if let md = acc.myDrivePath, seenScanRoots.insert(md).inserted { scanRoots.append((md, 10)) }
+            if let sd = acc.sharedDrivesPath, seenScanRoots.insert(sd).inserted { scanRoots.append((sd, 8)) }
         }
         for localSub in ["Desktop", "Downloads", "Documents"] {
-            scanRoots.append(("\(home)/\(localSub)", 4))
+            let p = "\(home)/\(localSub)"
+            if seenScanRoots.insert(p).inserted {
+                scanRoots.append((p, 4))
+            }
+        }
+        for customDir in AppSettings.shared.customMacFolders {
+            let clean = customDir.hasSuffix("/") && customDir.count > 1 ? String(customDir.dropLast()) : customDir
+            if !clean.isEmpty && seenScanRoots.insert(clean).inserted {
+                scanRoots.append((clean, 6))
+            }
         }
 
         let rootsSnap = scanRoots
@@ -1471,7 +1808,17 @@ final class GoogleDriveIndexService: ObservableObject {
     func formatHierarchicalSubtitle(_ path: String, maxLevels: Int? = nil) -> String {
         let multiAccount = activeAccounts.count > 1
         guard let acc = accountForPath(path) else {
-            return (path as NSString).deletingLastPathComponent.replacingOccurrences(of: homePath, with: "~")
+            let parent = (path as NSString).deletingLastPathComponent
+            let prettyParent = parent.replacingOccurrences(of: homePath, with: "~")
+            guard let maxLevels, maxLevels > 0 else {
+                return prettyParent
+            }
+            let parts = prettyParent.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+            if parts.count <= maxLevels {
+                return prettyParent
+            }
+            let tail = parts.suffix(maxLevels).reversed().joined(separator: " ‹ ")
+            return prettyParent.hasPrefix("~") ? "\(tail) ‹ ~" : tail
         }
 
         var baseLabel = ""
@@ -1517,6 +1864,7 @@ final class GoogleDriveIndexService: ObservableObject {
         let trimmed = path.hasSuffix("/") && path.count > 1 ? String(path.dropLast()) : path
         if fastFolderIndex.knownPaths.contains(trimmed) { return true }
         if let sh = fastSharedIndex.byPath[trimmed] { return sh.isDir }
+        if let mf = fastMacFolderIndex.byPath[trimmed] { return mf.isDir }
         if availableAccounts.contains(where: {
             trimmed == $0.rootPath || trimmed == $0.myDrivePath || trimmed == $0.sharedDrivesPath || trimmed == $0.shortcutTargetsPath
         }) {
@@ -2223,6 +2571,11 @@ final class GoogleDriveIndexService: ObservableObject {
                 combined.append(item)
             }
         }
+        if let macChildren = fastMacFolderIndex.childrenByParent[cleanParent] {
+            for item in macChildren where seen.insert(item.path).inserted {
+                combined.append(item)
+            }
+        }
 
         if !tokens.isEmpty {
             combined = combined.filter { item in
@@ -2621,5 +2974,297 @@ final class GoogleDriveIndexService: ObservableObject {
             }
         }
         return matched
+    }
+
+    // MARK: - Ultra-Fast Custom Mac Folders Search (`m` / `m <từ khóa>`)
+
+    func defaultCustomMacFolderResultItems(validDirs: [String], limit: Int = 25) -> [SearchResultItem] {
+        let addPromptItem = SearchResultItem(
+            id: "mac_folder:add_prompt",
+            title: "Thêm thư mục trên Mac vào danh sách tìm kiếm...",
+            subtitle: "Bấm ↩ để chọn thêm thư mục từ máy Mac (tìm nhanh qua tiền tố 'm <từ khóa>')",
+            path: nil,
+            isDirectory: true,
+            kind: .addCustomMacFolder,
+            badge: "+ Thêm",
+            sfSymbolFallback: "folder.badge.plus"
+        )
+
+        if validDirs.isEmpty {
+            return [
+                addPromptItem,
+                SearchResultItem(
+                    id: "mac_folder:empty_hint",
+                    title: "Chưa có thư mục nào trên Mac được thêm",
+                    subtitle: "Nhấn ↩ vào mục trên để chọn thư mục đầu tiên (hoặc vào Cài đặt > Cài đặt chung)",
+                    path: nil,
+                    isDirectory: false,
+                    kind: .infoBanner,
+                    badge: "Hướng dẫn",
+                    sfSymbolFallback: "info.circle"
+                )
+            ]
+        }
+
+        var items: [SearchResultItem] = []
+        var seenPaths = Set<String>()
+        let pinnedSet = Set(AppSettings.shared.pinnedPaths)
+
+        // 1. Pinned items located inside configured Mac folders
+        for p in AppSettings.shared.pinnedPaths {
+            guard validDirs.contains(where: { p == $0 || p.hasPrefix($0 + "/") }),
+                  seenPaths.insert(p).inserted else { continue }
+            let isDir = isKnownDirectory(p)
+            let ext = (p as NSString).pathExtension.uppercased()
+            items.append(SearchResultItem(
+                id: "mac_pin:\(p)",
+                title: (p as NSString).lastPathComponent,
+                subtitle: "Đã ghim (⌘D bỏ ghim) ‹ \(formatHierarchicalSubtitle(p, maxLevels: 3))",
+                path: p,
+                isDirectory: isDir,
+                kind: isDir ? .driveFolder(path: p) : .driveFile(path: p),
+                badge: isDir ? "Đã ghim" : (ext.isEmpty ? "Đã ghim" : "Đã ghim • \(ext)"),
+                sfSymbolFallback: isDir ? "folder.fill" : "doc.fill"
+            ))
+        }
+
+        // 2. Configured Mac root folders
+        for dir in validDirs where seenPaths.insert(dir).inserted {
+            let folderName = (dir as NSString).lastPathComponent
+            let prettyPath = dir.replacingOccurrences(of: homePath, with: "~")
+            items.append(SearchResultItem(
+                id: "mac_folder:\(dir)",
+                title: folderName,
+                subtitle: "\(prettyPath)  •  ↩ Duyệt thư mục • ⌘↩ Xem trong Finder • ⇥ Actions",
+                path: dir,
+                isDirectory: true,
+                kind: .driveFolder(path: dir),
+                badge: pinnedSet.contains(dir) ? "Đã ghim" : "Thư mục Mac",
+                sfSymbolFallback: "folder.fill"
+            ))
+        }
+
+        // 3. Recently opened subfolders/files inside configured Mac folders
+        let sortedHist = history.sorted {
+            if $0.value.last_used != $1.value.last_used { return $0.value.last_used > $1.value.last_used }
+            return $0.value.count > $1.value.count
+        }
+        for (hPath, rec) in sortedHist {
+            guard items.count < limit else { break }
+            guard validDirs.contains(where: { hPath.hasPrefix($0 + "/") }),
+                  seenPaths.insert(hPath).inserted else { continue }
+            let isDir = isKnownDirectory(hPath)
+            guard FileManager.default.fileExists(atPath: hPath) else { continue }
+            let ext = (hPath as NSString).pathExtension.uppercased()
+            items.append(SearchResultItem(
+                id: "mac_recent:\(hPath)",
+                title: (hPath as NSString).lastPathComponent,
+                subtitle: "Mở gần đây (\(rec.count) lần) ‹ \(formatHierarchicalSubtitle(hPath, maxLevels: 3))",
+                path: hPath,
+                isDirectory: isDir,
+                kind: isDir ? .driveFolder(path: hPath) : .driveFile(path: hPath),
+                badge: isDir ? "Gần đây" : (ext.isEmpty ? "Gần đây" : ext),
+                sfSymbolFallback: isDir ? "folder.fill" : "doc.fill"
+            ))
+        }
+
+        items.append(addPromptItem)
+        return items
+    }
+
+    nonisolated static func evaluateMacFolderSearchHits(
+        tokens: [String],
+        fastIndex: FastSharedIndex,
+        historySnapshot: [String: HistoryRecord],
+        pinnedSet: Set<String>,
+        maxResults: Int
+    ) -> [(entry: SharedDriveEntry, historyCount: Int, isPinned: Bool)] {
+        let cleanedTokens = tokens.map { raw -> String in
+            let strippedDot = raw.hasPrefix(".") ? String(raw.dropFirst()) : raw
+            return cleanString(strippedDot)
+        }.filter { !$0.isEmpty }
+        guard !cleanedTokens.isEmpty else { return [] }
+
+        let tokenBytes = cleanedTokens.map { Array($0.utf8) }
+        let numTokens = tokenBytes.count
+        let lastTokIdx = numTokens - 1
+
+        struct ScoredMacHit {
+            let totalScore: Int
+            let isDir: Bool
+            let hasHistory: Bool
+            let negDepth: Int
+            let negLen: Int
+            let entry: SharedDriveEntry
+            let historyCount: Int
+            let isPinned: Bool
+        }
+
+        var hits: [ScoredMacHit] = []
+        hits.reserveCapacity(128)
+
+        for rec in fastIndex.records {
+            let cleanSegs = rec.cleanBytes
+            let acrSegs = rec.acrBytes
+            let numSegs = cleanSegs.count
+            if numSegs == 0 { continue }
+
+            let leafIdx = numSegs - 1
+
+            // Pass 1: Ordered hierarchical matching (e.g. `2026 baocao` or `baocao pdf`)
+            var curS = 0
+            var orderedMatchedAll = true
+            var matchScore = 0
+            var leafMatched = false
+
+            for tokIdx in 0..<numTokens {
+                let tok = tokenBytes[tokIdx]
+                var foundS = -1
+                let isLastTok = (tokIdx == lastTokIdx)
+
+                for sIdx in curS..<numSegs {
+                    let seg = cleanSegs[sIdx]
+                    let acr = sIdx < acrSegs.count ? acrSegs[sIdx] : []
+                    let segMatch = asciiContains(seg, tok)
+                    let acrMatch = !acr.isEmpty && asciiHasPrefix(acr, from: 0, tok)
+
+                    if segMatch || acrMatch {
+                        foundS = sIdx
+                        if sIdx == leafIdx { leafMatched = true }
+                        let stripIdx = firstNonDigitIndex(seg)
+                        if asciiEquals(seg, from: stripIdx, tok) || asciiEquals(seg, from: 0, tok) || (!acr.isEmpty && asciiEquals(acr, from: 0, tok)) {
+                            matchScore += (isLastTok && sIdx == leafIdx) ? 140 : 100
+                        } else if asciiHasPrefix(seg, from: stripIdx, tok) || asciiHasPrefix(seg, from: 0, tok) || acrMatch {
+                            matchScore += 85
+                        } else {
+                            matchScore += 55
+                        }
+                        break
+                    }
+                }
+                if foundS != -1 {
+                    curS = foundS
+                } else {
+                    orderedMatchedAll = false
+                    break
+                }
+            }
+
+            if orderedMatchedAll {
+                matchScore += 140 // Bonus for preserving folder -> child order
+            } else if numTokens > 1 {
+                // Pass 2: Unordered multi-segment matching (e.g. `baocao 2026` where filename is typed before parent folder)
+                var unorderedScore = 0
+                var unorderedLeaf = false
+                var allFound = true
+
+                for tok in tokenBytes {
+                    var bestSegScore = 0
+                    for sIdx in stride(from: leafIdx, through: 0, by: -1) {
+                        let seg = cleanSegs[sIdx]
+                        let acr = sIdx < acrSegs.count ? acrSegs[sIdx] : []
+                        let segMatch = asciiContains(seg, tok)
+                        let acrMatch = !acr.isEmpty && asciiHasPrefix(acr, from: 0, tok)
+                        if segMatch || acrMatch {
+                            if sIdx == leafIdx { unorderedLeaf = true }
+                            let stripIdx = firstNonDigitIndex(seg)
+                            if asciiEquals(seg, from: stripIdx, tok) || asciiEquals(seg, from: 0, tok) || (!acr.isEmpty && asciiEquals(acr, from: 0, tok)) {
+                                bestSegScore = 95
+                            } else if asciiHasPrefix(seg, from: stripIdx, tok) || asciiHasPrefix(seg, from: 0, tok) || acrMatch {
+                                bestSegScore = 75
+                            } else {
+                                bestSegScore = 45
+                            }
+                            break
+                        }
+                    }
+                    if bestSegScore > 0 {
+                        unorderedScore += bestSegScore
+                    } else {
+                        allFound = false
+                        break
+                    }
+                }
+
+                if allFound && unorderedLeaf {
+                    orderedMatchedAll = true
+                    matchScore = unorderedScore
+                    leafMatched = true
+                }
+            }
+
+            guard orderedMatchedAll else { continue }
+            if leafMatched { matchScore += 1_100 }
+            if rec.entry.isDir { matchScore += 35 }
+
+            let path = rec.entry.path
+            let isPin = pinnedSet.contains(path)
+            let hRec = historySnapshot[path]
+            let histBoost = (isPin ? 850 : 0) + (hRec.map { min(150 + $0.count * 20, 320) } ?? 0)
+
+            hits.append(ScoredMacHit(
+                totalScore: matchScore + histBoost,
+                isDir: rec.entry.isDir,
+                hasHistory: histBoost > 0,
+                negDepth: -numSegs,
+                negLen: -path.utf8.count,
+                entry: rec.entry,
+                historyCount: hRec?.count ?? 0,
+                isPinned: isPin
+            ))
+        }
+
+        hits.sort {
+            if $0.totalScore != $1.totalScore { return $0.totalScore > $1.totalScore }
+            if $0.hasHistory != $1.hasHistory { return $0.hasHistory && !$1.hasHistory }
+            if $0.isDir != $1.isDir { return $0.isDir && !$1.isDir }
+            if $0.negDepth != $1.negDepth { return $0.negDepth > $1.negDepth }
+            return $0.negLen > $1.negLen
+        }
+
+        return hits.prefix(maxResults).map { ($0.entry, $0.historyCount, $0.isPinned) }
+    }
+
+    func buildCustomMacSearchResultItems(
+        from hits: [(entry: SharedDriveEntry, historyCount: Int, isPinned: Bool)],
+        maxResults: Int = 50
+    ) -> [SearchResultItem] {
+        var results: [SearchResultItem] = []
+        results.reserveCapacity(min(hits.count, maxResults))
+
+        for hit in hits.prefix(maxResults) {
+            let p = hit.entry.path
+            let isDir = hit.entry.isDir
+            let ext = (p as NSString).pathExtension.uppercased()
+            let badge: String
+            if hit.isPinned {
+                badge = isDir ? "Đã ghim" : (ext.isEmpty ? "Đã ghim" : "Đã ghim • \(ext)")
+            } else if isDir {
+                badge = "Thư mục"
+            } else {
+                badge = ext.isEmpty ? "Tệp Mac" : ext
+            }
+
+            let subPrefix: String
+            if hit.isPinned {
+                subPrefix = "Đã ghim ‹ "
+            } else if hit.historyCount > 0 {
+                subPrefix = "Mở gần đây (\(hit.historyCount) lần) ‹ "
+            } else {
+                subPrefix = ""
+            }
+
+            results.append(SearchResultItem(
+                id: "mac_hit:\(p)",
+                title: (p as NSString).lastPathComponent,
+                subtitle: subPrefix + formatHierarchicalSubtitle(p, maxLevels: 3),
+                path: p,
+                isDirectory: isDir,
+                kind: isDir ? .driveFolder(path: p) : .driveFile(path: p),
+                badge: badge,
+                sfSymbolFallback: isDir ? "folder.fill" : "doc.fill"
+            ))
+        }
+        return results
     }
 }

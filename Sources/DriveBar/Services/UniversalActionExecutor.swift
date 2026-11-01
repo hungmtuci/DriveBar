@@ -398,6 +398,7 @@ final class UniversalActionExecutor {
                     symbol: "folder.badge.minus"
                 )
             }
+            viewModel.refreshSearchResults()
 
         case "file.quicklook":
             QuickLookCoordinator.shared.toggleQuickLook(for: urls)

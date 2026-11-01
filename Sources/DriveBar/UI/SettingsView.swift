@@ -845,6 +845,7 @@ private struct GeneralSettingsPane: View {
     @ObservedObject var updater: UpdateCheckerService
     @ObservedObject var uiState: SettingsUIState
     @ObservedObject private var clipboardService = ClipboardHistoryService.shared
+    @ObservedObject private var driveService = GoogleDriveIndexService.shared
 
     var body: some View {
         ScrollView {
@@ -987,21 +988,38 @@ private struct GeneralSettingsPane: View {
                 // 2.5. Custom Mac Folders ('m' prefix search mode)
                 MacSettingsSection(
                     title: "Thư mục tìm kiếm trên Mac ('m')",
+                    footer: driveService.isRebuildingMacFolders
+                        ? "Đang lập chỉ mục các thư mục Mac ở nền..."
+                        : "Đã lập chỉ mục RAM tức thì \(driveService.macFolderItemCount.formatted()) thư mục con & tệp tin (hỗ trợ gõ không dấu Tiếng Việt, chữ viết tắt và theo dõi FSEvents).",
                     headerTrailing: {
-                        Button {
-                            settings.promptAddCustomMacFolder()
-                        } label: {
-                            Label("Thêm thư mục...", systemImage: "folder.badge.plus")
-                                .font(.system(size: 11.5, weight: .medium))
+                        HStack(spacing: 6) {
+                            Button {
+                                driveService.rebuildMacFoldersCacheInBackground()
+                            } label: {
+                                Label(driveService.isRebuildingMacFolders ? "Đang quét..." : "Quét lại", systemImage: "arrow.clockwise")
+                                    .font(.system(size: 11.5, weight: .regular))
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(driveService.isRebuildingMacFolders || settings.customMacFolders.isEmpty)
+
+                            Button {
+                                settings.promptAddCustomMacFolder()
+                            } label: {
+                                Label("Thêm thư mục...", systemImage: "folder.badge.plus")
+                                    .font(.system(size: 11.5, weight: .medium))
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
                     }
                 ) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Các thư mục trên máy Mac được đưa vào phạm vi tìm kiếm nhanh khi bạn gõ tiền tố 'm' hoặc 'm <từ khóa>' trong thanh tìm kiếm.")
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
+                            .padding(.horizontal, 14)
+                            .padding(.top, 10)
                             .padding(.bottom, 4)
 
                         if settings.customMacFolders.isEmpty {
@@ -1026,12 +1044,13 @@ private struct GeneralSettingsPane: View {
                         } else {
                             ForEach(Array(settings.customMacFolders.enumerated()), id: \.element) { idx, folderPath in
                                 if idx > 0 {
-                                    MacSettingsRowDivider()
+                                    MacSettingsRowDivider(leadingInset: 42)
                                 }
                                 HStack(spacing: 10) {
                                     Image(systemName: "folder.fill")
-                                        .font(.system(size: 16))
-                                        .foregroundStyle(Color.accentColor)
+                                        .font(.system(size: 15))
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 18, alignment: .center)
 
                                     VStack(alignment: .leading, spacing: 1) {
                                         Text((folderPath as NSString).lastPathComponent)
@@ -1068,8 +1087,10 @@ private struct GeneralSettingsPane: View {
                                     .buttonStyle(.plain)
                                     .help("Xóa khỏi danh sách tìm kiếm (m)")
                                 }
-                                .padding(.vertical, 3)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 6)
                             }
+                            .padding(.bottom, 4)
                         }
                     }
                 }

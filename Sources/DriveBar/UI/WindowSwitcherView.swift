@@ -1,25 +1,46 @@
 import SwiftUI
 import AppKit
 
-struct WindowSwitcherPreviewCardFrameKey: PreferenceKey {
-    static var defaultValue: CGRect = .zero
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
-        let next = nextValue()
-        if next != .zero {
-            value = next
+struct WindowSwitcherLayoutSnapshot: Equatable {
+    var previewCardFrame: CGRect = .zero
+    var previewContentFrame: CGRect = .zero
+    var stripCardFrame: CGRect = .zero
+    var stripViewportFrame: CGRect = .zero
+    var thumbnailFrames: [Int: CGRect] = [:]
+    var selectedCloseButtonFrame: CGRect? = nil
+
+    mutating func merge(_ other: WindowSwitcherLayoutSnapshot) {
+        if other.previewCardFrame != .zero {
+            previewCardFrame = other.previewCardFrame
+        }
+        if other.previewContentFrame != .zero {
+            previewContentFrame = other.previewContentFrame
+        }
+        if other.stripCardFrame != .zero {
+            stripCardFrame = other.stripCardFrame
+        }
+        if other.stripViewportFrame != .zero {
+            stripViewportFrame = other.stripViewportFrame
+        }
+        if !other.thumbnailFrames.isEmpty {
+            for (idx, rect) in other.thumbnailFrames where rect != .zero {
+                thumbnailFrames[idx] = rect
+            }
+        }
+        if let closeRect = other.selectedCloseButtonFrame, closeRect != .zero {
+            selectedCloseButtonFrame = closeRect
         }
     }
 }
 
-struct WindowSwitcherStripCardFrameKey: PreferenceKey {
-    static var defaultValue: CGRect = .zero
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
-        let next = nextValue()
-        if next != .zero {
-            value = next
-        }
+struct WindowSwitcherLayoutPreferenceKey: PreferenceKey {
+    static var defaultValue = WindowSwitcherLayoutSnapshot()
+    static func reduce(value: inout WindowSwitcherLayoutSnapshot, nextValue: () -> WindowSwitcherLayoutSnapshot) {
+        value.merge(nextValue())
     }
 }
+
+let windowSwitcherCoordinateSpaceName = "switcherSpace"
 
 struct WindowSwitcherOverlayView: View {
     @ObservedObject var controller: WindowSwitcherController
@@ -77,8 +98,10 @@ struct WindowSwitcherOverlayView: View {
                         .background(
                             GeometryReader { previewGeo in
                                 Color.clear.preference(
-                                    key: WindowSwitcherPreviewCardFrameKey.self,
-                                    value: previewGeo.frame(in: .global)
+                                    key: WindowSwitcherLayoutPreferenceKey.self,
+                                    value: WindowSwitcherLayoutSnapshot(
+                                        previewCardFrame: previewGeo.frame(in: .named(windowSwitcherCoordinateSpaceName))
+                                    )
                                 )
                             }
                         )
@@ -95,8 +118,10 @@ struct WindowSwitcherOverlayView: View {
                     .background(
                         GeometryReader { stripGeo in
                             Color.clear.preference(
-                                key: WindowSwitcherStripCardFrameKey.self,
-                                value: stripGeo.frame(in: .global)
+                                key: WindowSwitcherLayoutPreferenceKey.self,
+                                value: WindowSwitcherLayoutSnapshot(
+                                    stripCardFrame: stripGeo.frame(in: .named(windowSwitcherCoordinateSpaceName))
+                                )
                             )
                         }
                     )
@@ -109,11 +134,9 @@ struct WindowSwitcherOverlayView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .onPreferenceChange(WindowSwitcherPreviewCardFrameKey.self) { frame in
-                controller.previewCardSwiftUIFrame = frame
-            }
-            .onPreferenceChange(WindowSwitcherStripCardFrameKey.self) { frame in
-                controller.stripCardSwiftUIFrame = frame
+            .coordinateSpace(name: windowSwitcherCoordinateSpaceName)
+            .onPreferenceChange(WindowSwitcherLayoutPreferenceKey.self) { snapshot in
+                controller.layoutSnapshot = snapshot
             }
         }
     }
@@ -313,6 +336,16 @@ private struct ZoomedWindowPreviewCard: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .background(
+                GeometryReader { contentGeo in
+                    Color.clear.preference(
+                        key: WindowSwitcherLayoutPreferenceKey.self,
+                        value: WindowSwitcherLayoutSnapshot(
+                            previewContentFrame: contentGeo.frame(in: .named(windowSwitcherCoordinateSpaceName))
+                        )
+                    )
+                }
+            )
         }
         .frame(width: maxWidth, height: maxHeight)
         .background(
@@ -518,10 +551,30 @@ private struct WindowThumbnailStripCard: View {
                                                 )
                                         }
                                         .buttonStyle(.plain)
+                                        .background(
+                                            GeometryReader { closeGeo in
+                                                Color.clear.preference(
+                                                    key: WindowSwitcherLayoutPreferenceKey.self,
+                                                    value: WindowSwitcherLayoutSnapshot(
+                                                        selectedCloseButtonFrame: closeGeo.frame(in: .named(windowSwitcherCoordinateSpaceName))
+                                                    )
+                                                )
+                                            }
+                                        )
                                         .padding(13)
                                         .help("Đóng cửa sổ này (⌘W)")
                                     }
                                 }
+                                .background(
+                                    GeometryReader { cardGeo in
+                                        Color.clear.preference(
+                                            key: WindowSwitcherLayoutPreferenceKey.self,
+                                            value: WindowSwitcherLayoutSnapshot(
+                                                thumbnailFrames: [idx: cardGeo.frame(in: .named(windowSwitcherCoordinateSpaceName))]
+                                            )
+                                        )
+                                    }
+                                )
                                 .id(item.id)
                                 .onHover { hovering in
                                     if hovering {
@@ -573,6 +626,16 @@ private struct WindowThumbnailStripCard: View {
                         .padding(.top, 14)
                         .padding(.bottom, 12)
                     }
+                    .background(
+                        GeometryReader { viewportGeo in
+                            Color.clear.preference(
+                                key: WindowSwitcherLayoutPreferenceKey.self,
+                                value: WindowSwitcherLayoutSnapshot(
+                                    stripViewportFrame: viewportGeo.frame(in: .named(windowSwitcherCoordinateSpaceName))
+                                )
+                            )
+                        }
+                    )
                     .onChange(of: service.selectedItem?.id) { _, selectedID in
                         guard let selectedID else { return }
                         if service.isKeyboardNavigating {
