@@ -54,7 +54,7 @@ final class UniversalActionExecutor {
         case "ai.chunk_md":
             LauncherPanelController.shared.hide()
             FloatingToastController.shared.showProgress(
-                title: "Đang chia nhỏ tài liệu theo Chương/Mục (H1/H2)...",
+                title: L("Đang chia nhỏ tài liệu theo Chương/Mục (H1/H2)...", "Splitting document into Sections (H1/H2)..."),
                 subtitle: target.primaryTitle
             )
             Task { @MainActor in
@@ -63,8 +63,8 @@ final class UniversalActionExecutor {
                     if let first = res.first {
                         let cCount = res.reduce(0) { $0 + $1.chunkCount }
                         FloatingToastController.shared.showSuccess(
-                            title: "Đã tách thành \(cCount) phần trong _Chunks/",
-                            subtitle: "Kèm chỉ mục 00_INDEX.md • Tổng ~\(first.estimatedTokens.formatted()) tokens",
+                            title: L("Đã tách thành \(cCount) phần trong _Chunks/", "Split into \(cCount) parts in _Chunks/"),
+                            subtitle: L("Kèm chỉ mục 00_INDEX.md • Tổng ~\(first.estimatedTokens.formatted()) tokens", "Includes 00_INDEX.md • Total ~\(first.estimatedTokens.formatted()) tokens"),
                             symbol: "rectangle.split.3x1.fill"
                         )
                         if let dir = first.chunkDirectoryURL {
@@ -73,7 +73,7 @@ final class UniversalActionExecutor {
                     }
                 } catch {
                     FloatingToastController.shared.showError(
-                        title: "Lỗi chia nhỏ tài liệu",
+                        title: L("Lỗi chia nhỏ tài liệu", "Failed to split document"),
                         subtitle: error.localizedDescription
                     )
                 }
@@ -94,7 +94,7 @@ final class UniversalActionExecutor {
                 LauncherPanelController.shared.hide()
             }
             FloatingToastController.shared.showProgress(
-                title: "Đang trích xuất nội dung Web sang Markdown...",
+                title: L("Đang trích xuất nội dung Web sang Markdown...", "Extracting web content to Markdown..."),
                 subtitle: webURL.host ?? webURL.absoluteString
             )
             Task { @MainActor in
@@ -105,7 +105,9 @@ final class UniversalActionExecutor {
                         copyToClipboard: true
                     )
                     FloatingToastController.shared.showSuccess(
-                        title: saveDesktop ? "Đã lưu .md ra Desktop & Copy vào Clipboard" : "Đã Copy Markdown trang Web vào Clipboard",
+                        title: saveDesktop
+                            ? L("Đã lưu .md ra Desktop & Copy vào Clipboard", "Saved .md to Desktop & Copied to Clipboard")
+                            : L("Đã Copy Markdown trang Web vào Clipboard", "Copied Web Markdown to Clipboard"),
                         subtitle: "\(item.engineUsed) • ~\(item.estimatedTokens.formatted()) tokens",
                         symbol: "globe.desk.fill"
                     )
@@ -122,7 +124,7 @@ final class UniversalActionExecutor {
                     }
                 } catch {
                     FloatingToastController.shared.showError(
-                        title: "Không đọc được nội dung trang Web",
+                        title: L("Không đọc được nội dung trang Web", "Failed to read webpage content"),
                         subtitle: error.localizedDescription
                     )
                 }
@@ -131,7 +133,7 @@ final class UniversalActionExecutor {
         case "ai.preview_md":
             guard let first = urls.first else { return }
             FloatingToastController.shared.showProgress(
-                title: "Đang chuyển sang Markdown...",
+                title: L("Đang chuyển sang Markdown...", "Converting to Markdown..."),
                 subtitle: first.lastPathComponent
             )
             Task { @MainActor in
@@ -144,8 +146,10 @@ final class UniversalActionExecutor {
                     )
                     if let item = res.first {
                         FloatingToastController.shared.showSuccess(
-                            title: "Đã tối ưu Markdown cho AI (~\(item.estimatedTokens) tokens)",
-                            subtitle: AppSettings.shared.autoCopyMarkdownToClipboard ? "Đã chép sẵn vào Clipboard" : item.engineUsed,
+                            title: L("Đã tối ưu Markdown cho AI (~\(item.estimatedTokens) tokens)", "Optimized Markdown for AI (~\(item.estimatedTokens) tokens)"),
+                            subtitle: AppSettings.shared.autoCopyMarkdownToClipboard
+                                ? L("Đã chép sẵn vào Clipboard", "Copied to Clipboard")
+                                : item.engineUsed,
                             symbol: "doc.text.magnifyingglass"
                         )
                         viewModel.screenMode = .markdownPreview(
@@ -160,7 +164,7 @@ final class UniversalActionExecutor {
                     }
                 } catch {
                     FloatingToastController.shared.showError(
-                        title: "Lỗi Convert sang Markdown",
+                        title: L("Lỗi Convert sang Markdown", "Markdown conversion failed"),
                         subtitle: error.localizedDescription
                     )
                 }
@@ -169,7 +173,7 @@ final class UniversalActionExecutor {
         case "ai.convert_for_ai":
             LauncherPanelController.shared.hide()
             FloatingToastController.shared.showProgress(
-                title: "Đang đóng gói thư mục _AI/...",
+                title: L("Đang đóng gói thư mục _AI/...", "Packaging _AI/ bundle..."),
                 subtitle: target.primaryTitle
             )
             Task { @MainActor in
@@ -177,8 +181,8 @@ final class UniversalActionExecutor {
                     let pkgDirs = try await MarkdownConverterService.shared.convertFilesForAIPackage(urls: urls)
                     if let firstPkg = pkgDirs.first {
                         FloatingToastController.shared.showSuccess(
-                            title: "Đã tạo gói AI Package thành công",
-                            subtitle: pkgDirs.count == 1 ? firstPkg.lastPathComponent : "Đã tạo \(pkgDirs.count) thư mục _AI/",
+                            title: L("Đã tạo gói AI Package thành công", "Created AI Package successfully"),
+                            subtitle: pkgDirs.count == 1 ? firstPkg.lastPathComponent : L("Đã tạo \(pkgDirs.count) thư mục _AI/", "Created \(pkgDirs.count) _AI/ directories"),
                             symbol: "sparkles.rectangle.stack.fill"
                         )
                         if modifierFlags.contains(.command) {
@@ -187,7 +191,7 @@ final class UniversalActionExecutor {
                     }
                 } catch {
                     FloatingToastController.shared.showError(
-                        title: "Lỗi tạo gói Convert for AI",
+                        title: L("Lỗi tạo gói Convert for AI", "Failed to package Convert for AI"),
                         subtitle: error.localizedDescription
                     )
                 }
@@ -196,7 +200,7 @@ final class UniversalActionExecutor {
         case "ai.merge_folder_md":
             LauncherPanelController.shared.hide()
             FloatingToastController.shared.showProgress(
-                title: "Đang gộp tài liệu thành 1 file AI Context (.md)...",
+                title: L("Đang gộp tài liệu thành 1 file AI Context (.md)...", "Merging documents into single AI Context (.md)..."),
                 subtitle: target.primaryTitle
             )
             Task { @MainActor in
@@ -204,13 +208,13 @@ final class UniversalActionExecutor {
                     let merged = try await MarkdownConverterService.shared.mergeIntoSingleContextMarkdown(urls: urls, copyToClipboard: true)
                     let outName = merged.savedMarkdownURL?.lastPathComponent ?? "AI_Context.md"
                     FloatingToastController.shared.showSuccess(
-                        title: "Đã tạo \(outName) & Copy vào Clipboard!",
-                        subtitle: "Tổng ước tính ~\(merged.estimatedTokens.formatted()) tokens cho LLM",
+                        title: L("Đã tạo \(outName) & Copy vào Clipboard!", "Created \(outName) & Copied to Clipboard!"),
+                        subtitle: L("Tổng ước tính ~\(merged.estimatedTokens.formatted()) tokens cho LLM", "Total ~\(merged.estimatedTokens.formatted()) estimated tokens for LLMs"),
                         symbol: "square.stack.3d.up.badge.a.fill"
                     )
                 } catch {
                     FloatingToastController.shared.showError(
-                        title: "Không thể gộp tài liệu",
+                        title: L("Không thể gộp tài liệu", "Failed to merge documents"),
                         subtitle: error.localizedDescription
                     )
                 }
@@ -219,7 +223,7 @@ final class UniversalActionExecutor {
         case "ai.convert_pdf":
             LauncherPanelController.shared.hide()
             FloatingToastController.shared.showProgress(
-                title: "Đang chuyển sang PDF...",
+                title: L("Đang chuyển sang PDF...", "Converting to PDF..."),
                 subtitle: target.primaryTitle
             )
             Task { @MainActor in
@@ -227,14 +231,14 @@ final class UniversalActionExecutor {
                     let pdfs = try await MarkdownConverterService.shared.convertFilesToPDF(urls: urls)
                     if let first = pdfs.first {
                         FloatingToastController.shared.showSuccess(
-                            title: "Đã xuất PDF thành công",
-                            subtitle: pdfs.count == 1 ? first.lastPathComponent : "Đã xuất \(pdfs.count) tệp PDF",
+                            title: L("Đã xuất PDF thành công", "Exported PDF successfully"),
+                            subtitle: pdfs.count == 1 ? first.lastPathComponent : L("Đã xuất \(pdfs.count) tệp PDF", "Exported \(pdfs.count) PDF files"),
                             symbol: "doc.richtext.fill"
                         )
                     }
                 } catch {
                     FloatingToastController.shared.showError(
-                        title: "Lỗi chuyển sang PDF",
+                        title: L("Lỗi chuyển sang PDF", "Failed to convert to PDF"),
                         subtitle: error.localizedDescription
                     )
                 }
@@ -253,7 +257,7 @@ final class UniversalActionExecutor {
                         NSWorkspace.shared.open(gd.webURL)
                     } else {
                         FloatingToastController.shared.showError(
-                            title: "Không lấy được liên kết Google Drive",
+                            title: L("Không lấy được liên kết Google Drive", "Unable to get Google Drive link"),
                             subtitle: name
                         )
                     }
@@ -271,14 +275,14 @@ final class UniversalActionExecutor {
                     if let gd {
                         self.copyString(gd.shareURL.absoluteString)
                         FloatingToastController.shared.showSuccess(
-                            title: "Đã chép liên kết chia sẻ Google Drive",
+                            title: L("Đã chép liên kết chia sẻ Google Drive", "Copied Google Drive share link"),
                             subtitle: name,
                             symbol: "link"
                         )
                     } else {
                         FloatingToastController.shared.showError(
-                            title: "Không tìm thấy ID Google Drive",
-                            subtitle: "Tệp có thể chưa được đồng bộ lên đám mây"
+                            title: L("Không tìm thấy ID Google Drive", "Google Drive ID not found"),
+                            subtitle: L("Tệp có thể chưa được đồng bộ lên đám mây", "File may not be synced to the cloud yet")
                         )
                     }
                 }
@@ -296,7 +300,7 @@ final class UniversalActionExecutor {
                         NSWorkspace.shared.open(gd.shareURL)
                     } else {
                         FloatingToastController.shared.showError(
-                            title: "Không mở được trang chia sẻ",
+                            title: L("Không mở được trang chia sẻ", "Unable to open sharing settings"),
                             subtitle: name
                         )
                     }
@@ -306,15 +310,15 @@ final class UniversalActionExecutor {
         case "gdrive.offline":
             LauncherPanelController.shared.hide()
             FloatingToastController.shared.showProgress(
-                title: "Đang kích hoạt tải Offline...",
+                title: L("Đang kích hoạt tải Offline...", "Enabling offline download..."),
                 subtitle: target.primaryTitle
             )
             Task.detached(priority: .userInitiated) {
                 let count = GoogleDriveIndexService.triggerOfflineDownload(for: urls)
                 await MainActor.run {
                     FloatingToastController.shared.showSuccess(
-                        title: "Đã kích hoạt chế độ Offline",
-                        subtitle: "Đã đồng bộ \(count) tệp về máy cục bộ",
+                        title: L("Đã kích hoạt chế độ Offline", "Enabled offline mode"),
+                        subtitle: L("Đã đồng bộ \(count) tệp về máy cục bộ", "Synced \(count) files locally"),
                         symbol: "arrow.down.circle.fill"
                     )
                 }
@@ -339,7 +343,9 @@ final class UniversalActionExecutor {
                 for u in urls { _ = settings.togglePin(u.path) }
                 LauncherPanelController.shared.hide()
                 FloatingToastController.shared.showSuccess(
-                    title: urls.count == 1 ? "Đã bỏ ghim khỏi DriveBar" : "Đã bỏ ghim \(urls.count) mục",
+                    title: urls.count == 1
+                        ? L("Đã bỏ ghim khỏi DriveBar", "Unpinned from DriveBar")
+                        : L("Đã bỏ ghim \(urls.count) mục", "Unpinned \(urls.count) items"),
                     subtitle: target.primaryTitle,
                     symbol: "pin.slash"
                 )
@@ -349,7 +355,9 @@ final class UniversalActionExecutor {
                 }
                 LauncherPanelController.shared.hide()
                 FloatingToastController.shared.showSuccess(
-                    title: urls.count == 1 ? "Đã ghim lên đầu thanh tìm kiếm DriveBar" : "Đã ghim \(urls.count) mục lên đầu DriveBar",
+                    title: urls.count == 1
+                        ? L("Đã ghim lên đầu thanh tìm kiếm DriveBar", "Pinned to top of DriveBar search")
+                        : L("Đã ghim \(urls.count) mục lên đầu DriveBar", "Pinned \(urls.count) items to top of DriveBar"),
                     subtitle: target.primaryTitle,
                     symbol: "pin.fill"
                 )
@@ -387,14 +395,14 @@ final class UniversalActionExecutor {
             }
             if addedCount > 0 {
                 FloatingToastController.shared.showSuccess(
-                    title: "Đã thêm vào thư mục Mac (m)",
-                    subtitle: "\(addedCount) thư mục đã được bổ sung vào phạm vi tìm kiếm 'm'",
+                    title: L("Đã thêm vào thư mục Mac (m)", "Added to Mac Folders (m)"),
+                    subtitle: L("\(addedCount) thư mục đã được bổ sung vào phạm vi tìm kiếm 'm'", "\(addedCount) folders added to 'm' search scope"),
                     symbol: "folder.badge.plus"
                 )
             } else if removedCount > 0 {
                 FloatingToastController.shared.showSuccess(
-                    title: "Đã xóa khỏi thư mục Mac (m)",
-                    subtitle: "\(removedCount) thư mục đã được xóa khỏi phạm vi tìm kiếm 'm'",
+                    title: L("Đã xóa khỏi thư mục Mac (m)", "Removed from Mac Folders (m)"),
+                    subtitle: L("\(removedCount) thư mục đã được xóa khỏi phạm vi tìm kiếm 'm'", "\(removedCount) folders removed from 'm' search scope"),
                     symbol: "folder.badge.minus"
                 )
             }
@@ -455,7 +463,7 @@ final class UniversalActionExecutor {
             let paths = urls.map(\.path).joined(separator: "\n")
             copyString(paths)
             FloatingToastController.shared.showSuccess(
-                title: "Đã chép đường dẫn vào Clipboard",
+                title: L("Đã chép đường dẫn vào Clipboard", "Copied path to Clipboard"),
                 subtitle: urls.first?.path ?? "",
                 symbol: "link"
             )
@@ -466,8 +474,8 @@ final class UniversalActionExecutor {
             pb.clearContents()
             pb.writeObjects(urls as [NSURL])
             FloatingToastController.shared.showSuccess(
-                title: "Đã chép \(urls.count) tệp vào Clipboard",
-                subtitle: "Nhấn ⌘V ở bất kỳ đâu để dán tệp",
+                title: L("Đã chép \(urls.count) tệp vào Clipboard", "Copied \(urls.count) files to Clipboard"),
+                subtitle: L("Nhấn ⌘V ở bất kỳ đâu để dán tệp", "Press ⌘V anywhere to paste files"),
                 symbol: "doc.on.clipboard"
             )
 
@@ -475,8 +483,8 @@ final class UniversalActionExecutor {
             FileBufferService.shared.addAll(urls)
             viewModel.returnToSearchMode()
             FloatingToastController.shared.showSuccess(
-                title: "Đã thêm vào File Buffer (\(FileBufferService.shared.items.count) mục)",
-                subtitle: "Nhấn ⌥→ để thực hiện Universal Action hàng loạt",
+                title: L("Đã thêm vào File Buffer (\(FileBufferService.shared.items.count) mục)", "Added to File Buffer (\(FileBufferService.shared.items.count) items)"),
+                subtitle: L("Nhấn ⌥→ để thực hiện Universal Action hàng loạt", "Press ⌥→ to run Universal Actions in batch"),
                 symbol: "tray.and.arrow.down.fill"
             )
 
@@ -519,8 +527,8 @@ final class UniversalActionExecutor {
                 try? proc.run()
             }
             FloatingToastController.shared.showSuccess(
-                title: "Đã mở Finder & Copy từ khóa tìm kiếm",
-                subtitle: "Nhấn ⌘F rồi ⌘V trong Finder để tìm '\(q)'",
+                title: L("Đã mở Finder & Copy từ khóa tìm kiếm", "Opened Finder & Copied search keyword"),
+                subtitle: L("Nhấn ⌘F rồi ⌘V trong Finder để tìm '\(q)'", "Press ⌘F then ⌘V in Finder to find '\(q)'"),
                 symbol: "magnifyingglass.circle.fill"
             )
 
@@ -538,13 +546,13 @@ final class UniversalActionExecutor {
                 await MainActor.run {
                     if finalTrashed > 0 {
                         FloatingToastController.shared.showSuccess(
-                            title: "Đã chuyển \(finalTrashed) mục vào Thùng rác",
+                            title: L("Đã chuyển \(finalTrashed) mục vào Thùng rác", "Moved \(finalTrashed) items to Trash"),
                             subtitle: primaryLabel,
                             symbol: "trash.fill"
                         )
                     } else {
                         FloatingToastController.shared.showError(
-                            title: "Không thể chuyển vào Thùng rác",
+                            title: L("Không thể chuyển vào Thùng rác", "Unable to move to Trash"),
                             subtitle: primaryLabel
                         )
                     }
@@ -559,8 +567,8 @@ final class UniversalActionExecutor {
                 let tok = MarkdownConverterService.estimateTokens(clean)
                 copyString(clean)
                 FloatingToastController.shared.showSuccess(
-                    title: "Đã chuẩn hóa Markdown cho AI (~\(tok) tokens)",
-                    subtitle: "Đã lưu vào Clipboard sẵn sàng dán (⌘V)",
+                    title: L("Đã chuẩn hóa Markdown cho AI (~\(tok) tokens)", "Normalized Markdown for AI (~\(tok) tokens)"),
+                    subtitle: L("Đã lưu vào Clipboard sẵn sàng dán (⌘V)", "Saved to Clipboard, ready to paste (⌘V)"),
                     symbol: "wand.and.stars"
                 )
             }
@@ -576,7 +584,7 @@ final class UniversalActionExecutor {
             if case .url(let u, _) = target, let host = u.host {
                 copyString(host)
                 FloatingToastController.shared.showSuccess(
-                    title: "Đã sao chép tên miền",
+                    title: L("Đã sao chép tên miền", "Copied domain"),
                     subtitle: host,
                     symbol: "network"
                 )
@@ -587,8 +595,8 @@ final class UniversalActionExecutor {
             let plain = rawString(from: target)
             copyString(plain)
             FloatingToastController.shared.showSuccess(
-                title: "Đã sao chép dạng Plain Text",
-                subtitle: "\(plain.count) ký tự",
+                title: L("Đã sao chép dạng Plain Text", "Copied as Plain Text"),
+                subtitle: L("\(plain.count) ký tự", "\(plain.count) characters"),
                 symbol: "doc.plaintext.fill"
             )
 
@@ -605,19 +613,28 @@ final class UniversalActionExecutor {
             LauncherPanelController.shared.hide()
             let transformed = rawString(from: target).uppercased()
             copyString(transformed)
-            FloatingToastController.shared.showSuccess(title: "Đã chuyển thành IN HOA", subtitle: String(transformed.prefix(50)))
+            FloatingToastController.shared.showSuccess(
+                title: L("Đã chuyển thành IN HOA", "Converted to UPPERCASE"),
+                subtitle: String(transformed.prefix(50))
+            )
 
         case "text.case_lower":
             LauncherPanelController.shared.hide()
             let transformed = rawString(from: target).lowercased()
             copyString(transformed)
-            FloatingToastController.shared.showSuccess(title: "Đã chuyển thành chữ thường", subtitle: String(transformed.prefix(50)))
+            FloatingToastController.shared.showSuccess(
+                title: L("Đã chuyển thành chữ thường", "Converted to lowercase"),
+                subtitle: String(transformed.prefix(50))
+            )
 
         case "text.case_title":
             LauncherPanelController.shared.hide()
             let transformed = rawString(from: target).localizedCapitalized
             copyString(transformed)
-            FloatingToastController.shared.showSuccess(title: "Đã chuyển thành Title Case", subtitle: String(transformed.prefix(50)))
+            FloatingToastController.shared.showSuccess(
+                title: L("Đã chuyển thành Title Case", "Converted to Title Case"),
+                subtitle: String(transformed.prefix(50))
+            )
 
         case "text.extract_urls":
             LauncherPanelController.shared.hide()
@@ -626,10 +643,16 @@ final class UniversalActionExecutor {
             let matches = detector?.matches(in: input, options: [], range: NSRange(input.startIndex..., in: input)) ?? []
             let extracted = matches.compactMap { $0.url?.absoluteString }.joined(separator: "\n")
             if extracted.isEmpty {
-                FloatingToastController.shared.showError(title: "Không tìm thấy URL nào", subtitle: "Đoạn văn bản không chứa liên kết web")
+                FloatingToastController.shared.showError(
+                    title: L("Không tìm thấy URL nào", "No URLs found"),
+                    subtitle: L("Đoạn văn bản không chứa liên kết web", "Text does not contain web links")
+                )
             } else {
                 copyString(extracted)
-                FloatingToastController.shared.showSuccess(title: "Đã tách \(matches.count) URL vào Clipboard", subtitle: extracted)
+                FloatingToastController.shared.showSuccess(
+                    title: L("Đã tách \(matches.count) URL vào Clipboard", "Extracted \(matches.count) URLs to Clipboard"),
+                    subtitle: extracted
+                )
             }
 
         case "text.dictionary":
@@ -669,8 +692,8 @@ final class UniversalActionExecutor {
         GoogleDriveIndexService.shared.recordUsed(destinationFolder.path)
 
         FloatingToastController.shared.showProgress(
-            title: "Đang thực hiện \(operation.rawValue)",
-            subtitle: "Đích: \(destinationFolder.lastPathComponent)"
+            title: L("Đang thực hiện \(operation.localizedTitle)", "Performing \(operation.localizedTitle)"),
+            subtitle: L("Đích: \(destinationFolder.lastPathComponent)", "Destination: \(destinationFolder.lastPathComponent)")
         )
 
         Task.detached(priority: .userInitiated) {
@@ -728,15 +751,15 @@ final class UniversalActionExecutor {
             await MainActor.run {
                 if finalSuccess > 0 {
                     FloatingToastController.shared.showSuccess(
-                        title: "Đã hoàn tất \(operation.rawValue) (\(finalSuccess) mục)",
-                        subtitle: "Đích: \(destinationFolder.lastPathComponent)"
+                        title: L("Đã hoàn tất \(operation.localizedTitle) (\(finalSuccess) mục)", "Completed \(operation.localizedTitle) (\(finalSuccess) items)"),
+                        subtitle: L("Đích: \(destinationFolder.lastPathComponent)", "Destination: \(destinationFolder.lastPathComponent)")
                     )
                     if revealInFinder && !finalProduced.isEmpty {
                         NSWorkspace.shared.activateFileViewerSelecting(finalProduced)
                     }
                 } else if let finalError {
                     FloatingToastController.shared.showError(
-                        title: "Thao tác tệp thất bại",
+                        title: L("Thao tác tệp thất bại", "File operation failed"),
                         subtitle: finalError
                     )
                 }
@@ -752,9 +775,11 @@ final class UniversalActionExecutor {
         forceXMLWrap: Bool
     ) {
         guard !urls.isEmpty else { return }
-        let titleLabel = urls.count == 1 ? urls[0].lastPathComponent : "\(urls.count) tệp tài liệu"
+        let titleLabel = urls.count == 1 ? urls[0].lastPathComponent : L("\(urls.count) tệp tài liệu", "\(urls.count) document files")
         FloatingToastController.shared.showProgress(
-            title: forceOCR ? "Đang OCR Tiếng Việt sang Markdown..." : "Đang Convert sang Markdown cho AI...",
+            title: forceOCR
+                ? L("Đang OCR Tiếng Việt sang Markdown...", "Running OCR to Markdown...")
+                : L("Đang Convert sang Markdown cho AI...", "Converting to Markdown for AI..."),
             subtitle: titleLabel
         )
 
@@ -771,8 +796,10 @@ final class UniversalActionExecutor {
                     )
                     let outName = merged.savedMarkdownURL?.lastPathComponent ?? "AI_Context.md"
                     FloatingToastController.shared.showSuccess(
-                        title: copyClipboard ? "Đã gộp sang \(outName) & Copy vào Clipboard" : "Đã xuất \(outName)",
-                        subtitle: "Tổng ước tính ~\(merged.estimatedTokens.formatted()) tokens cho AI",
+                        title: copyClipboard
+                            ? L("Đã gộp sang \(outName) & Copy vào Clipboard", "Merged to \(outName) & Copied to Clipboard")
+                            : L("Đã xuất \(outName)", "Exported \(outName)"),
+                        subtitle: L("Tổng ước tính ~\(merged.estimatedTokens.formatted()) tokens cho AI", "Total ~\(merged.estimatedTokens.formatted()) estimated tokens for AI"),
                         symbol: "doc.text.magnifyingglass"
                     )
                     return
@@ -791,19 +818,19 @@ final class UniversalActionExecutor {
 
                 let mainMsg: String
                 if forceXMLWrap {
-                    mainMsg = "Đã Copy cấu trúc XML <documents> vào Clipboard"
+                    mainMsg = L("Đã Copy cấu trúc XML <documents> vào Clipboard", "Copied XML <documents> structure to Clipboard")
                 } else if saveBeside && copyClipboard {
                     let mdName = results.first?.savedMarkdownURL?.lastPathComponent ?? ".md"
                     mainMsg = results.count == 1
-                        ? "Đã tạo \(mdName) & Copy vào Clipboard"
-                        : "Đã tạo \(results.count) file .md & Copy vào Clipboard"
+                        ? L("Đã tạo \(mdName) & Copy vào Clipboard", "Created \(mdName) & Copied to Clipboard")
+                        : L("Đã tạo \(results.count) file .md & Copy vào Clipboard", "Created \(results.count) .md files & Copied to Clipboard")
                 } else if copyClipboard {
-                    mainMsg = "Đã Copy Markdown vào Clipboard (Sẵn sàng ⌘V)"
+                    mainMsg = L("Đã Copy Markdown vào Clipboard (Sẵn sàng ⌘V)", "Copied Markdown to Clipboard (Ready to ⌘V)")
                 } else {
-                    mainMsg = "Đã xuất \(results.count) file Markdown"
+                    mainMsg = L("Đã xuất \(results.count) file Markdown", "Exported \(results.count) Markdown files")
                 }
 
-                let chunkNote = totalChunks > 0 ? " • Tách \(totalChunks) phần _Chunks/" : ""
+                let chunkNote = totalChunks > 0 ? L(" • Tách \(totalChunks) phần _Chunks/", " • Split \(totalChunks) parts _Chunks/") : ""
                 FloatingToastController.shared.showSuccess(
                     title: mainMsg,
                     subtitle: "\(engine) • ~\(totalTokens.formatted()) tokens\(chunkNote)",
@@ -811,7 +838,7 @@ final class UniversalActionExecutor {
                 )
             } catch {
                 FloatingToastController.shared.showError(
-                    title: "Convert sang Markdown thất bại",
+                    title: L("Convert sang Markdown thất bại", "Markdown conversion failed"),
                     subtitle: error.localizedDescription
                 )
             }
@@ -848,14 +875,19 @@ final class UniversalActionExecutor {
         }
 
         if successCount > 0 {
-            let label = lastStateHidden ? "Đã ẩn (chflags hidden)" : "Đã bỏ ẩn (chflags nohidden)"
+            let label = lastStateHidden
+                ? L("Đã ẩn (chflags hidden)", "Hidden (chflags hidden)")
+                : L("Đã bỏ ẩn (chflags nohidden)", "Unhidden (chflags nohidden)")
             FloatingToastController.shared.showSuccess(
-                title: "\(label) cho \(successCount) mục",
+                title: L("\(label) cho \(successCount) mục", "\(label) for \(successCount) items"),
                 subtitle: urls.first?.lastPathComponent ?? "",
                 symbol: lastStateHidden ? "eye.slash.fill" : "eye.circle.fill"
             )
         } else {
-            FloatingToastController.shared.showError(title: "Không thể đổi cờ ẩn/hiện", subtitle: "Kiểm tra quyền truy cập tệp")
+            FloatingToastController.shared.showError(
+                title: L("Không thể đổi cờ ẩn/hiện", "Unable to change hidden flag"),
+                subtitle: L("Kiểm tra quyền truy cập tệp", "Check file permissions")
+            )
         }
     }
 
@@ -905,8 +937,8 @@ final class UniversalActionExecutor {
         }
 
         FloatingToastController.shared.showProgress(
-            title: "Đang nén thành tệp .ZIP...",
-            subtitle: urls.count == 1 ? first.lastPathComponent : "\(urls.count) mục đã chọn"
+            title: L("Đang nén thành tệp .ZIP...", "Compressing to .ZIP..."),
+            subtitle: urls.count == 1 ? first.lastPathComponent : L("\(urls.count) mục đã chọn", "\(urls.count) items selected")
         )
 
         Task.detached(priority: .userInitiated) {
@@ -972,7 +1004,7 @@ final class UniversalActionExecutor {
                 if succeeded {
                     GoogleDriveIndexService.shared.rebuildFileCacheInBackground()
                     FloatingToastController.shared.showSuccess(
-                        title: "Đã tạo \(finalZipURL.lastPathComponent)",
+                        title: L("Đã tạo \(finalZipURL.lastPathComponent)", "Created \(finalZipURL.lastPathComponent)"),
                         subtitle: parentDir.lastPathComponent,
                         symbol: "doc.zipper"
                     )
@@ -981,8 +1013,8 @@ final class UniversalActionExecutor {
                     }
                 } else {
                     FloatingToastController.shared.showError(
-                        title: "Nén tệp .ZIP thất bại",
-                        subtitle: "Kiểm tra quyền ghi tại thư mục đích"
+                        title: L("Nén tệp .ZIP thất bại", "Failed to compress .ZIP"),
+                        subtitle: L("Kiểm tra quyền ghi tại thư mục đích", "Check write permissions at destination")
                     )
                 }
             }
@@ -992,7 +1024,7 @@ final class UniversalActionExecutor {
     private func performArchiveExtraction(urls: [URL]) {
         guard !urls.isEmpty else { return }
         FloatingToastController.shared.showProgress(
-            title: "Đang giải nén tệp lưu trữ...",
+            title: L("Đang giải nén tệp lưu trữ...", "Extracting archive..."),
             subtitle: urls[0].lastPathComponent
         )
 
@@ -1043,7 +1075,7 @@ final class UniversalActionExecutor {
                     proc.arguments = ["-q", "-o", destDir.path, archiveURL.path]
                 } else {
                     try? fm.removeItem(at: destDir)
-                    lastError = "Định dạng .\(ext) cần cài thêm công cụ 'unar' (brew install unar)"
+                    lastError = L("Định dạng .\(ext) cần cài thêm công cụ 'unar' (brew install unar)", "Format .\(ext) requires 'unar' (brew install unar)")
                     continue
                 }
 
@@ -1054,11 +1086,11 @@ final class UniversalActionExecutor {
                         extractedDirs.append(destDir)
                     } else {
                         try? fm.removeItem(at: destDir)
-                        lastError = "Giải nén '\(fileName)' không thành công"
+                        lastError = L("Giải nén '\(fileName)' không thành công", "Failed to extract '\(fileName)'")
                     }
                 } else {
                     try? fm.removeItem(at: destDir)
-                    lastError = "Không thể khởi chạy trình giải nén"
+                    lastError = L("Không thể khởi chạy trình giải nén", "Unable to launch extractor")
                 }
             }
 
@@ -1069,16 +1101,16 @@ final class UniversalActionExecutor {
                     GoogleDriveIndexService.shared.rebuildAllCaches()
                     FloatingToastController.shared.showSuccess(
                         title: finalDirs.count == 1
-                            ? "Đã giải nén vào '\(finalDirs[0].lastPathComponent)'"
-                            : "Đã giải nén \(finalDirs.count) gói lưu trữ",
+                            ? L("Đã giải nén vào '\(finalDirs[0].lastPathComponent)'", "Extracted into '\(finalDirs[0].lastPathComponent)'")
+                            : L("Đã giải nén \(finalDirs.count) gói lưu trữ", "Extracted \(finalDirs.count) archives"),
                         subtitle: finalDirs[0].deletingLastPathComponent().lastPathComponent,
                         symbol: "archivebox.fill"
                     )
                     NSWorkspace.shared.activateFileViewerSelecting(finalDirs)
                 } else {
                     FloatingToastController.shared.showError(
-                        title: "Giải nén thất bại",
-                        subtitle: finalErr ?? "Tệp nén bị lỗi hoặc không được hỗ trợ"
+                        title: L("Giải nén thất bại", "Extraction failed"),
+                        subtitle: finalErr ?? L("Tệp nén bị lỗi hoặc không được hỗ trợ", "Archive is damaged or unsupported")
                     )
                 }
             }

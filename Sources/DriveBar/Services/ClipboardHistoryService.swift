@@ -100,7 +100,7 @@ final class ClipboardHistoryService: ObservableObject {
             let joined = paths.joined(separator: "\n")
             let firstTitle = urls.count == 1
                 ? urls[0].lastPathComponent
-                : "\(urls.count) tệp/thư mục (\(urls[0].lastPathComponent)...)"
+                : "\(urls.count) \(L("tệp/thư mục", "files/folders")) (\(urls[0].lastPathComponent)...)"
             let entry = ClipboardHistoryEntry(
                 id: UUID().uuidString,
                 kind: .files,
@@ -180,8 +180,8 @@ final class ClipboardHistoryService: ObservableObject {
                 let entry = ClipboardHistoryEntry(
                     id: id,
                     kind: .image,
-                    title: "Ảnh chụp màn hình / Hình ảnh (\(w)×\(h) • \(byteStr))",
-                    textContent: "Hình ảnh Clipboard \(w)x\(h)",
+                    title: "\(L("Ảnh chụp màn hình / Hình ảnh", "Screenshot / Image")) (\(w)×\(h) • \(byteStr))",
+                    textContent: "\(L("Hình ảnh Clipboard", "Clipboard Image")) \(w)x\(h)",
                     filePaths: [filePath],
                     sourceAppName: appName ?? "Screenshot",
                     timestamp: Date().timeIntervalSince1970,
@@ -317,9 +317,9 @@ final class ClipboardHistoryService: ObservableObject {
                 SearchResultItem(
                     id: "clip:empty",
                     title: entries.isEmpty
-                        ? "Lịch sử Clipboard hiện đang trống"
-                        : "Không tìm thấy mục Clipboard nào khớp '\(query)'",
-                    subtitle: "Sao chép văn bản, liên kết, tệp tin hoặc chụp ảnh màn hình (⌘⌃⇧4) để DriveBar lưu tự động",
+                        ? L("Lịch sử Clipboard hiện đang trống", "Clipboard history is empty")
+                        : "\(L("Không tìm thấy mục Clipboard nào khớp", "No clipboard items matching")) '\(query)'",
+                    subtitle: L("Sao chép văn bản, liên kết, tệp tin hoặc chụp ảnh màn hình (⌘⌃⇧4) để DriveBar lưu tự động", "Copy text, links, files, or take screenshots (⌘⌃⇧4) to auto-save in DriveBar"),
                     path: nil,
                     isDirectory: false,
                     kind: .infoBanner,
@@ -330,7 +330,7 @@ final class ClipboardHistoryService: ObservableObject {
         }
 
         let relFormatter = RelativeDateTimeFormatter()
-        relFormatter.locale = Locale(identifier: "vi_VN")
+        relFormatter.locale = Locale(identifier: AppLocalization.isVietnamese ? "vi_VN" : "en_US")
         relFormatter.unitsStyle = .abbreviated
         let now = Date()
 
@@ -347,27 +347,27 @@ final class ClipboardHistoryService: ObservableObject {
             switch entry.kind {
             case .text:
                 let lineCount = max(1, entry.textContent.components(separatedBy: .newlines).count)
-                subParts.append("\(entry.charCount.formatted()) ký tự" + (lineCount > 1 ? " • \(lineCount) dòng" : ""))
-                subParts.append("↩ Dán ngay • ⌥↩ Chỉ Copy • ⇧ Quick Look")
-                badgeText = "Văn bản"
+                subParts.append("\(entry.charCount.formatted()) \(L("ký tự", "chars"))" + (lineCount > 1 ? " • \(lineCount) \(L("dòng", "lines"))" : ""))
+                subParts.append(L("↩ Dán ngay • ⌥↩ Chỉ Copy • ⇧ Quick Look", "↩ Paste Now • ⌥↩ Copy Only • ⇧ Quick Look"))
+                badgeText = L("Văn bản", "Text")
                 fallbackSym = "doc.on.clipboard"
                 itemPath = nil
 
             case .url:
-                subParts.append("↩ Dán ngay • ⌘↩ Mở trình duyệt • ⇥ Convert sang .MD")
+                subParts.append(L("↩ Dán ngay • ⌘↩ Mở trình duyệt • ⇥ Convert sang .MD", "↩ Paste Now • ⌘↩ Open Browser • ⇥ Convert to .MD"))
                 badgeText = "URL"
                 fallbackSym = "link"
                 itemPath = nil
 
             case .files:
-                subParts.append("↩ Dán tệp • ⌘↩ Hiện Finder • ⇥ Universal Actions")
-                badgeText = entry.filePaths.count > 1 ? "\(entry.filePaths.count) tệp" : "Tệp"
+                subParts.append(L("↩ Dán tệp • ⌘↩ Hiện Finder • ⇥ Universal Actions", "↩ Paste Files • ⌘↩ Reveal in Finder • ⇥ Universal Actions"))
+                badgeText = entry.filePaths.count > 1 ? "\(entry.filePaths.count) \(L("tệp", "files"))" : L("Tệp", "File")
                 fallbackSym = "doc.on.doc"
                 itemPath = entry.filePaths.first
 
             case .image:
-                subParts.append("↩ Dán ảnh • ⇧ Quick Look • ⇥ OCR Tiếng Việt sang .MD")
-                badgeText = "Hình ảnh"
+                subParts.append(L("↩ Dán ảnh • ⇧ Quick Look • ⇥ OCR sang .MD", "↩ Paste Image • ⇧ Quick Look • ⇥ OCR to .MD"))
+                badgeText = L("Hình ảnh", "Image")
                 fallbackSym = "photo"
                 itemPath = entry.filePaths.first
             }
@@ -430,7 +430,7 @@ final class ClipboardHistoryService: ObservableObject {
 
         guard autoPaste else {
             FloatingToastController.shared.showSuccess(
-                title: "Đã sao chép lại vào Clipboard",
+                title: L("Đã sao chép lại vào Clipboard", "Copied back to Clipboard"),
                 subtitle: entry.title,
                 symbol: "doc.on.clipboard"
             )
@@ -454,7 +454,7 @@ final class ClipboardHistoryService: ObservableObject {
             }
         } else {
             FloatingToastController.shared.showSuccess(
-                title: "Đã lưu vào Clipboard (Nhấn ⌘V để dán)",
+                title: L("Đã lưu vào Clipboard (Nhấn ⌘V để dán)", "Saved to Clipboard (Press ⌘V to paste)"),
                 subtitle: entry.title,
                 symbol: "doc.on.clipboard"
             )

@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 struct LauncherRootView: View {
     @ObservedObject var viewModel: LauncherViewModel
+    @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var driveService = GoogleDriveIndexService.shared
     @ObservedObject private var bufferService = FileBufferService.shared
 
@@ -75,7 +76,7 @@ struct LauncherRootView: View {
             }
             if !droppedURLs.isEmpty {
                 viewModel.openUniversalActions(
-                    for: .files(droppedURLs, sourceNote: "Kéo thả"),
+                    for: .files(droppedURLs, sourceNote: L("Kéo thả", "Drag & Drop")),
                     directExternalTrigger: false
                 )
             }
@@ -88,6 +89,7 @@ struct LauncherRootView: View {
 private struct SearchModeContentView: View {
     @ObservedObject var viewModel: LauncherViewModel
     @ObservedObject var driveService: GoogleDriveIndexService
+    @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -99,7 +101,7 @@ private struct SearchModeContentView: View {
 
                 NativeSearchInputField(
                     text: $viewModel.searchText,
-                    placeholder: "Tìm thư mục, tệp & ứng dụng ('m ' mục Mac, 'c ' danh bạ, 'cb ' clipboard, 'a ' app, 's ' lệnh)...",
+                    placeholder: L("Tìm thư mục, tệp & ứng dụng ('m ' mục Mac, 'c ' danh bạ, 'cb ' clipboard, 'a ' app, 's ' lệnh)...", "Search folders, files & apps ('m ' Mac folders, 'c ' contacts, 'cb ' clipboard, 'a ' apps, 's ' system)..."),
                     fontSize: 18,
                     focusTrigger: viewModel.focusTrigger,
                     selectAllOnFocus: viewModel.selectAllOnFocus,
@@ -114,7 +116,7 @@ private struct SearchModeContentView: View {
                 if viewModel.isLoadingBrowseFiles {
                     ProgressView()
                         .controlSize(.small)
-                        .help("Đang đọc danh sách tệp trong thư mục ở nền...")
+                        .help(L("Đang đọc danh sách tệp trong thư mục ở nền...", "Reading directory files in background..."))
                 }
 
                 if !viewModel.searchText.isEmpty {
@@ -127,13 +129,13 @@ private struct SearchModeContentView: View {
                             .foregroundStyle(.tertiary)
                     }
                     .buttonStyle(.plain)
-                    .help("Xóa nội dung tìm kiếm (Esc)")
+                    .help(L("Xóa nội dung tìm kiếm (Esc)", "Clear search query (Esc)"))
                 }
 
                 if driveService.isRebuildingFolders || driveService.isRebuildingShared || driveService.isRebuildingFiles || driveService.isRebuildingMacFolders {
                     HStack(spacing: 5) {
                         ProgressView().controlSize(.small)
-                        Text(driveService.rebuildProgressText ?? "Đang đồng bộ...")
+                        Text(driveService.rebuildProgressText ?? L("Đang đồng bộ...", "Syncing..."))
                             .font(.system(size: 11, weight: .regular))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -280,11 +282,11 @@ private struct SearchResultRowView: View {
                             .onTapGesture {
                                 onOpenActions()
                             }
-                            .help("Mở Universal Actions & Convert sang Markdown (Phím →, Tab hoặc ⌘/)")
+                            .help(L("Mở Universal Actions & Convert sang Markdown (Phím →, Tab hoặc ⌘/)", "Open Universal Actions & Convert to Markdown (→, Tab or ⌘/)"))
                     }
 
                     if case .contactItem = item.kind {
-                        Text("Chi tiết ↩")
+                        Text(L("Chi tiết ↩", "Detail ↩"))
                             .font(.system(size: 10.5, weight: .medium))
                             .foregroundStyle(.white.opacity(0.95))
                             .lineLimit(1)
@@ -319,7 +321,7 @@ private struct SearchResultRowView: View {
                             .onTapGesture {
                                 onOpenActions()
                             }
-                            .help("Mở Universal Actions cho mục này")
+                            .help(L("Mở Universal Actions cho mục này", "Open Universal Actions for this item"))
                     }
                     Text("⌘\(index + 1)")
                         .font(.system(size: 11, weight: .regular, design: .monospaced))
@@ -351,13 +353,13 @@ private struct SearchResultRowView: View {
         if isSelected, case .contactItem(let contactID) = item.kind {
             if activeModifiers.contains(.option),
                let rec = ContactsSearchService.shared.contact(withID: contactID) {
-                return "⌥↩ Sao chép nhanh \(rec.primaryQuickCopyLabel): \(rec.primaryQuickCopyValue)"
+                return "\(L("⌥↩ Sao chép nhanh", "⌥↩ Quick copy")) \(rec.primaryQuickCopyLabel): \(rec.primaryQuickCopyValue)"
             }
             if activeModifiers.contains(.command) {
-                return "⌘↩ Mở liên hệ này trong ứng dụng Danh bạ macOS"
+                return L("⌘↩ Mở liên hệ này trong ứng dụng Danh bạ macOS", "⌘↩ Open contact in macOS Contacts app")
             }
             if activeModifiers.contains(.shift) {
-                return "⇧ (Thả phím Shift) Phóng to chữ Large Type"
+                return L("⇧ (Thả phím Shift) Phóng to chữ Large Type", "⇧ (Release Shift) Show Large Type")
             }
             return item.subtitle
         }
@@ -366,40 +368,40 @@ private struct SearchResultRowView: View {
         }
         if isSelected, case .clipboardItem = item.kind {
             if activeModifiers.contains(.option) {
-                return "⌥↩ Chỉ sao chép lại vào Clipboard (không tự dán)"
+                return L("⌥↩ Chỉ sao chép lại vào Clipboard (không tự dán)", "⌥↩ Copy to Clipboard only (no paste)")
             }
             if activeModifiers.contains(.command) && item.path != nil {
-                return "⌘↩ Mở vị trí tệp / ảnh trong Finder  •  ⇥ Mở Universal Actions"
+                return L("⌘↩ Mở vị trí tệp / ảnh trong Finder  •  ⇥ Mở Universal Actions", "⌘↩ Reveal file / image in Finder  •  ⇥ Universal Actions")
             }
             if activeModifiers.contains(.shift) {
-                return "⇧ (Thả phím Shift) Xem nhanh Quick Look  •  ⇧↩ Mở Universal Actions"
+                return L("⇧ (Thả phím Shift) Xem nhanh Quick Look  •  ⇧↩ Mở Universal Actions", "⇧ (Release Shift) Quick Look  •  ⇧↩ Universal Actions")
             }
             return item.subtitle
         }
         guard isSelected, item.path != nil else { return item.subtitle }
         if case .localApp = item.kind {
             if activeModifiers.contains(.command) {
-                return "⌘↩ Mở vị trí ứng dụng trong Finder  •  ⌘D Ghim  •  ⌘/ Universal Actions"
+                return L("⌘↩ Mở vị trí ứng dụng trong Finder  •  ⌘D Ghim  •  ⌘/ Universal Actions", "⌘↩ Reveal application in Finder  •  ⌘D Pin  •  ⌘/ Universal Actions")
             }
             if activeModifiers.contains(.option) {
-                return "⌥↩ Sao chép đường dẫn ứng dụng vào Clipboard"
+                return L("⌥↩ Sao chép đường dẫn ứng dụng vào Clipboard", "⌥↩ Copy application path to Clipboard")
             }
             if activeModifiers.contains(.shift) {
-                return "⇧↩ Mở Universal Actions cho ứng dụng này"
+                return L("⇧↩ Mở Universal Actions cho ứng dụng này", "⇧↩ Open Universal Actions for this app")
             }
             return item.subtitle
         }
         if activeModifiers.contains(.command) {
-            return "⌘↩ Mở vị trí trực tiếp trong Finder  •  ⌘D Ghim  •  ⌘/ Universal Actions"
+            return L("⌘↩ Mở vị trí trực tiếp trong Finder  •  ⌘D Ghim  •  ⌘/ Universal Actions", "⌘↩ Reveal in Finder  •  ⌘D Pin  •  ⌘/ Universal Actions")
         }
         if activeModifiers.contains(.option) {
-            return "⌥↩ Sao chép liên kết chia sẻ Google Drive vào Clipboard"
+            return L("⌥↩ Sao chép liên kết chia sẻ Google Drive vào Clipboard", "⌥↩ Copy Google Drive share link to Clipboard")
         }
         if activeModifiers.contains(.control) {
-            return "⌃↩ Mở trực tiếp trên trình duyệt Google Drive Web"
+            return L("⌃↩ Mở trực tiếp trên trình duyệt Google Drive Web", "⌃↩ Open directly in Google Drive Web")
         }
         if activeModifiers.contains(.shift) {
-            return "⇧ (Thả phím Shift) Xem nhanh Quick Look  •  ⇧↩ Mở Universal Actions"
+            return L("⇧ (Thả phím Shift) Xem nhanh Quick Look  •  ⇧↩ Mở Universal Actions", "⇧ (Release Shift) Quick Look  •  ⇧↩ Universal Actions")
         }
         return item.subtitle
     }
@@ -413,17 +415,17 @@ private struct SearchFooterBar: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            FooterShortcutHint(key: "↩", label: "Mở")
+            FooterShortcutHint(key: "↩", label: L("Mở", "Open"))
             FooterShortcutHint(key: "⇥", label: "Actions")
             if updater.availableVersion == nil {
-                FooterShortcutHint(key: "⇧", label: "Xem nhanh")
-                FooterShortcutHint(key: "⌘D", label: "Ghim")
+                FooterShortcutHint(key: "⇧", label: L("Xem nhanh", "Quick Look"))
+                FooterShortcutHint(key: "⌘D", label: L("Ghim", "Pin"))
             }
 
             Spacer(minLength: 4)
 
             if folderCount > 0 && updater.availableVersion == nil {
-                Text("\(folderCount.formatted()) mục")
+                Text(L("\(folderCount.formatted()) mục", "\(folderCount.formatted()) items"))
                     .lineLimit(1)
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: true, vertical: false)
@@ -434,7 +436,7 @@ private struct SearchFooterBar: View {
                     LauncherPanelController.shared.hide()
                     updater.installAvailableUpdate()
                 } label: {
-                    Label("Cập nhật v\(ver)", systemImage: "arrow.down.circle.fill")
+                    Label(L("Cập nhật v\(ver)", "Update v\(ver)"), systemImage: "arrow.down.circle.fill")
                         .font(.system(size: 10.5, weight: .medium))
                         .lineLimit(1)
                         .foregroundStyle(.primary)
@@ -444,7 +446,7 @@ private struct SearchFooterBar: View {
                 }
                 .buttonStyle(.plain)
                 .fixedSize(horizontal: true, vertical: false)
-                .help("Tự động tải và cập nhật phiên bản mới từ GitHub")
+                .help(L("Tự động tải và cập nhật phiên bản mới từ GitHub", "Automatically download and update from GitHub"))
             }
 
             Button {
@@ -452,26 +454,26 @@ private struct SearchFooterBar: View {
                 viewModel.triggerInputFocus(selectAll: false)
             } label: {
                 footerCheckPill(
-                    title: "Khởi động cùng macOS",
+                    title: L("Khởi động cùng macOS", "Launch at login"),
                     isChecked: settings.launchAtLogin
                 )
             }
             .buttonStyle(.plain)
             .fixedSize(horizontal: true, vertical: false)
-            .help("Tự động chạy nền DriveBar ngay khi đăng nhập vào macOS")
+            .help(L("Tự động chạy nền DriveBar ngay khi đăng nhập vào macOS", "Start DriveBar in background on macOS login"))
 
             Button {
                 settings.showLauncherOnStartup.toggle()
                 viewModel.triggerInputFocus(selectAll: false)
             } label: {
                 footerCheckPill(
-                    title: "Bật bảng này khi khởi động",
+                    title: L("Bật bảng này khi khởi động", "Show launcher on startup"),
                     isChecked: settings.showLauncherOnStartup
                 )
             }
             .buttonStyle(.plain)
             .fixedSize(horizontal: true, vertical: false)
-            .help("Tự động mở sẵn thanh Tìm kiếm này ngay khi khởi động DriveBar")
+            .help(L("Tự động mở sẵn thanh Tìm kiếm này ngay khi khởi động DriveBar", "Automatically show launcher window on app startup"))
 
             Button {
                 LauncherPanelController.shared.hide()
@@ -479,23 +481,23 @@ private struct SearchFooterBar: View {
                     WindowSwitcherController.shared.openPinnedFromMenuOrSearch()
                 }
             } label: {
-                footerActionPill("Cửa sổ \(settings.windowSwitcherHotKey.readableDisplay)", monospaced: true)
+                footerActionPill(L("Cửa sổ \(settings.windowSwitcherHotKey.readableDisplay)", "Windows \(settings.windowSwitcherHotKey.readableDisplay)"), monospaced: true)
             }
             .buttonStyle(.plain)
             .fixedSize(horizontal: true, vertical: false)
             .contextMenu {
-                Button("Mở Windows Preview ngay") {
+                Button(L("Mở Windows Preview ngay", "Open Windows Preview now")) {
                     LauncherPanelController.shared.hide()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
                         WindowSwitcherController.shared.openPinnedFromMenuOrSearch()
                     }
                 }
-                Button("Cài đặt Windows Preview (\(settings.windowSwitcherHotKey.readableDisplay))...") {
+                Button(L("Cài đặt Windows Preview (\(settings.windowSwitcherHotKey.readableDisplay))...", "Configure Windows Preview (\(settings.windowSwitcherHotKey.readableDisplay))...")) {
                     LauncherPanelController.shared.hide()
                     HotKeyService.shared.openSettingsAndRecord(.windowSwitcher)
                 }
             }
-            .help("Mở Windows Preview (Chuột phải để đổi phím tắt \(settings.windowSwitcherHotKey.readableDisplay))")
+            .help(L("Mở Windows Preview (Chuột phải để đổi phím tắt \(settings.windowSwitcherHotKey.readableDisplay))", "Open Windows Preview (Right-click to configure \(settings.windowSwitcherHotKey.readableDisplay))"))
 
             Button {
                 LauncherPanelController.shared.hide()
@@ -509,37 +511,37 @@ private struct SearchFooterBar: View {
             .buttonStyle(.plain)
             .fixedSize(horizontal: true, vertical: false)
             .contextMenu {
-                Button("Cài đặt DriveBar (⌘,)...") {
+                Button(L("Cài đặt DriveBar (⌘,)...", "DriveBar Settings (⌘,)...")) {
                     LauncherPanelController.shared.hide()
                     AppDelegate.shared?.openSettingsWindow()
                 }
                 Divider()
-                Button(settings.launchAtLogin ? "✓ Khởi động cùng macOS" : "Khởi động cùng macOS") {
+                Button(settings.launchAtLogin ? L("✓ Khởi động cùng macOS", "✓ Launch at login") : L("Khởi động cùng macOS", "Launch at login")) {
                     settings.toggleLaunchAtLogin(!settings.launchAtLogin)
                 }
-                Button(settings.showLauncherOnStartup ? "✓ Bật bảng này khi khởi động" : "Bật bảng này khi khởi động") {
+                Button(settings.showLauncherOnStartup ? L("✓ Bật bảng này khi khởi động", "✓ Show launcher on startup") : L("Bật bảng này khi khởi động", "Show launcher on startup")) {
                     settings.showLauncherOnStartup.toggle()
                 }
-                Button(settings.showDockIcon ? "Ẩn khỏi thanh Dock" : "Hiện trên thanh Dock") {
+                Button(settings.showDockIcon ? L("Ẩn khỏi thanh Dock", "Hide from Dock") : L("Hiện trên thanh Dock", "Show on Dock")) {
                     settings.showDockIcon.toggle()
                 }
                 Divider()
-                Button("Đổi phím tắt Tìm kiếm (\(settings.searchHotKey.readableDisplay))...") {
+                Button(L("Đổi phím tắt Tìm kiếm (\(settings.searchHotKey.readableDisplay))...", "Change Search Hotkey (\(settings.searchHotKey.readableDisplay))...")) {
                     LauncherPanelController.shared.hide()
                     HotKeyService.shared.openSettingsAndRecord(.search)
                 }
-                Button("Đổi phím tắt Universal Actions (\(settings.universalActionHotKey.readableDisplay))...") {
+                Button(L("Đổi phím tắt Universal Actions (\(settings.universalActionHotKey.readableDisplay))...", "Change Universal Actions Hotkey (\(settings.universalActionHotKey.readableDisplay))...")) {
                     LauncherPanelController.shared.hide()
                     HotKeyService.shared.openSettingsAndRecord(.universalAction)
                 }
                 Divider()
-                Button("Kiểm tra cập nhật...") {
+                Button(L("Kiểm tra cập nhật...", "Check for Updates...")) {
                     LauncherPanelController.shared.hide()
                     AppDelegate.shared?.openSettingsWindow()
                     UpdateCheckerService.shared.checkForUpdatesManually()
                 }
             }
-            .help("Cài đặt DriveBar (⌘,) • Chuột phải để truy cập nhanh tùy chọn khởi động & phím tắt")
+            .help(L("Cài đặt DriveBar (⌘,) • Chuột phải để truy cập nhanh tùy chọn khởi động & phím tắt", "DriveBar Settings (⌘,) • Right-click for quick shortcuts"))
         }
         .font(.system(size: 10.5, weight: .regular))
         .foregroundStyle(.secondary)
@@ -594,6 +596,7 @@ private struct SearchFooterBar: View {
 // MARK: - File Buffer Strip
 
 private struct FileBufferStripView: View {
+    @ObservedObject private var settings = AppSettings.shared
     @ObservedObject var bufferService: FileBufferService
     @ObservedObject var viewModel: LauncherViewModel
 
@@ -603,7 +606,7 @@ private struct FileBufferStripView: View {
                 .foregroundStyle(.secondary)
                 .font(.system(size: 12, weight: .medium))
 
-            Text("Buffer (\(bufferService.items.count)):")
+            Text(L("Buffer (\(bufferService.items.count)):", "Buffer (\(bufferService.items.count)):"))
                 .font(.system(size: 11.5, weight: .medium))
 
             ScrollView(.horizontal, showsIndicators: false) {
@@ -631,16 +634,16 @@ private struct FileBufferStripView: View {
 
             Spacer()
 
-            Button("Actions (⌥→)") {
+            Button(L("Tác vụ (⌥→)", "Actions (⌥→)")) {
                 viewModel.openUniversalActions(
-                    for: .files(bufferService.items, sourceNote: "File Buffer"),
+                    for: .files(bufferService.items, sourceNote: L("Bộ nhớ tạm tập tin", "File Buffer")),
                     directExternalTrigger: false
                 )
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.mini)
 
-            Button("Xóa (⌥⌫)") {
+            Button(L("Xóa (⌥⌫)", "Clear (⌥⌫)")) {
                 bufferService.clear()
             }
             .buttonStyle(.bordered)
@@ -655,6 +658,7 @@ private struct FileBufferStripView: View {
 // MARK: - Open With & Destination Folder Pickers
 
 private struct OpenWithPickerView: View {
+    @ObservedObject private var settings = AppSettings.shared
     @ObservedObject var viewModel: LauncherViewModel
     let fileURL: URL
     let previousTarget: ActionTarget
@@ -665,16 +669,16 @@ private struct OpenWithPickerView: View {
                 Button {
                     viewModel.openUniversalActions(for: previousTarget, directExternalTrigger: viewModel.openedDirectlyInUniversalActions)
                 } label: {
-                    Label("Quay lại", systemImage: "chevron.left")
+                    Label(L("Quay lại", "Back"), systemImage: "chevron.left")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
 
-                Text("Mở '\(fileURL.lastPathComponent)' bằng ứng dụng:")
+                Text(L("Mở '\(fileURL.lastPathComponent)' bằng ứng dụng:", "Open '\(fileURL.lastPathComponent)' with:"))
                     .font(.system(size: 13.5, weight: .semibold))
                     .lineLimit(1)
                 Spacer()
-                Text("↩ Mở  •  ← / Esc để quay lại")
+                Text(L("↩ Mở  •  ← / Esc để quay lại", "↩ Open  •  ← / Esc to back"))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -729,6 +733,7 @@ private struct OpenWithPickerView: View {
 }
 
 private struct DestinationFolderPickerView: View {
+    @ObservedObject private var settings = AppSettings.shared
     @ObservedObject var viewModel: LauncherViewModel
     let operation: FileTransferOperation
     let sources: [URL]
@@ -742,17 +747,17 @@ private struct DestinationFolderPickerView: View {
                         directExternalTrigger: viewModel.openedDirectlyInUniversalActions
                     )
                 } label: {
-                    Label("Quay lại", systemImage: "chevron.left")
+                    Label(L("Quay lại", "Back"), systemImage: "chevron.left")
                         .font(.system(size: 11.5, weight: .medium))
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
 
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(operation.rawValue)
+                    Text(operation.localizedTitle)
                         .font(.system(size: 13.5, weight: .semibold))
                         .foregroundStyle(.primary)
-                    Text(sources.count == 1 ? sources[0].lastPathComponent : "\(sources.count) mục đã chọn")
+                    Text(sources.count == 1 ? sources[0].lastPathComponent : L("\(sources.count) mục đã chọn", "\(sources.count) items selected"))
                         .font(.system(size: 11.5))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -760,7 +765,7 @@ private struct DestinationFolderPickerView: View {
 
                 Spacer()
 
-                Text("\(sources.count) mục")
+                Text(L("\(sources.count) mục", "\(sources.count) items"))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 8)
@@ -778,7 +783,10 @@ private struct DestinationFolderPickerView: View {
 
                 NativeSearchInputField(
                     text: $viewModel.destinationSearchText,
-                    placeholder: "Gõ tìm thư mục Google Drive đích (hoặc nhấn Tab / → để duyệt cây thư mục con)...",
+                    placeholder: L(
+                        "Gõ tìm thư mục Google Drive đích (hoặc nhấn Tab / → để duyệt cây thư mục con)...",
+                        "Search target Google Drive folder (or press Tab / → to browse subfolders)..."
+                    ),
                     fontSize: 15,
                     focusTrigger: viewModel.focusTrigger,
                     selectAllOnFocus: false,
@@ -845,12 +853,12 @@ private struct DestinationFolderPickerView: View {
             Divider()
 
             HStack(spacing: 12) {
-                FooterShortcutHint(key: "↩", label: "Thực hiện tại đây")
-                FooterShortcutHint(key: "⇥", label: "Duyệt thư mục con")
-                FooterShortcutHint(key: "⌘↩", label: "Thực hiện & Mở Finder")
-                FooterShortcutHint(key: "⇧", label: "Quick Look")
+                FooterShortcutHint(key: "↩", label: L("Thực hiện tại đây", "Run here"))
+                FooterShortcutHint(key: "⇥", label: L("Duyệt thư mục con", "Browse subfolder"))
+                FooterShortcutHint(key: "⌘↩", label: L("Thực hiện & Mở Finder", "Run & Reveal in Finder"))
+                FooterShortcutHint(key: "⇧", label: L("Quick Look", "Quick Look"))
                 Spacer()
-                FooterShortcutHint(key: "Esc", label: "Quay lại")
+                FooterShortcutHint(key: "Esc", label: L("Quay lại", "Back"))
             }
             .font(.system(size: 10.5, weight: .regular))
             .foregroundStyle(.secondary)

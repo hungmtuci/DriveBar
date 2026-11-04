@@ -11,14 +11,25 @@ final class SettingsUIState: ObservableObject {
     static let shared = SettingsUIState()
 
     enum Tab: String, CaseIterable, Identifiable {
-        case general = "Cài đặt chung"
-        case googleDrive = "Google Drive & Đồng bộ"
-        case windowSwitcher = "Windows Preview"
-        case systemAndContacts = "Hệ thống & Danh bạ"
-        case aiMarkdown = "Convert Markdown"
-        case actions = "Universal Actions"
+        case general = "general"
+        case googleDrive = "googleDrive"
+        case windowSwitcher = "windowSwitcher"
+        case systemAndContacts = "systemAndContacts"
+        case aiMarkdown = "aiMarkdown"
+        case actions = "actions"
 
         var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .general: return L("Cài đặt chung", "General")
+            case .googleDrive: return L("Google Drive & Đồng bộ", "Google Drive & Sync")
+            case .windowSwitcher: return L("Windows Preview", "Windows Preview")
+            case .systemAndContacts: return L("Hệ thống & Danh bạ", "System & Contacts")
+            case .aiMarkdown: return L("Convert Markdown", "Convert Markdown")
+            case .actions: return L("Universal Actions", "Universal Actions")
+            }
+        }
 
         var sfSymbol: String {
             switch self {
@@ -34,17 +45,17 @@ final class SettingsUIState: ObservableObject {
         var pageSubtitle: String {
             switch self {
             case .general:
-                return "Khởi động, thanh Dock, phím tắt toàn cục và lịch sử Clipboard"
+                return L("Khởi động, ngôn ngữ, thanh Dock, phím tắt toàn cục và lịch sử Clipboard", "Startup, language, Dock, global shortcuts, and Clipboard history")
             case .googleDrive:
-                return "Chỉ mục tìm kiếm tức thời Google Drive và đồng bộ đa thiết bị"
+                return L("Chỉ mục tìm kiếm tức thời Google Drive và đồng bộ đa thiết bị", "Instant Google Drive index and multi-device sync")
             case .windowSwitcher:
-                return "Chuyển đổi và xem trước trực tiếp các cửa sổ đang mở trên mọi màn hình"
+                return L("Chuyển đổi và xem trước trực tiếp các cửa sổ đang mở trên mọi màn hình", "Switch and live preview open windows across displays")
             case .systemAndContacts:
-                return "Tra cứu Danh bạ không dấu ('c ') và điều khiển hệ thống macOS ('s ')"
+                return L("Tra cứu Danh bạ ('c ') và điều khiển hệ thống macOS ('s ')", "Search Contacts ('c ') and run macOS system commands ('s ')")
             case .aiMarkdown:
-                return "Tùy chọn chuyển đổi tài liệu sang Markdown tối ưu cho LLM"
+                return L("Tùy chọn chuyển đổi tài liệu sang Markdown tối ưu cho LLM", "Options for converting documents to Markdown for LLMs")
             case .actions:
-                return "Quản lý danh mục hành động nhanh trên tệp tin, thư mục và văn bản"
+                return L("Quản lý danh mục hành động nhanh trên tệp tin, thư mục và văn bản", "Manage quick actions on files, folders, and text")
             }
         }
     }
@@ -154,7 +165,7 @@ struct SettingsView: View {
                     Text("DriveBar")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.primary)
-                    Text("Phiên bản \(updater.currentVersion)")
+                    Text(L("Phiên bản \(updater.currentVersion)", "Version \(updater.currentVersion)"))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
@@ -200,7 +211,7 @@ struct SettingsView: View {
                     .foregroundStyle(isSelected ? Color.white : Color.secondary)
                     .frame(width: 18, alignment: .center)
 
-                Text(tab.rawValue)
+                Text(tab.title)
                     .font(.system(size: 13, weight: isSelected ? .medium : .regular))
                     .foregroundStyle(isSelected ? Color.white : Color.primary)
                     .lineLimit(1)
@@ -226,11 +237,11 @@ struct SettingsView: View {
                 Circle()
                     .fill(Color.green)
                     .frame(width: 7, height: 7)
-                Text("Bản mới v\(ver)")
+                Text(L("Bản mới v\(ver)", "New v\(ver)"))
                     .font(.system(size: 11.5, weight: .medium))
                     .lineLimit(1)
                 Spacer(minLength: 4)
-                Button("Cập nhật") {
+                Button(L("Cập nhật", "Update")) {
                     updater.installAvailableUpdate()
                 }
                 .buttonStyle(.borderedProminent)
@@ -241,7 +252,7 @@ struct SettingsView: View {
             HStack(spacing: 8) {
                 ProgressView()
                     .controlSize(.mini)
-                Text("Đang kiểm tra...")
+                Text(L("Đang kiểm tra...", "Checking..."))
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
@@ -251,7 +262,7 @@ struct SettingsView: View {
             HStack(spacing: 8) {
                 ProgressView()
                     .controlSize(.mini)
-                Text("Đang tải v\(ver)...")
+                Text(L("Đang tải v\(ver)...", "Downloading v\(ver)..."))
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -262,7 +273,7 @@ struct SettingsView: View {
             HStack(spacing: 8) {
                 ProgressView()
                     .controlSize(.mini)
-                Text("Đang cài v\(ver)...")
+                Text(L("Đang cài v\(ver)...", "Installing v\(ver)..."))
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -274,12 +285,12 @@ struct SettingsView: View {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 11))
                     .foregroundStyle(.green)
-                Text("Đã là bản mới nhất")
+                Text(L("Đã là bản mới nhất", "Up to date"))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer(minLength: 4)
-                Button("Kiểm tra") {
+                Button(L("Kiểm tra", "Check")) {
                     updater.checkForUpdatesManually()
                 }
                 .buttonStyle(.bordered)
@@ -288,12 +299,12 @@ struct SettingsView: View {
 
         default:
             HStack(spacing: 6) {
-                Text("Cập nhật tự động")
+                Text(L("Cập nhật tự động", "Auto-update"))
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer(minLength: 4)
-                Button("Kiểm tra") {
+                Button(L("Kiểm tra", "Check")) {
                     updater.checkForUpdatesManually()
                 }
                 .buttonStyle(.bordered)
@@ -309,7 +320,7 @@ struct SettingsView: View {
             // Top Page Title Bar
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(uiState.selectedTab.rawValue)
+                    Text(uiState.selectedTab.title)
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(.primary)
                     Text(uiState.selectedTab.pageSubtitle)
@@ -408,7 +419,7 @@ struct SettingsView: View {
             Button {
                 LauncherPanelController.shared.toggleSearchPanel()
             } label: {
-                Label("Mở Tìm kiếm", systemImage: "magnifyingglass")
+                Label(L("Mở Tìm kiếm", "Open Search"), systemImage: "magnifyingglass")
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
@@ -417,7 +428,7 @@ struct SettingsView: View {
             Button {
                 LauncherPanelController.shared.toggleSearchPanel()
             } label: {
-                Label("Mở Tìm kiếm", systemImage: "magnifyingglass")
+                Label(L("Mở Tìm kiếm", "Open Search"), systemImage: "magnifyingglass")
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
@@ -426,7 +437,7 @@ struct SettingsView: View {
             Button {
                 WindowSwitcherController.shared.openPinnedFromMenuOrSearch()
             } label: {
-                Label("Mở xem thử", systemImage: "macwindow.on.rectangle")
+                Label(L("Mở xem thử", "Preview"), systemImage: "macwindow.on.rectangle")
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
@@ -436,7 +447,7 @@ struct SettingsView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
-                TextField("Tìm lệnh hệ thống...", text: $uiState.systemCommandFilter)
+                TextField(L("Tìm lệnh hệ thống...", "Filter commands..."), text: $uiState.systemCommandFilter)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12))
                     .frame(width: 155)
@@ -467,7 +478,7 @@ struct SettingsView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
-                TextField("Tìm hành động...", text: $uiState.actionFilter)
+                TextField(L("Tìm hành động...", "Filter actions..."), text: $uiState.actionFilter)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12))
                     .frame(width: 155)
@@ -687,7 +698,7 @@ private struct MacShortcutRecorderControl: View {
         if !hotKeyService.liveModifiersPreview.isEmpty {
             return hotKeyService.liveModifiersPreview
         }
-        return "Nhấn phím..."
+        return L("Nhấn phím...", "Press shortcut...")
     }
 
     var body: some View {
@@ -729,11 +740,11 @@ private struct MacShortcutRecorderControl: View {
             }
             .buttonStyle(.plain)
             .disabled(!isEnabled)
-            .help("Bấm vào ô rồi nhấn tổ hợp phím mới (Nhấn Esc để hủy)")
+            .help(L("Bấm vào ô rồi nhấn tổ hợp phím mới (Nhấn Esc để hủy)", "Click and press new shortcut (Press Esc to cancel)"))
 
             // Compact Preset & Options Menu
             Menu {
-                Section("Tổ hợp phím gợi ý") {
+                Section(L("Tổ hợp phím gợi ý", "Preset Shortcuts")) {
                     ForEach(presets) { preset in
                         Button {
                             uiState.manualBuilderTarget = nil
@@ -750,11 +761,11 @@ private struct MacShortcutRecorderControl: View {
 
                 Divider()
 
-                Button(uiState.manualBuilderTarget == target ? "Ẩn bảng ghép phím thủ công" : "Tự ghép phím thủ công...") {
+                Button(uiState.manualBuilderTarget == target ? L("Ẩn bảng ghép phím thủ công", "Hide manual shortcut builder") : L("Tự ghép phím thủ công...", "Manual shortcut builder...")) {
                     uiState.toggleManualBuilder(for: target, current: current)
                 }
 
-                Button("Khôi phục mặc định (\(defaultBinding.readableDisplay))") {
+                Button(L("Khôi phục mặc định (\(defaultBinding.readableDisplay))", "Restore default (\(defaultBinding.readableDisplay))")) {
                     uiState.manualBuilderTarget = nil
                     hotKeyService.applyRecordedBinding(defaultBinding, for: target)
                 }
@@ -767,7 +778,7 @@ private struct MacShortcutRecorderControl: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
             .disabled(!isEnabled)
-            .help("Chọn nhanh tổ hợp phím gợi ý hoặc tự ghép phím thủ công")
+            .help(L("Chọn nhanh tổ hợp phím gợi ý hoặc tự ghép phím thủ công", "Choose a preset shortcut or build manually"))
         }
         .opacity(isEnabled ? 1.0 : 0.45)
     }
@@ -781,7 +792,7 @@ private struct MacManualShortcutBuilderBar: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Text("Ghép phím:")
+            Text(L("Ghép phím:", "Key Combo:"))
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(.secondary)
 
@@ -813,19 +824,22 @@ private struct MacManualShortcutBuilderBar: View {
 
             Spacer()
 
-            Button("Hủy") {
+            Button(L("Hủy", "Cancel")) {
                 uiState.manualBuilderTarget = nil
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
 
-            Button("Áp dụng") {
+            Button(L("Áp dụng", "Apply")) {
                 if let built = uiState.constructedManualBinding {
                     hotKeyService.applyRecordedBinding(built, for: target)
                     uiState.manualBuilderTarget = nil
                 } else {
                     NSSound.beep()
-                    settings.statusBannerMessage = "Vui lòng chọn ít nhất 1 phím bổ trợ (⌘, ⌥, ⌃, ⇧) hoặc phím F1–F12."
+                    settings.statusBannerMessage = L(
+                        "Vui lòng chọn ít nhất 1 phím bổ trợ (⌘, ⌥, ⌃, ⇧) hoặc phím F1–F12.",
+                        "Please select at least 1 modifier (⌘, ⌥, ⌃, ⇧) or F1–F12."
+                    )
                 }
             }
             .buttonStyle(.borderedProminent)
@@ -851,10 +865,26 @@ private struct GeneralSettingsPane: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 // 1. Startup & Appearance
-                MacSettingsSection(title: "Khởi động & Giao diện") {
+                MacSettingsSection(title: L("Khởi động & Giao diện", "Startup & Appearance")) {
+                    MacSettingsRow(
+                        title: L("Ngôn ngữ hiển thị", "Display Language"),
+                        subtitle: L("Tự động theo ngôn ngữ hệ thống macOS hoặc chọn cố định Tiếng Việt / English", "Match macOS system language automatically or choose Vietnamese / English")
+                    ) {
+                        Picker("", selection: $settings.appLanguage) {
+                            ForEach(AppLanguagePreference.allCases) { pref in
+                                Text(pref.displayTitle).tag(pref)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(width: 220)
+                    }
+
+                    MacSettingsRowDivider()
+
                     MacSettingsToggleRow(
-                        title: "Khởi động cùng macOS",
-                        subtitle: "Tự động chạy nền DriveBar ngay khi đăng nhập vào máy Mac",
+                        title: L("Khởi động cùng macOS", "Launch at login"),
+                        subtitle: L("Tự động chạy nền DriveBar ngay khi đăng nhập vào máy Mac", "Automatically start DriveBar in the background upon login"),
                         isOn: Binding(
                             get: { settings.launchAtLogin },
                             set: { settings.toggleLaunchAtLogin($0) }
@@ -864,33 +894,33 @@ private struct GeneralSettingsPane: View {
                     MacSettingsRowDivider()
 
                     MacSettingsToggleRow(
-                        title: "Bật bảng Tìm kiếm khi khởi động",
-                        subtitle: "Tự động mở sẵn bảng Tìm kiếm chính (\(settings.searchHotKey.readableDisplay)) ngay khi khởi động DriveBar",
+                        title: L("Bật bảng Tìm kiếm khi khởi động", "Show Search window on startup"),
+                        subtitle: L("Tự động mở sẵn bảng Tìm kiếm chính (\(settings.searchHotKey.readableDisplay)) ngay khi khởi động DriveBar", "Automatically show the search bar (\(settings.searchHotKey.readableDisplay)) when DriveBar starts"),
                         isOn: $settings.showLauncherOnStartup
                     )
 
                     MacSettingsRowDivider()
 
                     MacSettingsToggleRow(
-                        title: "Hiển thị biểu tượng trên thanh Dock",
-                        subtitle: "Khi tắt, ứng dụng chỉ hiển thị gọn trên thanh Menu Bar phía trên",
+                        title: L("Hiển thị biểu tượng trên thanh Dock", "Show Dock icon"),
+                        subtitle: L("Khi tắt, ứng dụng chỉ hiển thị gọn trên thanh Menu Bar phía trên", "When disabled, DriveBar stays quietly in the menu bar"),
                         isOn: $settings.showDockIcon
                     )
 
                     MacSettingsRowDivider()
 
                     MacSettingsToggleRow(
-                        title: "Tìm kèm ứng dụng macOS",
-                        subtitle: "Hiển thị thêm ứng dụng trong /Applications khi gõ tìm kiếm chung (hoặc dùng tiền tố 'a ')",
+                        title: L("Tìm kèm ứng dụng macOS", "Include macOS applications"),
+                        subtitle: L("Hiển thị thêm ứng dụng trong /Applications khi gõ tìm kiếm chung (hoặc dùng tiền tố 'a ')", "Include apps from /Applications in search (or use 'a ' prefix)"),
                         isOn: $settings.includeMacAppsInSearch
                     )
                 }
 
                 // 2. Global Keyboard Shortcuts
                 MacSettingsSection(
-                    title: "Phím tắt toàn cục",
+                    title: L("Phím tắt toàn cục", "Global Shortcuts"),
                     headerTrailing: {
-                        Button("Khôi phục mặc định") {
+                        Button(L("Khôi phục mặc định", "Restore Defaults")) {
                             uiState.manualBuilderTarget = nil
                             settings.resetShortcutsToDefault()
                         }
@@ -899,10 +929,10 @@ private struct GeneralSettingsPane: View {
                     }
                 ) {
                     MacSettingsRow(
-                        title: "Mở thanh Tìm kiếm",
-                        subtitle: "Tìm nhanh Google Drive, ứng dụng, danh bạ ('c ') và lệnh hệ thống ('s ')",
+                        title: L("Mở thanh Tìm kiếm", "Open Search Bar"),
+                        subtitle: L("Tìm nhanh Google Drive, thư mục Mac ('m '), ứng dụng, danh bạ ('c ') và lệnh hệ thống ('s ')", "Fast search for Google Drive, Mac folders ('m '), apps, contacts ('c ') and system commands ('s ')"),
                         statusDotColor: hotKeyService.isSearchHotKeyActive ? nil : .orange,
-                        statusText: hotKeyService.isSearchHotKeyActive ? nil : "Trùng phím"
+                        statusText: hotKeyService.isSearchHotKeyActive ? nil : L("Trùng phím", "Conflict")
                     ) {
                         MacShortcutRecorderControl(
                             hotKeyService: hotKeyService,
@@ -911,7 +941,7 @@ private struct GeneralSettingsPane: View {
                             current: settings.searchHotKey,
                             defaultBinding: .defaultSearch,
                             presets: [
-                                MacShortcutPreset("⌘Space (Mặc định)", binding: .commandSpace),
+                                MacShortcutPreset(L("⌘Space (Mặc định)", "⌘Space (Default)"), binding: .commandSpace),
                                 MacShortcutPreset("⌥Space", binding: .optionSpace),
                                 MacShortcutPreset("⌃Space", binding: .controlSpace),
                                 MacShortcutPreset("⌘⇧Space", binding: .commandShiftSpace)
@@ -933,9 +963,9 @@ private struct GeneralSettingsPane: View {
 
                     MacSettingsRow(
                         title: "Universal Actions",
-                        subtitle: "Chọn tệp trong Finder hoặc bôi đen văn bản rồi nhấn phím tắt để thao tác",
+                        subtitle: L("Chọn tệp trong Finder hoặc bôi đen văn bản rồi nhấn phím tắt để thao tác", "Select files in Finder or highlight text and press shortcut to act"),
                         statusDotColor: hotKeyService.isUniversalHotKeyActive ? nil : .orange,
-                        statusText: hotKeyService.isUniversalHotKeyActive ? nil : "Trùng phím"
+                        statusText: hotKeyService.isUniversalHotKeyActive ? nil : L("Trùng phím", "Conflict")
                     ) {
                         MacShortcutRecorderControl(
                             hotKeyService: hotKeyService,
@@ -944,7 +974,7 @@ private struct GeneralSettingsPane: View {
                             current: settings.universalActionHotKey,
                             defaultBinding: .defaultUniversalAction,
                             presets: [
-                                MacShortcutPreset("⌘/ (Mặc định)", binding: .commandSlash),
+                                MacShortcutPreset(L("⌘/ (Mặc định)", "⌘/ (Default)"), binding: .commandSlash),
                                 MacShortcutPreset("⌘\\", binding: .commandBackslash),
                                 MacShortcutPreset("⌥⌘/", binding: .optionCommandSlash),
                                 MacShortcutPreset("⌘⇧A", binding: .commandShiftA),
@@ -974,7 +1004,7 @@ private struct GeneralSettingsPane: View {
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                             Spacer(minLength: 8)
-                            Button("Cài đặt Bàn phím...") {
+                            Button(L("Cài đặt Bàn phím...", "Keyboard Settings...")) {
                                 hotKeyService.openMacOSKeyboardShortcutsSettings()
                             }
                             .buttonStyle(.bordered)
@@ -987,16 +1017,16 @@ private struct GeneralSettingsPane: View {
 
                 // 2.5. Custom Mac Folders ('m' prefix search mode)
                 MacSettingsSection(
-                    title: "Thư mục tìm kiếm trên Mac ('m')",
+                    title: L("Thư mục tìm kiếm trên Mac ('m')", "Mac Folders Search ('m')"),
                     footer: driveService.isRebuildingMacFolders
-                        ? "Đang lập chỉ mục các thư mục Mac ở nền..."
-                        : "Đã lập chỉ mục RAM tức thì \(driveService.macFolderItemCount.formatted()) thư mục con & tệp tin (hỗ trợ gõ không dấu Tiếng Việt, chữ viết tắt và theo dõi FSEvents).",
+                        ? L("Đang lập chỉ mục các thư mục Mac ở nền...", "Indexing Mac folders in background...")
+                        : L("Đã lập chỉ mục RAM tức thì \(driveService.macFolderItemCount.formatted()) thư mục con & tệp tin (hỗ trợ gõ không dấu Tiếng Việt, chữ viết tắt và theo dõi FSEvents).", "RAM-indexed \(driveService.macFolderItemCount.formatted()) subfolders & files (instant search, accents-free & FSEvents live monitoring)."),
                     headerTrailing: {
                         HStack(spacing: 6) {
                             Button {
                                 driveService.rebuildMacFoldersCacheInBackground()
                             } label: {
-                                Label(driveService.isRebuildingMacFolders ? "Đang quét..." : "Quét lại", systemImage: "arrow.clockwise")
+                                Label(driveService.isRebuildingMacFolders ? L("Đang quét...", "Scanning...") : L("Quét lại", "Re-scan"), systemImage: "arrow.clockwise")
                                     .font(.system(size: 11.5, weight: .regular))
                             }
                             .buttonStyle(.bordered)
@@ -1006,7 +1036,7 @@ private struct GeneralSettingsPane: View {
                             Button {
                                 settings.promptAddCustomMacFolder()
                             } label: {
-                                Label("Thêm thư mục...", systemImage: "folder.badge.plus")
+                                Label(L("Thêm thư mục...", "Add Folder..."), systemImage: "folder.badge.plus")
                                     .font(.system(size: 11.5, weight: .medium))
                             }
                             .buttonStyle(.bordered)
@@ -1015,7 +1045,7 @@ private struct GeneralSettingsPane: View {
                     }
                 ) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Các thư mục trên máy Mac được đưa vào phạm vi tìm kiếm nhanh khi bạn gõ tiền tố 'm' hoặc 'm <từ khóa>' trong thanh tìm kiếm.")
+                        Text(L("Các thư mục trên máy Mac được đưa vào phạm vi tìm kiếm nhanh khi bạn gõ tiền tố 'm' hoặc 'm <từ khóa>' trong thanh tìm kiếm.", "Mac folders included in search when typing 'm' or 'm <query>' in search bar."))
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 14)
@@ -1029,10 +1059,10 @@ private struct GeneralSettingsPane: View {
                                     Image(systemName: "folder.badge.questionmark")
                                         .font(.system(size: 24))
                                         .foregroundStyle(.tertiary)
-                                    Text("Chưa có thư mục nào được thêm")
+                                    Text(L("Chưa có thư mục nào được thêm", "No custom folders added yet"))
                                         .font(.system(size: 12, weight: .medium))
                                         .foregroundStyle(.secondary)
-                                    Button("Chọn thư mục trên Mac...") {
+                                    Button(L("Chọn thư mục trên Mac...", "Choose Mac Folder...")) {
                                         settings.promptAddCustomMacFolder()
                                     }
                                     .buttonStyle(.borderedProminent)
@@ -1075,7 +1105,7 @@ private struct GeneralSettingsPane: View {
                                             .foregroundStyle(.secondary)
                                     }
                                     .buttonStyle(.plain)
-                                    .help("Mở thư mục trong Finder")
+                                    .help(L("Mở thư mục trong Finder", "Reveal folder in Finder"))
 
                                     Button {
                                         settings.removeCustomMacFolder(folderPath)
@@ -1085,7 +1115,7 @@ private struct GeneralSettingsPane: View {
                                             .foregroundStyle(.secondary)
                                     }
                                     .buttonStyle(.plain)
-                                    .help("Xóa khỏi danh sách tìm kiếm (m)")
+                                    .help(L("Xóa khỏi danh sách tìm kiếm (m)", "Remove from Mac folder search (m)"))
                                 }
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 6)
@@ -1097,23 +1127,23 @@ private struct GeneralSettingsPane: View {
 
                 // 3. Clipboard History & Pinned Items
                 MacSettingsSection(
-                    title: "Lịch sử Clipboard & Mục đã ghim",
-                    footer: "Cú pháp tra cứu nhanh trong thanh tìm kiếm: 'm ' Thư mục Mac • 'c ' Danh bạ không dấu • 'cb ' Lịch sử Clipboard • 'a ' Ứng dụng • 'ff ' Tệp tin • 's ' Lệnh hệ thống • 'ocr' nhận diện chữ từ ảnh • nhập phép tính trực tiếp."
+                    title: L("Lịch sử Clipboard & Mục đã ghim", "Clipboard History & Pinned Items"),
+                    footer: L("Cú pháp tra cứu nhanh trong thanh tìm kiếm: 'm ' Thư mục Mac • 'c ' Danh bạ không dấu • 'cb ' Lịch sử Clipboard • 'a ' Ứng dụng • 'ff ' Tệp tin • 's ' Lệnh hệ thống • 'ocr' nhận diện chữ từ ảnh • nhập phép tính trực tiếp.", "Quick prefixes in search bar: 'm ' Mac Folders • 'c ' Contacts • 'cb ' Clipboard • 'a ' Apps • 'ff ' Files • 's ' System Commands • 'ocr' OCR image • direct math calculations.")
                 ) {
                     MacSettingsToggleRow(
-                        title: "Lưu lịch sử Clipboard",
-                        subtitle: "Tự động lưu văn bản, liên kết, tệp và ảnh chụp (bỏ qua dữ liệu mật khẩu nhạy cảm)",
+                        title: L("Lưu lịch sử Clipboard", "Save Clipboard History"),
+                        subtitle: L("Tự động lưu văn bản, liên kết, tệp và ảnh chụp (bỏ qua dữ liệu mật khẩu nhạy cảm)", "Automatically store copied text, links, files and images (skips sensitive password managers)"),
                         isOn: $settings.enableClipboardHistory
                     )
 
                     MacSettingsRowDivider()
 
                     MacSettingsRow(
-                        title: "Dữ liệu Clipboard hiện có",
-                        subtitle: "\(clipboardService.entries.count) mục đã lưu — gõ 'cb ' trong thanh tìm kiếm để xem và dán lại"
+                        title: L("Dữ liệu Clipboard hiện có", "Current Clipboard History"),
+                        subtitle: L("\(clipboardService.entries.count) mục đã lưu — gõ 'cb ' trong thanh tìm kiếm để xem và dán lại", "\(clipboardService.entries.count) items stored — type 'cb ' in search to view and paste")
                     ) {
                         HStack(spacing: 6) {
-                            Button("Mở ('cb ')") {
+                            Button(L("Mở ('cb ')", "Open ('cb ')")) {
                                 LauncherViewModel.shared.prepareForSearchLaunch()
                                 LauncherViewModel.shared.searchText = "cb "
                                 LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
@@ -1121,9 +1151,9 @@ private struct GeneralSettingsPane: View {
                             .buttonStyle(.bordered)
                             .controlSize(.small)
 
-                            Button("Xóa lịch sử") {
+                            Button(L("Xóa lịch sử", "Clear History")) {
                                 clipboardService.clearHistory()
-                                settings.statusBannerMessage = "Đã xóa sạch lịch sử Clipboard."
+                                settings.statusBannerMessage = L("Đã xóa sạch lịch sử Clipboard.", "Cleared Clipboard history.")
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
@@ -1134,13 +1164,13 @@ private struct GeneralSettingsPane: View {
                     MacSettingsRowDivider()
 
                     MacSettingsRow(
-                        title: "Mục đã ghim đầu danh sách",
-                        subtitle: "\(settings.pinnedPaths.count) mục đang ghim (nhấn ⌘D trên kết quả tìm kiếm để ghim hoặc bỏ ghim)"
+                        title: L("Mục đã ghim đầu danh sách", "Pinned Items at Top"),
+                        subtitle: L("\(settings.pinnedPaths.count) mục đang ghim (nhấn ⌘D trên kết quả tìm kiếm để ghim hoặc bỏ ghim)", "\(settings.pinnedPaths.count) pinned items (press ⌘D on search result to pin or unpin)")
                     ) {
-                        Button("Bỏ ghim tất cả") {
+                        Button(L("Bỏ ghim tất cả", "Unpin All")) {
                             settings.pinnedPaths = []
                             LauncherViewModel.shared.refreshSearchResults()
-                            settings.statusBannerMessage = "Đã gỡ toàn bộ các mục đã ghim."
+                            settings.statusBannerMessage = L("Đã gỡ toàn bộ các mục đã ghim.", "Unpinned all items.")
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -1149,22 +1179,22 @@ private struct GeneralSettingsPane: View {
                 }
 
                 // 4. Permissions & Updates
-                MacSettingsSection(title: "Quyền hệ thống & Phiên bản") {
+                MacSettingsSection(title: L("Quyền hệ thống & Phiên bản", "System Permissions & Updates")) {
                     MacSettingsRow(
                         symbol: "hand.raised",
-                        title: "Quyền Trợ năng (Accessibility)",
+                        title: L("Quyền Trợ năng (Accessibility)", "Accessibility Permission"),
                         subtitle: uiState.axTrusted
-                            ? "Đã cấp quyền bắt văn bản đang chọn và điều khiển cửa sổ ứng dụng"
-                            : "Cho phép lấy đoạn văn bản bôi đen ở trình duyệt và điều khiển cửa sổ",
+                            ? L("Đã cấp quyền bắt văn bản đang chọn và điều khiển cửa sổ ứng dụng", "Granted permission to capture selection and control windows")
+                            : L("Cho phép lấy đoạn văn bản bôi đen ở trình duyệt và điều khiển cửa sổ", "Allows capturing highlighted text and window switching"),
                         statusDotColor: uiState.axTrusted ? .green : .orange,
-                        statusText: uiState.axTrusted ? "Đã cấp" : "Chưa cấp"
+                        statusText: uiState.axTrusted ? L("Đã cấp", "Granted") : L("Chưa cấp", "Not Granted")
                     ) {
                         if uiState.axTrusted {
-                            Text("Đang bật")
+                            Text(L("Đang bật", "Enabled"))
                                 .font(.system(size: 12))
                                 .foregroundStyle(.secondary)
                         } else {
-                            Button("Cấp quyền...") {
+                            Button(L("Cấp quyền...", "Grant...")) {
                                 let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
                                 _ = AXIsProcessTrustedWithOptions(opts)
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
@@ -1180,7 +1210,7 @@ private struct GeneralSettingsPane: View {
 
                     MacSettingsRow(
                         symbol: "arrow.triangle.2.circlepath",
-                        title: "Cập nhật phần mềm",
+                        title: L("Cập nhật phần mềm", "Software Update"),
                         subtitle: updateStatusDescription
                     ) {
                         HStack(spacing: 6) {
@@ -1193,13 +1223,13 @@ private struct GeneralSettingsPane: View {
                             .controlSize(.small)
 
                             if case .available(let ver, _, _, _) = updater.state {
-                                Button("Cập nhật v\(ver)") {
+                                Button(L("Cập nhật v\(ver)", "Update v\(ver)")) {
                                     updater.installAvailableUpdate()
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .controlSize(.small)
                             } else {
-                                Button(updater.isBusy ? "Đang kiểm tra..." : "Kiểm tra cập nhật") {
+                                Button(updater.isBusy ? L("Đang kiểm tra...", "Checking...") : L("Kiểm tra cập nhật", "Check for Updates")) {
                                     updater.checkForUpdatesManually()
                                 }
                                 .buttonStyle(.bordered)
@@ -1218,17 +1248,17 @@ private struct GeneralSettingsPane: View {
     private var updateStatusDescription: String {
         switch updater.state {
         case .idle:
-            return "Phiên bản hiện tại: v\(updater.currentVersion) • Nguồn: GitHub Releases (hungmtuci/DriveBar)"
+            return L("Phiên bản hiện tại: v\(updater.currentVersion) • Nguồn: GitHub Releases (hungmtuci/DriveBar)", "Current version: v\(updater.currentVersion) • Source: GitHub Releases (hungmtuci/DriveBar)")
         case .checking:
-            return "Đang kiểm tra phiên bản mới trên GitHub..."
+            return L("Đang kiểm tra phiên bản mới trên GitHub...", "Checking for updates on GitHub...")
         case .upToDate(let v):
-            return "Bạn đang sử dụng phiên bản mới nhất (v\(v))"
+            return L("Bạn đang sử dụng phiên bản mới nhất (v\(v))", "You are using the latest version (v\(v))")
         case .available(let v, _, _, _):
-            return "Đã có phiên bản mới v\(v) sẵn sàng tải về và cài đặt tự động"
+            return L("Đã có phiên bản mới v\(v) sẵn sàng tải về và cài đặt tự động", "New update v\(v) available to download and install automatically")
         case .downloading(let v):
-            return "Đang tải gói cập nhật DriveBar v\(v)..."
+            return L("Đang tải gói cập nhật DriveBar v\(v)...", "Downloading DriveBar update v\(v)...")
         case .installing(let v):
-            return "Đang cài đặt DriveBar v\(v) vào /Applications..."
+            return L("Đang cài đặt DriveBar v\(v) vào /Applications...", "Installing DriveBar v\(v) into /Applications...")
         case .failed(let msg):
             return msg
         }
@@ -1244,19 +1274,19 @@ private struct GoogleDriveSettingsPane: View {
 
     private var cleanDriveRootPath: String {
         guard let root = driveService.accountRoot else {
-            return "Chưa tìm thấy thư mục Google Drive trong ~/Library/CloudStorage"
+            return L("Chưa tìm thấy thư mục Google Drive trong ~/Library/CloudStorage", "No Google Drive folder found in ~/Library/CloudStorage")
         }
         return (root as NSString).abbreviatingWithTildeInPath
     }
 
     private var indexSummaryText: String {
         var parts = [
-            "\(driveService.folderCount.formatted()) thư mục",
-            "\(driveService.sharedCount.formatted()) mục được chia sẻ",
-            "\(driveService.fileCount.formatted()) tệp tin"
+            L("\(driveService.folderCount.formatted()) thư mục", "\(driveService.folderCount.formatted()) folders"),
+            L("\(driveService.sharedCount.formatted()) mục được chia sẻ", "\(driveService.sharedCount.formatted()) shared items"),
+            L("\(driveService.fileCount.formatted()) tệp tin", "\(driveService.fileCount.formatted()) files")
         ]
         if let updated = driveService.lastCacheUpdate {
-            parts.append("Cập nhật \(updated.formatted(date: .abbreviated, time: .shortened))")
+            parts.append(L("Cập nhật \(updated.formatted(date: .abbreviated, time: .shortened))", "Updated \(updated.formatted(date: .abbreviated, time: .shortened))"))
         }
         return parts.joined(separator: " • ")
     }
@@ -1265,16 +1295,16 @@ private struct GoogleDriveSettingsPane: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 // 1. Google Drive Index
-                MacSettingsSection(title: "Chỉ mục Google Drive") {
+                MacSettingsSection(title: L("Chỉ mục Google Drive", "Google Drive Index")) {
                     MacSettingsRow(
                         symbol: "externaldrive.badge.icloud",
                         title: cleanDriveRootPath,
                         subtitle: indexSummaryText,
                         statusDotColor: driveService.accountRoot != nil ? .green : .orange,
-                        statusText: driveService.isRealtimeWatcherActive ? "FSEvents" : (driveService.accountRoot != nil ? "Đã kết nối" : "Chưa kết nối")
+                        statusText: driveService.isRealtimeWatcherActive ? "FSEvents" : (driveService.accountRoot != nil ? L("Đã kết nối", "Connected") : L("Chưa kết nối", "Disconnected"))
                     ) {
                         if let root = driveService.accountRoot {
-                            Button("Mở Finder") {
+                            Button(L("Mở Finder", "Open Finder")) {
                                 NSWorkspace.shared.open(URL(fileURLWithPath: root))
                             }
                             .buttonStyle(.bordered)
@@ -1286,11 +1316,11 @@ private struct GoogleDriveSettingsPane: View {
                         MacSettingsRowDivider(leadingInset: 46)
 
                         MacSettingsRow(
-                            title: "Tài khoản hiển thị",
-                            subtitle: "Giới hạn kết quả tìm kiếm theo tài khoản Google Drive cụ thể"
+                            title: L("Tài khoản hiển thị", "Account Filter"),
+                            subtitle: L("Giới hạn kết quả tìm kiếm theo tài khoản Google Drive cụ thể", "Filter search results to a specific Google Drive account")
                         ) {
                             Picker("", selection: $settings.selectedDriveAccountFilter) {
-                                Text("Tất cả tài khoản (\(driveService.availableAccounts.count))").tag("ALL")
+                                Text(L("Tất cả tài khoản (\(driveService.availableAccounts.count))", "All Accounts (\(driveService.availableAccounts.count))")).tag("ALL")
                                 ForEach(driveService.availableAccounts) { acc in
                                     Text(acc.email).tag(acc.email)
                                 }
@@ -1305,21 +1335,21 @@ private struct GoogleDriveSettingsPane: View {
                     MacSettingsRowDivider()
 
                     MacSettingsToggleRow(
-                        title: "Theo dõi thay đổi tức thời (FSEvents)",
-                        subtitle: "Tự động cập nhật chỉ mục ngay khi tạo mới, xóa hoặc đổi tên thư mục",
+                        title: L("Theo dõi thay đổi tức thời (FSEvents)", "Live Change Monitoring (FSEvents)"),
+                        subtitle: L("Tự động cập nhật chỉ mục ngay khi tạo mới, xóa hoặc đổi tên thư mục", "Automatically update index when folders are created, renamed, or deleted"),
                         isOn: $settings.enableRealtimeFSEvents
                     )
 
                     MacSettingsRowDivider()
 
                     MacSettingsRow(
-                        title: "Bộ nhớ đệm & Lịch sử truy cập",
-                        subtitle: "Làm mới thủ công toàn bộ cây thư mục hoặc xóa danh sách mở gần đây"
+                        title: L("Bộ nhớ đệm & Lịch sử truy cập", "Cache & Access History"),
+                        subtitle: L("Làm mới thủ công toàn bộ cây thư mục hoặc xóa danh sách mở gần đây", "Manually refresh full folder tree or clear recent history")
                     ) {
                         HStack(spacing: 6) {
-                            Button("Xóa lịch sử mở") {
+                            Button(L("Xóa lịch sử mở", "Clear History")) {
                                 driveService.clearAllHistory()
-                                settings.statusBannerMessage = "Đã xóa lịch sử mở thư mục gần đây."
+                                settings.statusBannerMessage = L("Đã xóa lịch sử mở thư mục gần đây.", "Cleared recently opened folders history.")
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
@@ -1327,7 +1357,7 @@ private struct GoogleDriveSettingsPane: View {
                             Button {
                                 driveService.rebuildAllCaches()
                             } label: {
-                                Text(driveService.isRebuildingFolders ? (driveService.rebuildProgressText ?? "Đang quét...") : "Quét lại chỉ mục")
+                                Text(driveService.isRebuildingFolders ? (driveService.rebuildProgressText ?? L("Đang quét...", "Scanning...")) : L("Quét lại chỉ mục", "Rebuild Index"))
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
@@ -1338,14 +1368,14 @@ private struct GoogleDriveSettingsPane: View {
 
                 // 2. Syncthing P2P Sync & Smart Action Latching
                 MacSettingsSection(
-                    title: "Đồng bộ đa máy & Học thói quen",
+                    title: L("Đồng bộ đa máy & Học thói quen", "Multi-Device Sync & Learning"),
                     footer: settings.enableSyncthingSync
-                        ? "Tự động ánh xạ đường dẫn tương đối giữa các máy Mac khác tên người dùng • Đang đồng bộ \(syncService.syncedRecordCount) mục lịch sử."
+                        ? L("Tự động ánh xạ đường dẫn tương đối giữa các máy Mac khác tên người dùng • Đang đồng bộ \(syncService.syncedRecordCount) mục lịch sử.", "Automatically maps relative paths across different Mac usernames • Currently syncing \(syncService.syncedRecordCount) records.")
                         : nil
                 ) {
                     MacSettingsToggleRow(
-                        title: "Đồng bộ qua Syncthing P2P",
-                        subtitle: "Chia sẻ lịch sử mở gần đây và thói quen sử dụng giữa iMac và MacBook",
+                        title: L("Đồng bộ qua Syncthing P2P", "Sync via Syncthing P2P"),
+                        subtitle: L("Chia sẻ lịch sử mở gần đây và thói quen sử dụng giữa iMac và MacBook", "Share recent history and habits between iMac and MacBook"),
                         isOn: $settings.enableSyncthingSync
                     )
 
@@ -1353,8 +1383,8 @@ private struct GoogleDriveSettingsPane: View {
                         MacSettingsRowDivider()
 
                         MacSettingsRow(
-                            title: "Thư mục đồng bộ",
-                            subtitle: "Đường dẫn thư mục được chia sẻ qua Syncthing"
+                            title: L("Thư mục đồng bộ", "Sync Folder"),
+                            subtitle: L("Đường dẫn thư mục được chia sẻ qua Syncthing", "Folder path shared via Syncthing")
                         ) {
                             HStack(spacing: 6) {
                                 TextField("~/Sync/Alfred/DriveBar", text: $settings.syncthingFolderPath)
@@ -1362,7 +1392,7 @@ private struct GoogleDriveSettingsPane: View {
                                     .font(.system(size: 11.5, design: .monospaced))
                                     .frame(width: 195)
 
-                                Button("Mở") {
+                                Button(L("Mở", "Open")) {
                                     let p = syncService.expandedSyncDir
                                     try? FileManager.default.createDirectory(atPath: p, withIntermediateDirectories: true)
                                     NSWorkspace.shared.open(URL(fileURLWithPath: p))
@@ -1370,9 +1400,9 @@ private struct GoogleDriveSettingsPane: View {
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
 
-                                Button("Đồng bộ ngay") {
+                                Button(L("Đồng bộ ngay", "Sync Now")) {
                                     syncService.syncNow()
-                                    settings.statusBannerMessage = "Đã đồng bộ dữ liệu với \(settings.syncthingFolderPath)."
+                                    settings.statusBannerMessage = L("Đã đồng bộ dữ liệu với \(settings.syncthingFolderPath).", "Data synced with \(settings.syncthingFolderPath).")
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
@@ -1383,14 +1413,14 @@ private struct GoogleDriveSettingsPane: View {
                     MacSettingsRowDivider()
 
                     MacSettingsRow(
-                        title: "Tự học thói quen Universal Actions",
-                        subtitle: "Tự động đưa hành động thường chọn lên đầu danh sách theo từng định dạng tệp"
+                        title: L("Tự học thói quen Universal Actions", "Smart Action Latching"),
+                        subtitle: L("Tự động đưa hành động thường chọn lên đầu danh sách theo từng định dạng tệp", "Promote frequently chosen actions to the top per file type")
                     ) {
                         HStack(spacing: 8) {
                             if syncService.learnedActionCount > 0 {
-                                Button("Đặt lại (\(syncService.learnedActionCount))") {
+                                Button(L("Đặt lại (\(syncService.learnedActionCount))", "Reset (\(syncService.learnedActionCount))")) {
                                     syncService.resetActionLatching()
-                                    settings.statusBannerMessage = "Đã đặt lại dữ liệu học thói quen Universal Actions."
+                                    settings.statusBannerMessage = L("Đã đặt lại dữ liệu học thói quen Universal Actions.", "Reset action latching habits.")
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
@@ -1421,13 +1451,13 @@ private struct WindowSwitcherSettingsPane: View {
 
     private var switcherStatusInfo: (Color, String) {
         if !settings.enableWindowSwitcher {
-            return (.secondary, "Đang tắt")
+            return (.secondary, L("Đang tắt", "Disabled"))
         } else if switcherController.isEventTapActive {
-            return (.green, "Đang hoạt động")
+            return (.green, L("Đang hoạt động", "Active"))
         } else if hotKeyService.isWindowSwitcherCarbonFallbackActive {
-            return (.green, "Chế độ phím tắt")
+            return (.green, L("Chế độ phím tắt", "Shortcut Mode"))
         } else {
-            return (.orange, "Cần quyền Trợ năng")
+            return (.orange, L("Cần quyền Trợ năng", "Needs Accessibility"))
         }
     }
 
@@ -1435,10 +1465,10 @@ private struct WindowSwitcherSettingsPane: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 // 1. Activation & Shortcuts
-                MacSettingsSection(title: "Kích hoạt & Phím tắt") {
+                MacSettingsSection(title: L("Kích hoạt & Phím tắt", "Activation & Shortcuts")) {
                     MacSettingsRow(
-                        title: "Chuyển đổi tất cả cửa sổ (Windows Preview)",
-                        subtitle: "Hiển thị các cửa sổ đang chạy của mọi ứng dụng kèm ảnh xem trước trực tiếp",
+                        title: L("Chuyển đổi tất cả cửa sổ (Windows Preview)", "Switch all windows (Windows Preview)"),
+                        subtitle: L("Hiển thị các cửa sổ đang chạy của mọi ứng dụng kèm ảnh xem trước trực tiếp", "Show running windows across all applications with live visual previews"),
                         statusDotColor: switcherStatusInfo.0,
                         statusText: switcherStatusInfo.1
                     ) {
@@ -1450,7 +1480,7 @@ private struct WindowSwitcherSettingsPane: View {
                                 current: settings.windowSwitcherHotKey,
                                 defaultBinding: .defaultWindowSwitcher,
                                 presets: [
-                                    MacShortcutPreset("⌘⇥ (Mặc định)", binding: .commandTab),
+                                    MacShortcutPreset(L("⌘⇥ (Mặc định)", "⌘⇥ (Default)"), binding: .commandTab),
                                     MacShortcutPreset("⌥⇥ (Option + Tab)", binding: .optionTab),
                                     MacShortcutPreset("⌃⇥ (Control + Tab)", binding: .controlTab)
                                 ],
@@ -1477,8 +1507,8 @@ private struct WindowSwitcherSettingsPane: View {
                     MacSettingsRowDivider()
 
                     MacSettingsRow(
-                        title: "Chuyển cửa sổ trong cùng ứng dụng",
-                        subtitle: "Chuyển nhanh giữa nhiều cửa sổ của ứng dụng đang mở hiện tại"
+                        title: L("Chuyển cửa sổ trong cùng ứng dụng", "Switch windows of same app"),
+                        subtitle: L("Chuyển nhanh giữa nhiều cửa sổ của ứng dụng đang mở hiện tại", "Cycle between windows belonging to the frontmost application")
                     ) {
                         HStack(spacing: 10) {
                             MacShortcutRecorderControl(
@@ -1488,7 +1518,7 @@ private struct WindowSwitcherSettingsPane: View {
                                 current: settings.sameAppSwitcherHotKey,
                                 defaultBinding: .defaultSameAppSwitcher,
                                 presets: [
-                                    MacShortcutPreset("⌘` (Mặc định)", binding: .commandGrave),
+                                    MacShortcutPreset(L("⌘` (Mặc định)", "⌘` (Default)"), binding: .commandGrave),
                                     MacShortcutPreset("⌥` (Option + `)", binding: .optionGrave)
                                 ],
                                 isEnabled: settings.enableSameAppSwitcher
@@ -1513,10 +1543,10 @@ private struct WindowSwitcherSettingsPane: View {
                 }
 
                 // 2. Display & Filtering Behavior
-                MacSettingsSection(title: "Hiển thị & Hành vi") {
+                MacSettingsSection(title: L("Hiển thị & Hành vi", "Display & Behavior")) {
                     MacSettingsRow(
-                        title: "Phạm vi màn hình",
-                        subtitle: "Chọn không gian màn hình để liệt kê cửa sổ đang mở"
+                        title: L("Phạm vi màn hình", "Display Scope"),
+                        subtitle: L("Chọn không gian màn hình để liệt kê cửa sổ đang mở", "Select spaces and displays to include running windows")
                     ) {
                         Picker("", selection: $settings.windowSwitcherScope) {
                             ForEach(WindowSwitcherScope.allCases, id: \.self) { scope in
@@ -1532,8 +1562,8 @@ private struct WindowSwitcherSettingsPane: View {
                     MacSettingsRowDivider()
 
                     MacSettingsToggleRow(
-                        title: "Giữ bảng chọn mở sau khi nhả phím ⌘",
-                        subtitle: "Cho phép dùng phím mũi tên điều hướng hoặc gõ từ khóa lọc cửa sổ (nhấn ↩ để chọn)",
+                        title: L("Giữ bảng chọn mở sau khi nhả phím ⌘", "Keep open after releasing ⌘"),
+                        subtitle: L("Cho phép dùng phím mũi tên điều hướng hoặc gõ từ khóa lọc cửa sổ (nhấn ↩ để chọn)", "Navigate with arrow keys or type to filter windows (press ↩ to select)"),
                         isOn: Binding(
                             get: { !settings.windowSwitcherReleaseToActivate },
                             set: { settings.windowSwitcherReleaseToActivate = !$0 }
@@ -1543,49 +1573,49 @@ private struct WindowSwitcherSettingsPane: View {
                     MacSettingsRowDivider()
 
                     MacSettingsToggleRow(
-                        title: "Bấm phím Space hoặc Option để mở cửa sổ",
-                        subtitle: "Mở và kích hoạt ngay cửa sổ đang chọn khi nhấn Space, Option, Command hoặc Enter",
+                        title: L("Bấm phím Space hoặc Option để mở cửa sổ", "Press Space or Option to open"),
+                        subtitle: L("Mở và kích hoạt ngay cửa sổ đang chọn khi nhấn Space, Option, Command hoặc Enter", "Immediately activate selected window when pressing Space, Option, Command or Enter"),
                         isOn: $settings.windowSwitcherSpaceToActivate
                     )
 
                     MacSettingsRowDivider()
 
                     MacSettingsToggleRow(
-                        title: "Phóng to nội dung cửa sổ đang chọn",
-                        subtitle: "Hiển thị khung xem trước độ phân giải cao phía trên thanh chọn cửa sổ",
+                        title: L("Phóng to nội dung cửa sổ đang chọn", "Show Zoom Preview"),
+                        subtitle: L("Hiển thị khung xem trước độ phân giải cao phía trên thanh chọn cửa sổ", "Show high-resolution preview above the switcher cards"),
                         isOn: $settings.windowSwitcherShowZoomPreview
                     )
 
                     MacSettingsRowDivider()
 
                     MacSettingsToggleRow(
-                        title: "Hiển thị cửa sổ đang thu nhỏ (Minimize)",
-                        subtitle: "Bao gồm cửa sổ thu nhỏ dưới thanh Dock và tự động khôi phục khi chọn",
+                        title: L("Hiển thị cửa sổ đang thu nhỏ (Minimize)", "Show Minimized Windows"),
+                        subtitle: L("Bao gồm cửa sổ thu nhỏ dưới thanh Dock và tự động khôi phục khi chọn", "Include windows minimized in Dock and restore upon selection"),
                         isOn: $settings.windowSwitcherShowMinimized
                     )
 
                     MacSettingsRowDivider()
 
                     MacSettingsToggleRow(
-                        title: "Hiển thị ứng dụng đang ẩn (⌘H)",
-                        subtitle: "Bao gồm cửa sổ của ứng dụng đang ẩn và tự động hiện lại khi chọn",
+                        title: L("Hiển thị ứng dụng đang ẩn (⌘H)", "Show Hidden Apps (⌘H)"),
+                        subtitle: L("Bao gồm cửa sổ của ứng dụng đang ẩn và tự động hiện lại khi chọn", "Include windows of hidden apps and unhide upon selection"),
                         isOn: $settings.windowSwitcherShowHiddenApps
                     )
 
                     MacSettingsRowDivider()
 
                     MacSettingsToggleRow(
-                        title: "Hiển thị ứng dụng không có cửa sổ",
-                        subtitle: "Liệt kê thêm các ứng dụng đang chạy nền chưa mở cửa sổ nào",
+                        title: L("Hiển thị ứng dụng không có cửa sổ", "Show Windowless Apps"),
+                        subtitle: L("Liệt kê thêm các ứng dụng đang chạy nền chưa mở cửa sổ nào", "Include background running apps that have no open windows"),
                         isOn: $settings.windowSwitcherShowWindowlessApps
                     )
                 }
 
                 // 3. System Permissions
                 MacSettingsSection(
-                    title: "Quyền hệ thống cho Windows Preview",
+                    title: L("Quyền hệ thống cho Windows Preview", "System Permissions for Windows Preview"),
                     headerTrailing: {
-                        Button("Làm mới trạng thái") {
+                        Button(L("Làm mới trạng thái", "Refresh Status")) {
                             switcherService.refreshPermissionStates()
                             switcherController.refreshEventTapState()
                             hotKeyService.registerAll()
@@ -1598,17 +1628,17 @@ private struct WindowSwitcherSettingsPane: View {
                 ) {
                     MacSettingsRow(
                         symbol: "hand.raised",
-                        title: "Quyền Trợ năng (Accessibility)",
-                        subtitle: "Bắt tổ hợp phím ⌘⇥ và chuyển tiêu điểm chính xác tới từng cửa sổ con",
+                        title: L("Quyền Trợ năng (Accessibility)", "Accessibility Permission"),
+                        subtitle: L("Bắt tổ hợp phím ⌘⇥ và chuyển tiêu điểm chính xác tới từng cửa sổ con", "Intercepts ⌘⇥ shortcut and switches focus to target windows"),
                         statusDotColor: switcherService.hasAccessibilityPermission ? .green : .orange,
-                        statusText: switcherService.hasAccessibilityPermission ? "Đã cấp" : "Cần cấp quyền"
+                        statusText: switcherService.hasAccessibilityPermission ? L("Đã cấp", "Granted") : L("Cần cấp quyền", "Action Required")
                     ) {
                         if switcherService.hasAccessibilityPermission {
-                            Text("Đang bật")
+                            Text(L("Đang bật", "Enabled"))
                                 .font(.system(size: 12))
                                 .foregroundStyle(.secondary)
                         } else {
-                            Button("Cấp quyền...") {
+                            Button(L("Cấp quyền...", "Grant...")) {
                                 switcherService.promptAccessibilityPermission()
                             }
                             .buttonStyle(.borderedProminent)
@@ -1620,17 +1650,17 @@ private struct WindowSwitcherSettingsPane: View {
 
                     MacSettingsRow(
                         symbol: "rectangle.dashed.badge.record",
-                        title: "Quyền Ghi màn hình (Screen Recording)",
-                        subtitle: "Chụp ảnh xem trước trực tiếp nội dung thực tế của các cửa sổ",
+                        title: L("Quyền Ghi màn hình (Screen Recording)", "Screen Recording Permission"),
+                        subtitle: L("Chụp ảnh xem trước trực tiếp nội dung thực tế của các cửa sổ", "Captures live visual content previews of open windows"),
                         statusDotColor: switcherService.hasScreenRecordingPermission ? .green : .orange,
-                        statusText: switcherService.hasScreenRecordingPermission ? "Đã cấp" : "Tùy chọn"
+                        statusText: switcherService.hasScreenRecordingPermission ? L("Đã cấp", "Granted") : L("Tùy chọn", "Optional")
                     ) {
                         if switcherService.hasScreenRecordingPermission {
-                            Text("Đang bật")
+                            Text(L("Đang bật", "Enabled"))
                                 .font(.system(size: 12))
                                 .foregroundStyle(.secondary)
                         } else {
-                            Button("Cấp quyền...") {
+                            Button(L("Cấp quyền...", "Grant...")) {
                                 switcherService.promptScreenRecordingPermission()
                             }
                             .buttonStyle(.bordered)
@@ -1640,26 +1670,26 @@ private struct WindowSwitcherSettingsPane: View {
                 }
 
                 // 4. Compact Shortcut Reference Card
-                MacSettingsSection(title: "Phím thao tác trong Windows Preview") {
+                MacSettingsSection(title: L("Phím thao tác trong Windows Preview", "Windows Preview Keyboard Controls")) {
                     ShortcutHintGridRow(
                         leftKey: "← → / ⇥",
-                        leftDesc: "Di chuyển qua các cửa sổ",
+                        leftDesc: L("Di chuyển qua các cửa sổ", "Navigate windows"),
                         rightKey: "↑ / ↓",
-                        rightDesc: "Hiện cửa sổ cùng ứng dụng / Quay lại tất cả"
+                        rightDesc: L("Hiện cửa sổ cùng ứng dụng / Quay lại tất cả", "Same-app windows / All apps")
                     )
                     MacSettingsRowDivider()
                     ShortcutHintGridRow(
                         leftKey: "↩ / ⌘ / ⌥ / Space / Click",
-                        leftDesc: "Mở ngay cửa sổ đang chọn",
+                        leftDesc: L("Mở ngay cửa sổ đang chọn", "Open selected window"),
                         rightKey: "⌃← ⌃→ ⌃↑ ⌃↓",
-                        rightDesc: "Chia cửa sổ Trái / Phải / Tối đa / Giữa"
+                        rightDesc: L("Chia cửa sổ Trái / Phải / Tối đa / Giữa", "Snap Left / Right / Maximize / Center")
                     )
                     MacSettingsRowDivider()
                     ShortcutHintGridRow(
-                        leftKey: "Gõ ký tự",
-                        leftDesc: "Lọc theo tên ứng dụng hoặc cửa sổ",
+                        leftKey: L("Gõ ký tự", "Type characters"),
+                        leftDesc: L("Lọc theo tên ứng dụng hoặc cửa sổ", "Filter by app or window title"),
                         rightKey: "⌘W / ⌘M / ⌘H / ⌘Q",
-                        rightDesc: "Đóng / Thu nhỏ / Ẩn / Thoát ứng dụng"
+                        rightDesc: L("Đóng / Thu nhỏ / Ẩn / Thoát ứng dụng", "Close / Minimize / Hide / Quit")
                     )
                 }
             }
@@ -1725,21 +1755,30 @@ private struct SystemAndContactsSettingsPane: View {
 
     private var contactsStatusInfo: (Color, String) {
         if contactsService.isAuthorized {
-            return (.green, "\(contactsService.contacts.count) liên hệ")
+            return (.green, L("\(contactsService.contacts.count) liên hệ", "\(contactsService.contacts.count) contacts"))
         } else if contactsService.authorizationStatus == .notDetermined {
-            return (.secondary, "Chưa cấp quyền")
+            return (.secondary, L("Chưa cấp quyền", "Not Determined"))
         } else {
-            return (.orange, "Bị từ chối")
+            return (.orange, L("Bị từ chối", "Denied"))
         }
     }
 
     private var contactsSubtitle: String {
         if contactsService.isAuthorized {
-            return "Gõ 'c <tên không dấu, viết tắt hoặc SĐT>' rồi nhấn ↩ để xem chi tiết và chọn mục sao chép"
+            return L(
+                "Gõ 'c <tên không dấu, viết tắt hoặc SĐT>' rồi nhấn ↩ để xem chi tiết và chọn mục sao chép",
+                "Type 'c <name, initials, or phone>' and press ↩ to inspect and copy"
+            )
         } else if contactsService.authorizationStatus == .notDetermined {
-            return "Cấp quyền truy cập để tìm nhanh liên hệ bằng Tiếng Việt không dấu ngay trong thanh tìm kiếm"
+            return L(
+                "Cấp quyền truy cập để tìm nhanh liên hệ bằng Tiếng Việt không dấu ngay trong thanh tìm kiếm",
+                "Grant access to search contacts instantly right from the search bar"
+            )
         } else {
-            return "Mở Cài đặt Quyền riêng tư của macOS → Contacts và bật công tắc cho phép DriveBar"
+            return L(
+                "Mở Cài đặt Quyền riêng tư của macOS → Contacts và bật công tắc cho phép DriveBar",
+                "Open macOS Privacy & Security → Contacts and toggle DriveBar ON"
+            )
         }
     }
 
@@ -1752,39 +1791,39 @@ private struct SystemAndContactsSettingsPane: View {
             VStack(alignment: .leading, spacing: 20) {
                 // 1. Contacts Lookup (`c `)
                 MacSettingsSection(
-                    title: "Danh bạ macOS ('c ')",
-                    footer: "Trong màn hình chi tiết liên hệ: nhấn ↩ để sao chép, ⌘C sao chép và giữ mở, ⌥↩ sao chép và dán ngay, hoặc ⇧ để phóng to chữ."
+                    title: L("Danh bạ macOS ('c ')", "macOS Contacts ('c ')"),
+                    footer: L("Trong màn hình chi tiết liên hệ: nhấn ↩ để sao chép, ⌘C sao chép và giữ mở, ⌥↩ sao chép và dán ngay, hoặc ⇧ để phóng to chữ.", "In contact details: press ↩ to copy, ⌘C to copy and stay open, ⌥↩ to copy and paste immediately, or ⇧ to zoom text.")
                 ) {
                     MacSettingsRow(
                         symbol: "person.crop.circle",
-                        title: "Tra cứu Danh bạ Tiếng Việt không dấu",
+                        title: L("Tra cứu Danh bạ Tiếng Việt không dấu", "Search Contacts (Accents-Free)"),
                         subtitle: contactsSubtitle,
                         statusDotColor: contactsStatusInfo.0,
                         statusText: contactsStatusInfo.1
                     ) {
                         HStack(spacing: 6) {
                             if contactsService.isAuthorized {
-                                Button("Làm mới") {
+                                Button(L("Làm mới", "Reload")) {
                                     contactsService.reloadContacts(force: true)
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
                                 .disabled(contactsService.isLoading)
                             } else if contactsService.authorizationStatus == .notDetermined {
-                                Button("Cấp quyền...") {
+                                Button(L("Cấp quyền...", "Grant...")) {
                                     contactsService.requestAccessIfNeeded()
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .controlSize(.small)
                             } else {
-                                Button("Cài đặt Quyền...") {
+                                Button(L("Cài đặt Quyền...", "Privacy Settings...")) {
                                     contactsService.openContactsPrivacySettings()
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
                             }
 
-                            Button("Mở ('c ')") {
+                            Button(L("Mở ('c ')", "Open ('c ')")) {
                                 LauncherViewModel.shared.prepareForSearchLaunch()
                                 LauncherViewModel.shared.searchText = "c "
                                 LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
@@ -1797,13 +1836,13 @@ private struct SystemAndContactsSettingsPane: View {
 
                 // 2. Alfred-Parity System Commands Header Bar
                 HStack(alignment: .firstTextBaseline) {
-                    Text("Lệnh Hệ thống ('s ' hoặc gõ trực tiếp từ khóa)")
+                    Text(L("Lệnh Hệ thống ('s ' hoặc gõ trực tiếp từ khóa)", "System Commands ('s ' or direct keyword)"))
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(.secondary)
 
                     Spacer()
 
-                    Button("Mở danh sách ('s ')") {
+                    Button(L("Mở danh sách ('s ')", "Open list ('s ')")) {
                         LauncherViewModel.shared.prepareForSearchLaunch()
                         LauncherViewModel.shared.searchText = "s "
                         LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
@@ -1814,9 +1853,9 @@ private struct SystemAndContactsSettingsPane: View {
                     Text("•")
                         .foregroundStyle(.tertiary)
 
-                    Button("Khôi phục mặc định") {
+                    Button(L("Khôi phục mặc định", "Restore Defaults")) {
                         settings.resetSystemCommandsToDefault()
-                        settings.statusBannerMessage = "Đã bật toàn bộ lệnh hệ thống và khôi phục tùy chọn xác nhận mặc định."
+                        settings.statusBannerMessage = L("Đã bật toàn bộ lệnh hệ thống và khôi phục tùy chọn xác nhận mặc định.", "Enabled all system commands and restored default confirmation prompts.")
                     }
                     .buttonStyle(.link)
                     .font(.system(size: 11.5))
@@ -1830,13 +1869,13 @@ private struct SystemAndContactsSettingsPane: View {
                         guard cmd.category == category else { return false }
                         guard !normalizedFilter.isEmpty else { return true }
                         let hay = GoogleDriveIndexService.removeAccents(
-                            "\(cmd.primaryKeyword) \(cmd.title) \(cmd.subtitle) \(cmd.keywords.joined(separator: " "))"
+                            "\(cmd.primaryKeyword) \(cmd.bilingualSearchText)"
                         ).lowercased()
                         return hay.contains(normalizedFilter)
                     }
 
                     if !commands.isEmpty {
-                        MacSettingsSection(title: category.rawValue) {
+                        MacSettingsSection(title: category.localizedTitle) {
                             ForEach(Array(commands.enumerated()), id: \.element.id) { idx, cmd in
                                 if idx > 0 {
                                     MacSettingsRowDivider(leadingInset: 46)
@@ -1899,7 +1938,7 @@ private struct SystemCommandSettingsRow: View {
             Spacer(minLength: 12)
 
             if command.supportsConfirmation {
-                Toggle("Xác nhận", isOn: Binding(
+                Toggle(L("Xác nhận", "Confirm"), isOn: Binding(
                     get: { settings.requiresSystemCommandConfirmation(command.id) },
                     set: { settings.setSystemCommandConfirmation(command.id, confirm: $0) }
                 ))
@@ -1908,7 +1947,7 @@ private struct SystemCommandSettingsRow: View {
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
                 .disabled(!isEnabled)
-                .help("Hiển thị hộp thoại xác nhận trước khi thực thi (giữ phím ⌥ khi nhấn ↩ để bỏ qua)")
+                .help(L("Hiển thị hộp thoại xác nhận trước khi thực thi (giữ phím ⌥ khi nhấn ↩ để bỏ qua)", "Show confirmation dialog before executing (hold ⌥ on ↩ to bypass)"))
             }
 
             Toggle("", isOn: Binding(
@@ -1936,65 +1975,65 @@ private struct AIMarkdownSettingsPane: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 // 1. Output & LLM Optimization
-                MacSettingsSection(title: "Đầu ra & Tối ưu hóa cho LLM") {
+                MacSettingsSection(title: L("Đầu ra & Tối ưu hóa cho LLM", "Output & LLM Optimization")) {
                     MacSettingsToggleRow(
-                        title: "Lưu tệp .md cạnh tệp gốc",
-                        subtitle: "Tạo tệp <tên_file>.md cùng thư mục khi chạy Convert to Markdown",
+                        title: L("Lưu tệp .md cạnh tệp gốc", "Save .md file beside source file"),
+                        subtitle: L("Tạo tệp <tên_file>.md cùng thư mục khi chạy Convert to Markdown", "Create <filename>.md in same folder when converting to Markdown"),
                         isOn: $settings.saveMarkdownBesideSource
                     )
 
                     MacSettingsRowDivider()
 
                     MacSettingsToggleRow(
-                        title: "Tự động sao chép vào Clipboard",
-                        subtitle: "Sẵn sàng dán (⌘V) ngay vào Claude, ChatGPT hoặc Gemini sau khi chuyển đổi",
+                        title: L("Tự động sao chép vào Clipboard", "Automatically copy to Clipboard"),
+                        subtitle: L("Sẵn sàng dán (⌘V) ngay vào Claude, ChatGPT hoặc Gemini sau khi chuyển đổi", "Ready to paste (⌘V) into Claude, ChatGPT or Gemini right after conversion"),
                         isOn: $settings.autoCopyMarkdownToClipboard
                     )
 
                     MacSettingsRowDivider()
 
                     MacSettingsToggleRow(
-                        title: "Chèn khối thông tin YAML Frontmatter",
-                        subtitle: "Đính kèm tên tệp gốc, định dạng và thời gian chuyển đổi ở đầu tệp Markdown",
+                        title: L("Chèn khối thông tin YAML Frontmatter", "Include YAML Frontmatter metadata"),
+                        subtitle: L("Đính kèm tên tệp gốc, định dạng và thời gian chuyển đổi ở đầu tệp Markdown", "Attach original filename, format, and conversion timestamp at the top of Markdown"),
                         isOn: $settings.includeMetadataHeader
                     )
 
                     MacSettingsRowDivider()
 
                     MacSettingsToggleRow(
-                        title: "Bọc thẻ cấu trúc XML khi gộp nhiều tệp",
-                        subtitle: "Đóng gói theo chuẩn <documents><document> giúp mô hình AI phân tách ngữ cảnh",
+                        title: L("Bọc thẻ cấu trúc XML khi gộp nhiều tệp", "Wrap XML structural tags when merging files"),
+                        subtitle: L("Đóng gói theo chuẩn <documents><document> giúp mô hình AI phân tách ngữ cảnh", "Package in <documents><document> schema to help AI models separate context"),
                         isOn: $settings.wrapMultiFilesInXMLTags
                     )
 
                     MacSettingsRowDivider()
 
                     MacSettingsToggleRow(
-                        title: "Tối ưu hóa Token & chuẩn hóa Tiếng Việt",
-                        subtitle: "Chuẩn hóa Unicode NFC, xóa ký tự ẩn và gộp dòng trắng thừa (~15–25% nhẹ hơn)",
+                        title: L("Tối ưu hóa Token & chuẩn hóa Tiếng Việt", "Optimize Tokens & Vietnamese Normalization"),
+                        subtitle: L("Chuẩn hóa Unicode NFC, xóa ký tự ẩn và gộp dòng trắng thừa (~15–25% nhẹ hơn)", "Normalize Unicode NFC, strip hidden characters and collapse blank lines (~15–25% lighter)"),
                         isOn: $settings.optimizeMarkdownTokens
                     )
 
                     MacSettingsRowDivider()
 
                     MacSettingsToggleRow(
-                        title: "Nhận diện văn bản Apple Vision OCR",
-                        subtitle: "Tự động trích xuất chữ Tiếng Việt và Tiếng Anh khi gặp PDF scan hoặc ảnh chụp",
+                        title: L("Nhận diện văn bản Apple Vision OCR", "Apple Vision Neural OCR text recognition"),
+                        subtitle: L("Tự động trích xuất chữ Tiếng Việt và Tiếng Anh khi gặp PDF scan hoặc ảnh chụp", "Automatically extract Vietnamese and English text from scanned PDFs or images"),
                         isOn: $settings.enableVisionOCR
                     )
 
                     MacSettingsRowDivider()
 
                     MacSettingsRow(
-                        title: "Chia nhỏ tài liệu dài (Smart Chunking)",
-                        subtitle: "Tự động tách theo mục H1/H2 vào thư mục _Chunks khi vượt ngưỡng token"
+                        title: L("Chia nhỏ tài liệu dài (Smart Chunking)", "Split long documents (Smart Chunking)"),
+                        subtitle: L("Tự động tách theo mục H1/H2 vào thư mục _Chunks khi vượt ngưỡng token", "Automatically split by H1/H2 headings into _Chunks folder when exceeding token limit")
                     ) {
                         HStack(spacing: 10) {
                             if settings.enableSmartChunking {
                                 Picker("", selection: $settings.smartChunkMaxTokens) {
-                                    Text("15.000 tokens").tag(15_000)
-                                    Text("25.000 tokens").tag(25_000)
-                                    Text("40.000 tokens").tag(40_000)
+                                    Text(L("15.000 tokens", "15,000 tokens")).tag(15_000)
+                                    Text(L("25.000 tokens", "25,000 tokens")).tag(25_000)
+                                    Text(L("40.000 tokens", "40,000 tokens")).tag(40_000)
                                 }
                                 .labelsHidden()
                                 .pickerStyle(.menu)
@@ -2011,10 +2050,10 @@ private struct AIMarkdownSettingsPane: View {
                 }
 
                 // 2. Hybrid Engines Status
-                MacSettingsSection(title: "Bộ máy chuyển đổi (Hybrid Engines)") {
+                MacSettingsSection(title: L("Bộ máy chuyển đổi (Hybrid Engines)", "Conversion Engines (Hybrid Engines)")) {
                     MacEngineStatusRow(
                         title: "AI Document Toolkit (PyMuPDF4LLM + MarkItDown)",
-                        detail: diag.pythonPath.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? "Chưa cài đặt — tự động dùng bộ chuyển đổi Swift nội bộ",
+                        detail: diag.pythonPath.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? L("Chưa cài đặt — tự động dùng bộ chuyển đổi Swift nội bộ", "Not installed — automatically falls back to native Swift engine"),
                         isReady: diag.toolkitReady
                     )
 
@@ -2022,7 +2061,7 @@ private struct AIMarkdownSettingsPane: View {
 
                     MacEngineStatusRow(
                         title: "LibreOffice Headless (.doc, .xls, .ppt, .rtf)",
-                        detail: diag.sofficePath ?? "Chưa cài đặt — tự động dùng macOS textutil AST",
+                        detail: diag.sofficePath ?? L("Chưa cài đặt — tự động dùng macOS textutil AST", "Not installed — automatically falls back to macOS textutil AST"),
                         isReady: diag.libreOfficeReady
                     )
 
@@ -2030,7 +2069,7 @@ private struct AIMarkdownSettingsPane: View {
 
                     MacEngineStatusRow(
                         title: "Google Workspace (.gdoc, .gsheet, .gslides) & Web Reader",
-                        detail: "Xuất trực tiếp cấu trúc bảng biểu và bài viết sạch sang Markdown",
+                        detail: L("Xuất trực tiếp cấu trúc bảng biểu và bài viết sạch sang Markdown", "Directly export tables and clean article content to Markdown"),
                         isReady: true
                     )
 
@@ -2038,15 +2077,15 @@ private struct AIMarkdownSettingsPane: View {
 
                     MacEngineStatusRow(
                         title: "Apple Vision Neural OCR & Native Swift Fallback",
-                        detail: "Hoạt động độc lập trên macOS không cần phụ thuộc bên ngoài",
+                        detail: L("Hoạt động độc lập trên macOS không cần phụ thuộc bên ngoài", "Runs natively on macOS without any external dependencies"),
                         isReady: true
                     )
 
                     MacSettingsRowDivider()
 
                     MacSettingsRow(
-                        title: "Đường dẫn AI Toolkit",
-                        subtitle: "Thư mục chứa môi trường Python tùy chọn"
+                        title: L("Đường dẫn AI Toolkit", "AI Toolkit Path"),
+                        subtitle: L("Thư mục chứa môi trường Python tùy chọn", "Directory containing optional Python virtual environment")
                     ) {
                         TextField("~/Developer/AI/ai-document-toolkit", text: $settings.aiToolkitPath)
                             .textFieldStyle(.roundedBorder)
@@ -2056,15 +2095,15 @@ private struct AIMarkdownSettingsPane: View {
                 }
 
                 // 3. Clean Native Drop Zone
-                MacSettingsSection(title: "Chuyển đổi nhanh bằng Kéo & Thả") {
+                MacSettingsSection(title: L("Chuyển đổi nhanh bằng Kéo & Thả", "Quick Conversion via Drag & Drop")) {
                     VStack(spacing: 6) {
                         Image(systemName: "arrow.down.doc")
                             .font(.system(size: 22, weight: .regular))
                             .foregroundStyle(isDropTargeted ? Color.accentColor : Color.secondary)
-                        Text("Kéo và thả tệp Word, Excel, PDF hoặc Ảnh vào đây để chuyển sang Markdown")
+                        Text(L("Kéo và thả tệp Word, Excel, PDF hoặc Ảnh vào đây để chuyển sang Markdown", "Drag and drop Word, Excel, PDF, or Image files here to convert to Markdown"))
                             .font(.system(size: 12.5, weight: .medium))
                             .foregroundStyle(.primary)
-                        Text("Hoặc chọn tệp trong Finder rồi nhấn \(settings.universalActionHotKey.readableDisplay)")
+                        Text(L("Hoặc chọn tệp trong Finder rồi nhấn \(settings.universalActionHotKey.readableDisplay)", "Or select files in Finder and press \(settings.universalActionHotKey.readableDisplay)"))
                             .font(.system(size: 11.5))
                             .foregroundStyle(.secondary)
                     }
@@ -2111,7 +2150,7 @@ private struct MacEngineStatusRow: View {
                 Circle()
                     .fill(isReady ? Color.green : Color.secondary.opacity(0.5))
                     .frame(width: 6, height: 6)
-                Text(isReady ? "Sẵn sàng" : "Dự phòng")
+                Text(isReady ? L("Sẵn sàng", "Ready") : L("Dự phòng", "Fallback"))
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
             }
@@ -2132,10 +2171,10 @@ private struct UniversalActionsSettingsPane: View {
             VStack(alignment: .leading, spacing: 20) {
                 // Quick Reference Card
                 MacSettingsSection(
-                    title: "Cách gọi nhanh Universal Actions",
+                    title: L("Cách gọi nhanh Universal Actions", "Quick Access to Universal Actions"),
                     headerTrailing: {
                         if !settings.disabledActionIDs.isEmpty {
-                            Button("Bật lại tất cả (\(settings.disabledActionIDs.count) đang tắt)") {
+                            Button(L("Bật lại tất cả (\(settings.disabledActionIDs.count) đang tắt)", "Enable all (\(settings.disabledActionIDs.count) disabled)")) {
                                 settings.disabledActionIDs.removeAll()
                             }
                             .buttonStyle(.link)
@@ -2145,16 +2184,16 @@ private struct UniversalActionsSettingsPane: View {
                 ) {
                     ShortcutHintGridRow(
                         leftKey: settings.universalActionHotKey.readableDisplay,
-                        leftDesc: "Mở trên tệp Finder hoặc văn bản đang chọn",
+                        leftDesc: L("Mở trên tệp Finder hoặc văn bản đang chọn", "Open for selected Finder file or highlighted text"),
                         rightKey: "⇥ / ⇧↩",
-                        rightDesc: "Mở từ kết quả tìm kiếm DriveBar"
+                        rightDesc: L("Mở từ kết quả tìm kiếm DriveBar", "Open from DriveBar search results")
                     )
                     MacSettingsRowDivider()
                     ShortcutHintGridRow(
                         leftKey: "⌥↑ / ⌥↓ → ⌥→",
-                        leftDesc: "Gom nhiều tệp vào Buffer để xử lý hàng loạt",
+                        leftDesc: L("Gom nhiều tệp vào Buffer để xử lý hàng loạt", "Collect files into Buffer for batch processing"),
                         rightKey: "⌥↩",
-                        rightDesc: "Chỉ sao chép Markdown (không tạo tệp .md)"
+                        rightDesc: L("Chỉ sao chép Markdown (không tạo tệp .md)", "Copy Markdown only (skip .md file creation)")
                     )
                 }
 
@@ -2163,12 +2202,11 @@ private struct UniversalActionsSettingsPane: View {
                     let items = UniversalActionCatalog.all.filter { item in
                         item.category == category &&
                         (filter.isEmpty ||
-                         item.title.localizedCaseInsensitiveContains(filter) ||
-                         item.subtitle.localizedCaseInsensitiveContains(filter))
+                         item.bilingualSearchText.localizedCaseInsensitiveContains(filter))
                     }
 
                     if !items.isEmpty {
-                        MacSettingsSection(title: category.rawValue) {
+                        MacSettingsSection(title: category.localizedTitle) {
                             ForEach(Array(items.enumerated()), id: \.element.id) { idx, item in
                                 if idx > 0 {
                                     MacSettingsRowDivider(leadingInset: 46)

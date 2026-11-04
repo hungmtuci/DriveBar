@@ -655,25 +655,25 @@ final class LauncherViewModel: ObservableObject {
             return ("Web → AI MD", .secondary)
         }
         if activeBrowseDirectory != nil || searchText.hasPrefix("/") || searchText.hasPrefix("~/") || searchText.hasPrefix("…") || searchText.hasPrefix("...") {
-            return ("Duyệt thư mục", .secondary)
+            return (L("Duyệt thư mục", "Browse Folder"), .secondary)
         }
         if lowerTrimmed == "a" || lowerRaw.hasPrefix("a ") {
-            return ("Ứng dụng", .secondary)
+            return (L("Ứng dụng", "Applications"), .secondary)
         }
         if lowerTrimmed == "m" || lowerRaw.hasPrefix("m ") {
-            return ("Thư mục Mac", .secondary)
+            return (L("Thư mục Mac", "Mac Folders"), .secondary)
         }
         if lowerTrimmed == "ff" || lowerRaw.hasPrefix("ff ") {
-            return ("Tệp tin", .secondary)
+            return (L("Tệp tin", "Files"), .secondary)
         }
         if lowerTrimmed == "c" || lowerRaw.hasPrefix("c ") {
-            return ("Danh bạ", .secondary)
+            return (L("Danh bạ", "Contacts"), .secondary)
         }
         if lowerTrimmed == "cb" || lowerRaw.hasPrefix("cb ") || lowerTrimmed == "clip" || lowerRaw.hasPrefix("clip ") {
             return ("Clipboard", .secondary)
         }
         if lowerTrimmed == "s" || lowerRaw.hasPrefix("s ") {
-            return ("Hệ thống", .secondary)
+            return (L("Hệ thống", "System"), .secondary)
         }
         if lowerTrimmed == "fs" || lowerRaw.hasPrefix("fs ") {
             return ("Shared Drives", .secondary)
@@ -682,10 +682,10 @@ final class LauncherViewModel: ObservableObject {
             return ("AI Toolkit", .secondary)
         }
         if trimmed.hasPrefix("//") {
-            return ("Lệnh hệ thống", .secondary)
+            return (L("Lệnh hệ thống", "System Commands"), .secondary)
         }
         if InstantUtilityService.evaluateMathExpression(trimmed) != nil {
-            return ("Máy tính", .secondary)
+            return (L("Máy tính", "Calculator"), .secondary)
         }
         return ("Google Drive", .secondary)
     }
@@ -708,8 +708,8 @@ final class LauncherViewModel: ObservableObject {
             searchResults = [
                 SearchResultItem(
                     id: "urlmd:copy:\(trimmed)",
-                    title: "Convert Web URL to Markdown (Copy vào Clipboard)",
-                    subtitle: "Lọc sạch bài viết / Google Docs / GitHub từ \(webURL.host ?? "URL") → Chuẩn AI (⌥↩ lưu file .md ra Desktop)",
+                    title: L("Convert Web URL to Markdown (Copy vào Clipboard)", "Convert Web URL to Markdown (Copy to Clipboard)"),
+                    subtitle: L("Lọc sạch bài viết / Google Docs / GitHub từ \(webURL.host ?? "URL") → Chuẩn AI (⌥↩ lưu file .md ra Desktop)", "Extracts clean articles / Google Docs / GitHub from \(webURL.host ?? "URL") → AI ready (⌥↩ save .md to Desktop)"),
                     path: nil,
                     isDirectory: false,
                     kind: .webURLQuickConvert(url: webURL, preview: false),
@@ -718,8 +718,8 @@ final class LauncherViewModel: ObservableObject {
                 ),
                 SearchResultItem(
                     id: "urlmd:preview:\(trimmed)",
-                    title: "Convert Web URL & Xem trước trong AI Inspector",
-                    subtitle: "Đếm số Token ước tính và xem trực tiếp văn bản Markdown đã làm sạch",
+                    title: L("Convert Web URL & Xem trước trong AI Inspector", "Convert Web URL & Preview in AI Inspector"),
+                    subtitle: L("Đếm số Token ước tính và xem trực tiếp văn bản Markdown đã làm sạch", "Inspect estimated tokens and preview cleaned Markdown text"),
                     path: nil,
                     isDirectory: false,
                     kind: .webURLQuickConvert(url: webURL, preview: true),
@@ -746,8 +746,8 @@ final class LauncherViewModel: ObservableObject {
             searchResults = [
                 SearchResultItem(
                     id: "aicmd:ocr_clip",
-                    title: "OCR Ảnh trong Clipboard sang Markdown (Tiếng Việt + Anh)",
-                    subtitle: "Nhận diện chữ chuẩn từ ảnh chụp màn hình vừa lưu trong Clipboard • ↩ Copy Markdown • ⌥↩ Xem trong AI Inspector",
+                    title: L("OCR Ảnh trong Clipboard sang Markdown (Tiếng Việt + Anh)", "OCR Clipboard Image to Markdown (Vietnamese + English)"),
+                    subtitle: L("Nhận diện chữ chuẩn từ ảnh chụp màn hình vừa lưu trong Clipboard • ↩ Copy Markdown • ⌥↩ Xem trong AI Inspector", "Accurate OCR from screenshot in Clipboard • ↩ Copy Markdown • ⌥↩ Preview in AI Inspector"),
                     path: nil,
                     isDirectory: false,
                     kind: .systemCommand(id: "sys.ocr_clipboard"),
@@ -756,8 +756,8 @@ final class LauncherViewModel: ObservableObject {
                 ),
                 SearchResultItem(
                     id: "aicmd:ocr_finder",
-                    title: "OCR Tệp PDF Scan / Ảnh đang chọn trong Finder sang Markdown",
-                    subtitle: "Dùng Apple Vision OCR trên tệp đang chọn trong Finder",
+                    title: L("OCR Tệp PDF Scan / Ảnh đang chọn trong Finder sang Markdown", "OCR Scanned PDF / Image Selected in Finder to Markdown"),
+                    subtitle: L("Dùng Apple Vision OCR trên tệp đang chọn trong Finder", "Run Apple Vision OCR on selected file in Finder"),
                     path: nil,
                     isDirectory: false,
                     kind: .aiQuickCommand(action: "ai.ocr_md"),
@@ -774,8 +774,8 @@ final class LauncherViewModel: ObservableObject {
             let items: [SearchResultItem] = [
                 SearchResultItem(
                     id: "aicmd:ocr_clip",
-                    title: "OCR Ảnh chụp màn hình từ Clipboard → Markdown",
-                    subtitle: "Trích xuất chữ Tiếng Việt & Tiếng Anh từ ảnh đang lưu trong Clipboard (⌥↩ xem trước)",
+                    title: L("OCR Ảnh chụp màn hình từ Clipboard → Markdown", "OCR Screenshot from Clipboard → Markdown"),
+                    subtitle: L("Trích xuất chữ Tiếng Việt & Tiếng Anh từ ảnh đang lưu trong Clipboard (⌥↩ xem trước)", "Extract Vietnamese & English text from screenshot in Clipboard (⌥↩ preview)"),
                     path: nil,
                     isDirectory: false,
                     kind: .systemCommand(id: "sys.ocr_clipboard"),
@@ -784,8 +784,8 @@ final class LauncherViewModel: ObservableObject {
                 ),
                 SearchResultItem(
                     id: "aicmd:md",
-                    title: "Convert to Markdown (Mục đang chọn trong Finder)",
-                    subtitle: "Xuất file .md cạnh file gốc & Copy thẳng Markdown vào Clipboard cho AI",
+                    title: L("Convert to Markdown (Mục đang chọn trong Finder)", "Convert to Markdown (Selected Finder Item)"),
+                    subtitle: L("Xuất file .md cạnh file gốc & Copy thẳng Markdown vào Clipboard cho AI", "Generate .md next to source & copy Markdown to Clipboard for AI"),
                     path: nil,
                     isDirectory: false,
                     kind: .aiQuickCommand(action: "ai.convert_md"),
@@ -794,8 +794,8 @@ final class LauncherViewModel: ObservableObject {
                 ),
                 SearchResultItem(
                     id: "aicmd:copymd",
-                    title: "Convert to Markdown → Copy Only",
-                    subtitle: "Chỉ chuyển sang Markdown trong bộ nhớ và chép vào Clipboard (⌘V ngay)",
+                    title: L("Convert to Markdown → Copy Only", "Convert to Markdown → Copy Only"),
+                    subtitle: L("Chỉ chuyển sang Markdown trong bộ nhớ và chép vào Clipboard (⌘V ngay)", "Convert in memory and copy directly to Clipboard (⌘V immediately)"),
                     path: nil,
                     isDirectory: false,
                     kind: .aiQuickCommand(action: "ai.copy_md"),
@@ -804,8 +804,8 @@ final class LauncherViewModel: ObservableObject {
                 ),
                 SearchResultItem(
                     id: "aicmd:pkg",
-                    title: "Convert for AI (Gói đầy đủ _AI/)",
-                    subtitle: "Tạo thư mục _AI/ chứa .md, .txt, .json, .html, manifest cho các tệp Finder",
+                    title: L("Convert for AI (Gói đầy đủ _AI/)", "Convert for AI (Full _AI/ Package)"),
+                    subtitle: L("Tạo thư mục _AI/ chứa .md, .txt, .json, .html, manifest cho các tệp Finder", "Generate _AI/ folder with .md, .txt, .json, .html, manifest for Finder files"),
                     path: nil,
                     isDirectory: false,
                     kind: .aiQuickCommand(action: "ai.convert_for_ai"),
@@ -814,8 +814,8 @@ final class LauncherViewModel: ObservableObject {
                 ),
                 SearchResultItem(
                     id: "aicmd:pdf",
-                    title: "Convert to PDF",
-                    subtitle: "Chuyển các tệp đang chọn trong Finder sang PDF chuẩn qua LibreOffice",
+                    title: L("Convert to PDF", "Convert to PDF"),
+                    subtitle: L("Chuyển các tệp đang chọn trong Finder sang PDF chuẩn qua LibreOffice", "Convert selected Finder files to standard PDF via LibreOffice"),
                     path: nil,
                     isDirectory: false,
                     kind: .aiQuickCommand(action: "ai.convert_pdf"),
@@ -1292,8 +1292,8 @@ final class LauncherViewModel: ObservableObject {
             searchResults = [
                 SearchResultItem(
                     id: "no-gdrive",
-                    title: "Không tìm thấy thư mục Google Drive trong ~/Library/CloudStorage",
-                    subtitle: "Gõ 'c ' tìm Danh bạ, 'cb ' lịch sử Clipboard, 'a ' ứng dụng, 's ' lệnh hệ thống, hoặc dùng Universal Actions (\(AppSettings.shared.universalActionHotKey.readableDisplay))",
+                    title: L("Không tìm thấy thư mục Google Drive trong ~/Library/CloudStorage", "Google Drive folder not found in ~/Library/CloudStorage"),
+                    subtitle: L("Gõ 'c ' tìm Danh bạ, 'cb ' lịch sử Clipboard, 'a ' ứng dụng, 's ' lệnh hệ thống, hoặc dùng Universal Actions (\(AppSettings.shared.universalActionHotKey.readableDisplay))", "Type 'c ' for Contacts, 'cb ' for Clipboard, 'a ' for Apps, 's ' for System, or use Universal Actions (\(AppSettings.shared.universalActionHotKey.readableDisplay))"),
                     path: nil,
                     isDirectory: false,
                     kind: .infoBanner,
@@ -1431,8 +1431,8 @@ final class LauncherViewModel: ObservableObject {
             let folderName = currentDir == "/" ? "/" : (currentDir as NSString).lastPathComponent
             items.append(SearchResultItem(
                 id: "open-finder:\(currentDir)",
-                title: "Mở thư mục '\(folderName)' trong Finder",
-                subtitle: "Nhấn Enter (hoặc click chuột) để mở trong Finder • Phím ↓ chọn mục con bên dưới • ⇥ Actions",
+                title: L("Mở thư mục '\(folderName)' trong Finder", "Open folder '\(folderName)' in Finder"),
+                subtitle: L("Nhấn Enter (hoặc click chuột) để mở trong Finder • Phím ↓ chọn mục con bên dưới • ⇥ Actions", "Press Enter (or click) to open in Finder • ↓ arrow selects children below • ⇥ Actions"),
                 path: currentDir,
                 isDirectory: true,
                 kind: .openInFinder(path: currentDir),
@@ -1459,7 +1459,7 @@ final class LauncherViewModel: ObservableObject {
             let parent = (currentDir as NSString).deletingLastPathComponent
             items.append(SearchResultItem(
                 id: "parent:\(parent)",
-                title: ".. (Quay lại thư mục cha)",
+                title: L(".. (Quay lại thư mục cha)", ".. (Go to parent directory)"),
                 subtitle: parent,
                 path: parent,
                 isDirectory: true,
@@ -1472,7 +1472,9 @@ final class LauncherViewModel: ObservableObject {
         if items.isEmpty {
             items.append(SearchResultItem(
                 id: "empty-browse",
-                title: isInitialRAMOnly ? "Đang đọc danh sách tệp trong thư mục..." : "Không có tệp hoặc thư mục con khớp '\(filterPart)'",
+                title: isInitialRAMOnly
+                    ? L("Đang đọc danh sách tệp trong thư mục...", "Reading directory contents...")
+                    : L("Không có tệp hoặc thư mục con khớp '\(filterPart)'", "No files or subfolders matching '\(filterPart)'"),
                 subtitle: currentDir,
                 path: nil,
                 isDirectory: false,
@@ -1555,7 +1557,7 @@ final class LauncherViewModel: ObservableObject {
         SearchResultItem(
             id: "calc:\(math.expression)",
             title: "= \(math.formattedDisplay)",
-            subtitle: "Biểu thức: \(math.expression)  •  ↩ Copy kết quả (\(math.rawCopyString))  •  ⌥↩ Copy cả phép tính",
+            subtitle: L("Biểu thức: \(math.expression)  •  ↩ Copy kết quả (\(math.rawCopyString))  •  ⌥↩ Copy cả phép tính", "Expression: \(math.expression)  •  ↩ Copy result (\(math.rawCopyString))  •  ⌥↩ Copy full equation"),
             path: nil,
             isDirectory: false,
             kind: .calculatorResult(
@@ -1563,7 +1565,7 @@ final class LauncherViewModel: ObservableObject {
                 rawValue: math.rawCopyString,
                 formattedValue: math.formattedDisplay
             ),
-            badge: "Máy tính",
+            badge: L("Máy tính", "Calculator"),
             sfSymbolFallback: "function"
         )
     }
@@ -1601,12 +1603,13 @@ final class LauncherViewModel: ObservableObject {
             let tokens = q.split(separator: " ").map(String.init)
             var scored: [(score: Int, def: UniversalActionDefinition)] = []
             for def in candidates {
+                let biNorm = GoogleDriveIndexService.removeAccents(def.bilingualSearchText).lowercased()
                 let titleNorm = GoogleDriveIndexService.removeAccents(def.title).lowercased()
                 let subNorm = GoogleDriveIndexService.removeAccents(def.subtitle).lowercased()
                 let kwNorm = def.keywords.lowercased()
 
                 let allMatched = tokens.allSatisfy { tok in
-                    titleNorm.contains(tok) || kwNorm.contains(tok) || subNorm.contains(tok)
+                    biNorm.contains(tok) || titleNorm.contains(tok) || kwNorm.contains(tok) || subNorm.contains(tok)
                 }
                 guard allMatched else { continue }
 
@@ -1665,12 +1668,12 @@ final class LauncherViewModel: ObservableObject {
                 let folderName = currentDir == "/" ? "/" : (currentDir as NSString).lastPathComponent
                 items.append(SearchResultItem(
                     id: "dest-here:\(currentDir)",
-                    title: "Chọn chính thư mục này: '\(folderName)'",
+                    title: L("Chọn chính thư mục này: '\(folderName)'", "Select this folder: '\(folderName)'"),
                     subtitle: currentDir,
                     path: currentDir,
                     isDirectory: true,
                     kind: .driveFolder(path: currentDir),
-                    badge: "Đích",
+                    badge: L("Đích", "Dest"),
                     sfSymbolFallback: "checkmark.circle.fill"
                 ))
             }
@@ -1705,12 +1708,12 @@ final class LauncherViewModel: ObservableObject {
                         let folderName = currentDir == "/" ? "/" : (currentDir as NSString).lastPathComponent
                         built.append(SearchResultItem(
                             id: "dest-here:\(currentDir)",
-                            title: "Chọn chính thư mục này: '\(folderName)'",
+                            title: L("Chọn chính thư mục này: '\(folderName)'", "Select this folder: '\(folderName)'"),
                             subtitle: currentDir,
                             path: currentDir,
                             isDirectory: true,
                             kind: .driveFolder(path: currentDir),
-                            badge: "Đích",
+                            badge: L("Đích", "Dest"),
                             sfSymbolFallback: "checkmark.circle.fill"
                         ))
                     }
@@ -2023,8 +2026,8 @@ final class LauncherViewModel: ObservableObject {
             pb.setString(markdown, forType: .string)
             LauncherPanelController.shared.hide()
             FloatingToastController.shared.showSuccess(
-                title: "Đã sao chép Markdown vào Clipboard",
-                subtitle: "Sẵn sàng nhấn ⌘V vào AI"
+                title: L("Đã sao chép Markdown vào Clipboard", "Copied Markdown to Clipboard"),
+                subtitle: L("Sẵn sàng nhấn ⌘V vào AI", "Ready to paste (⌘V) into AI")
             )
 
         case .contactDetail(let contactID, _, _):
@@ -2077,17 +2080,17 @@ final class LauncherViewModel: ObservableObject {
                     .filter { $0.contains("/Library/CloudStorage/") || FileManager.default.fileExists(atPath: $0) }
                     .map { URL(fileURLWithPath: $0) }
                 guard !urls.isEmpty else { return false }
-                openUniversalActions(for: .files(urls, sourceNote: "Lịch sử Clipboard"), directExternalTrigger: false)
+                openUniversalActions(for: .files(urls, sourceNote: L("Lịch sử Clipboard", "Clipboard History")), directExternalTrigger: false)
                 return true
             case .url:
                 if let u = URL(string: entry.textContent.trimmingCharacters(in: .whitespacesAndNewlines)) {
-                    openUniversalActions(for: .url(u, sourceNote: "Lịch sử Clipboard"), directExternalTrigger: false)
+                    openUniversalActions(for: .url(u, sourceNote: L("Lịch sử Clipboard", "Clipboard History")), directExternalTrigger: false)
                     return true
                 }
-                openUniversalActions(for: .text(entry.textContent, sourceNote: "Lịch sử Clipboard"), directExternalTrigger: false)
+                openUniversalActions(for: .text(entry.textContent, sourceNote: L("Lịch sử Clipboard", "Clipboard History")), directExternalTrigger: false)
                 return true
             case .text:
-                openUniversalActions(for: .text(entry.textContent, sourceNote: "Lịch sử Clipboard"), directExternalTrigger: false)
+                openUniversalActions(for: .text(entry.textContent, sourceNote: L("Lịch sử Clipboard", "Clipboard History")), directExternalTrigger: false)
                 return true
             }
         }
@@ -2127,8 +2130,8 @@ final class LauncherViewModel: ObservableObject {
         let nowPinned = AppSettings.shared.togglePin(path)
         let name = (path as NSString).lastPathComponent
         FloatingToastController.shared.showSuccess(
-            title: nowPinned ? "Đã ghim '\(name)'" : "Đã bỏ ghim '\(name)'",
-            subtitle: nowPinned ? "Luôn hiện đầu tiên khi mở DriveBar" : "Đã gỡ khỏi danh sách ghim",
+            title: nowPinned ? L("Đã ghim '\(name)'", "Pinned '\(name)'") : L("Đã bỏ ghim '\(name)'", "Unpinned '\(name)'"),
+            subtitle: nowPinned ? L("Luôn hiện đầu tiên khi mở DriveBar", "Always shows first in DriveBar") : L("Đã gỡ khỏi danh sách ghim", "Removed from pinned list"),
             symbol: nowPinned ? "pin.fill" : "pin.slash"
         )
         refreshSearchResults()
@@ -2141,8 +2144,8 @@ final class LauncherViewModel: ObservableObject {
     func runClipboardImageOCR(openPreview: Bool) {
         guard let imgURL = ClipboardHistoryService.shared.materializeCurrentClipboardImageURL() else {
             FloatingToastController.shared.showError(
-                title: "Không có hình ảnh trong Clipboard",
-                subtitle: "Hãy chụp màn hình (⌘⌃⇧4) hoặc Copy một hình ảnh trước khi chạy OCR"
+                title: L("Không có hình ảnh trong Clipboard", "No image in Clipboard"),
+                subtitle: L("Hãy chụp màn hình (⌘⌃⇧4) hoặc Copy một hình ảnh trước khi chạy OCR", "Take a screenshot (⌘⌃⇧4) or copy an image before running OCR")
             )
             return
         }
@@ -2151,7 +2154,7 @@ final class LauncherViewModel: ObservableObject {
             LauncherPanelController.shared.hide()
         }
         FloatingToastController.shared.showProgress(
-            title: "Đang OCR ảnh trong Clipboard (Tiếng Việt + Anh)...",
+            title: L("Đang OCR ảnh trong Clipboard (Tiếng Việt + Anh)...", "Running OCR on Clipboard image (Vietnamese + English)..."),
             subtitle: imgURL.lastPathComponent
         )
 
@@ -2165,8 +2168,8 @@ final class LauncherViewModel: ObservableObject {
                 )
                 guard let first = results.first else { return }
                 FloatingToastController.shared.showSuccess(
-                    title: "Đã OCR ảnh & Copy Markdown vào Clipboard!",
-                    subtitle: "Apple Vision • ~\(first.estimatedTokens.formatted()) tokens • Sẵn sàng ⌘V",
+                    title: L("Đã OCR ảnh & Copy Markdown vào Clipboard!", "OCR completed & Markdown copied to Clipboard!"),
+                    subtitle: L("Apple Vision • ~\(first.estimatedTokens.formatted()) tokens • Sẵn sàng ⌘V", "Apple Vision • ~\(first.estimatedTokens.formatted()) tokens • Ready to ⌘V"),
                     symbol: "camera.viewfinder"
                 )
                 if openPreview {
@@ -2182,7 +2185,7 @@ final class LauncherViewModel: ObservableObject {
                 }
             } catch {
                 FloatingToastController.shared.showError(
-                    title: "Không nhận diện được văn bản trong ảnh",
+                    title: L("Không nhận diện được văn bản trong ảnh", "Failed to recognize text in image"),
                     subtitle: error.localizedDescription
                 )
             }
@@ -2200,8 +2203,8 @@ final class LauncherViewModel: ObservableObject {
                 DispatchQueue.main.async {
                     LauncherViewModel.shared.refreshSearchResults()
                     FloatingToastController.shared.showSuccess(
-                        title: "Đã cập nhật thư mục Mac",
-                        subtitle: "Gõ 'm' để xem hoặc 'm <từ khóa>' để tìm kiếm các tệp",
+                        title: L("Đã cập nhật thư mục Mac", "Updated Mac Folders"),
+                        subtitle: L("Gõ 'm' để xem hoặc 'm <từ khóa>' để tìm kiếm các tệp", "Type 'm' to browse or 'm <query>' to search files"),
                         symbol: "folder.badge.plus"
                     )
                 }
@@ -2215,7 +2218,7 @@ final class LauncherViewModel: ObservableObject {
             pb.setString(textToCopy, forType: .string)
             LauncherPanelController.shared.hide()
             FloatingToastController.shared.showSuccess(
-                title: "Đã Copy kết quả: \(textToCopy)",
+                title: L("Đã Copy kết quả: \(textToCopy)", "Copied result: \(textToCopy)"),
                 subtitle: "\(expr) = \(prettyVal)",
                 symbol: "function"
             )
@@ -2290,15 +2293,15 @@ final class LauncherViewModel: ObservableObject {
             if cmd == "rebuild" {
                 GoogleDriveIndexService.shared.rebuildAllCaches()
                 FloatingToastController.shared.showProgress(
-                    title: "Đang quét lại Google Drive ở nền...",
-                    subtitle: "Bạn vẫn có thể tìm kiếm bình thường"
+                    title: L("Đang quét lại Google Drive ở nền...", "Rescanning Google Drive in background..."),
+                    subtitle: L("Bạn vẫn có thể tìm kiếm bình thường", "You can continue searching as usual")
                 )
                 LauncherPanelController.shared.hide()
             } else if cmd == "clean-history" {
                 GoogleDriveIndexService.shared.clearAllHistory()
                 refreshSearchResults()
                 FloatingToastController.shared.showSuccess(
-                    title: "Đã làm sạch lịch sử gần đây",
+                    title: L("Đã làm sạch lịch sử gần đây", "Cleared recent history"),
                     subtitle: "Google Drive Search"
                 )
             } else if cmd == "open-window-switcher" {
@@ -2330,8 +2333,8 @@ final class LauncherViewModel: ObservableObject {
             let finderURLs = SelectionCaptureService.fetchFinderSelectionURLs()
             guard !finderURLs.isEmpty else {
                 FloatingToastController.shared.showError(
-                    title: "Chưa chọn tệp nào trong Finder",
-                    subtitle: "Hãy chọn ít nhất 1 tệp trong Finder hoặc duyệt tệp rồi nhấn Tab"
+                    title: L("Chưa chọn tệp nào trong Finder", "No files selected in Finder"),
+                    subtitle: L("Hãy chọn ít nhất 1 tệp trong Finder hoặc duyệt tệp rồi nhấn Tab", "Select at least 1 file in Finder or browse files then press Tab")
                 )
                 return
             }
@@ -2434,14 +2437,14 @@ final class LauncherViewModel: ObservableObject {
                 if let gd {
                     pb.setString(gd.shareURL.absoluteString, forType: .string)
                     FloatingToastController.shared.showSuccess(
-                        title: "Đã sao chép liên kết chia sẻ Google Drive",
+                        title: L("Đã sao chép liên kết chia sẻ Google Drive", "Copied Google Drive share link"),
                         subtitle: lastComponent,
                         symbol: "link"
                     )
                 } else {
                     pb.setString(path, forType: .string)
                     FloatingToastController.shared.showSuccess(
-                        title: "Đã sao chép đường dẫn cục bộ",
+                        title: L("Đã sao chép đường dẫn cục bộ", "Copied local file path"),
                         subtitle: path,
                         symbol: "link"
                     )

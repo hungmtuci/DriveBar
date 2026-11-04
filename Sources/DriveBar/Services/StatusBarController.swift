@@ -31,9 +31,15 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         button.image = img
 
         if let ver = UpdateCheckerService.shared.availableVersion {
-            button.toolTip = "DriveBar — Đã có bản cập nhật mới v\(ver)! Bấm để cập nhật tự động."
+            button.toolTip = L(
+                "DriveBar — Đã có bản cập nhật mới v\(ver)! Bấm để cập nhật tự động.",
+                "DriveBar — New update v\(ver) available! Click to update automatically."
+            )
         } else {
-            button.toolTip = "DriveBar — Tìm kiếm Google Drive & Convert Markdown cho AI"
+            button.toolTip = L(
+                "DriveBar — Tìm kiếm Google Drive & Convert Markdown cho AI",
+                "DriveBar — Google Drive Search & AI Markdown Converter"
+            )
         }
     }
 
@@ -53,7 +59,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(header)
 
         let openSearch = NSMenuItem(
-            title: "Mở Thanh Tìm Kiếm Google Drive (\(settings.searchHotKey.readableDisplay))",
+            title: L(
+                "Mở Thanh Tìm Kiếm Google Drive (\(settings.searchHotKey.readableDisplay))",
+                "Open Google Drive Search (\(settings.searchHotKey.readableDisplay))"
+            ),
             action: #selector(openSearchAction),
             keyEquivalent: ""
         )
@@ -62,7 +71,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(openSearch)
 
         let openUA = NSMenuItem(
-            title: "Universal Actions trên mục đang chọn (\(settings.universalActionHotKey.readableDisplay))",
+            title: L(
+                "Universal Actions trên mục đang chọn (\(settings.universalActionHotKey.readableDisplay))",
+                "Universal Actions on Selection (\(settings.universalActionHotKey.readableDisplay))"
+            ),
             action: #selector(openUniversalAction),
             keyEquivalent: ""
         )
@@ -71,7 +83,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(openUA)
 
         let openWinPreview = NSMenuItem(
-            title: "Windows Preview — Chuyển nhanh cửa sổ (\(settings.windowSwitcherHotKey.readableDisplay))",
+            title: L(
+                "Windows Preview — Chuyển nhanh cửa sổ (\(settings.windowSwitcherHotKey.readableDisplay))",
+                "Windows Preview — Switch Windows (\(settings.windowSwitcherHotKey.readableDisplay))"
+            ),
             action: #selector(openWindowsPreviewAction),
             keyEquivalent: ""
         )
@@ -80,7 +95,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(openWinPreview)
 
         let openMacFoldersItem = NSMenuItem(
-            title: "Tìm kiếm Thư mục trên Mac ('m ' — \(settings.customMacFolders.count) thư mục gốc)",
+            title: L(
+                "Tìm kiếm Thư mục trên Mac ('m ' — \(settings.customMacFolders.count) thư mục gốc)",
+                "Search Mac Folders ('m ' — \(settings.customMacFolders.count) roots)"
+            ),
             action: #selector(openMacFoldersSearchAction),
             keyEquivalent: ""
         )
@@ -89,7 +107,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(openMacFoldersItem)
 
         let openContactsItem = NSMenuItem(
-            title: "Tra cứu Danh bạ — Tiếng Việt không dấu ('c ')",
+            title: L(
+                "Tra cứu Danh bạ — Tiếng Việt không dấu ('c ')",
+                "Search Contacts ('c ')"
+            ),
             action: #selector(openContactsLookupAction),
             keyEquivalent: ""
         )
@@ -98,7 +119,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(openContactsItem)
 
         let openClipHist = NSMenuItem(
-            title: "Lịch sử Clipboard ('cb ' — \(ClipboardHistoryService.shared.entries.count) mục)",
+            title: L(
+                "Lịch sử Clipboard ('cb ' — \(ClipboardHistoryService.shared.entries.count) mục)",
+                "Clipboard History ('cb ' — \(ClipboardHistoryService.shared.entries.count) items)"
+            ),
             action: #selector(openClipboardHistoryAction),
             keyEquivalent: ""
         )
@@ -107,7 +131,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(openClipHist)
 
         let openSysCmdItem = NSMenuItem(
-            title: "Lệnh Hệ thống macOS ('s ' — Khóa, Sleep, Quit, Eject...)",
+            title: L(
+                "Lệnh Hệ thống macOS ('s ' — Khóa, Sleep, Quit, Eject...)",
+                "macOS System Commands ('s ' — Lock, Sleep, Quit, Eject...)"
+            ),
             action: #selector(openSystemCommandsAction),
             keyEquivalent: ""
         )
@@ -116,7 +143,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(openSysCmdItem)
 
         let ocrClipItem = NSMenuItem(
-            title: "OCR Ảnh trong Clipboard sang Markdown (Tiếng Việt + Anh)",
+            title: L(
+                "OCR Ảnh trong Clipboard sang Markdown (Tiếng Việt + Anh)",
+                "OCR Clipboard Image to Markdown (Vietnamese + English)"
+            ),
             action: #selector(ocrClipboardImageAction),
             keyEquivalent: ""
         )
@@ -125,7 +155,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(ocrClipItem)
 
         let quickConvertMD = NSMenuItem(
-            title: "Convert mục đang chọn trong Finder sang Markdown (.md + Copy)",
+            title: L(
+                "Convert mục đang chọn trong Finder sang Markdown (.md + Copy)",
+                "Convert Finder Selection to Markdown (.md + Copy)"
+            ),
             action: #selector(convertFinderSelectionToMD),
             keyEquivalent: ""
         )
@@ -136,7 +169,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
 
         let recentHeader = NSMenuItem(
-            title: "Thư mục Google Drive gần đây (\(drive.folderCount.formatted()) thư mục)",
+            title: L(
+                "Thư mục Google Drive gần đây (\(drive.folderCount.formatted()) thư mục)",
+                "Recent Google Drive Folders (\(drive.folderCount.formatted()) folders)"
+            ),
             action: nil,
             keyEquivalent: ""
         )
@@ -145,7 +181,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         let recents = drive.recentMyDriveFolders(limit: 6)
         if recents.isEmpty {
-            let empty = NSMenuItem(title: "  (Chưa có lịch sử gần đây)", action: nil, keyEquivalent: "")
+            let empty = NSMenuItem(title: L("  (Chưa có lịch sử gần đây)", "  (No recent history)"), action: nil, keyEquivalent: "")
             empty.isEnabled = false
             menu.addItem(empty)
         } else {
@@ -168,7 +204,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         // Quick Shortcut Customization Submenu
         let shortcutParent = NSMenuItem(
-            title: "Thiết lập Phím tắt (Tìm: \(settings.searchHotKey.readableDisplay) • Action: \(settings.universalActionHotKey.readableDisplay) • Cửa sổ: \(settings.windowSwitcherHotKey.readableDisplay))",
+            title: L(
+                "Thiết lập Phím tắt (Tìm: \(settings.searchHotKey.readableDisplay) • Action: \(settings.universalActionHotKey.readableDisplay) • Cửa sổ: \(settings.windowSwitcherHotKey.readableDisplay))",
+                "Shortcut Settings (Search: \(settings.searchHotKey.readableDisplay) • Action: \(settings.universalActionHotKey.readableDisplay) • Windows: \(settings.windowSwitcherHotKey.readableDisplay))"
+            ),
             action: nil,
             keyEquivalent: ""
         )
@@ -176,7 +215,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let shortcutMenu = NSMenu()
 
         let recordSearchItem = NSMenuItem(
-            title: "Tự bấm thiết lập phím tắt Tìm kiếm (\(settings.searchHotKey.readableDisplay))...",
+            title: L(
+                "Tự bấm thiết lập phím tắt Tìm kiếm (\(settings.searchHotKey.readableDisplay))...",
+                "Record custom Search shortcut (\(settings.searchHotKey.readableDisplay))..."
+            ),
             action: #selector(recordSearchShortcutAction),
             keyEquivalent: ""
         )
@@ -184,10 +226,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         shortcutMenu.addItem(recordSearchItem)
 
         let presets: [(String, HotKeyBinding)] = [
-            ("⌘Space — Mặc định (Command + Space)", .commandSpace),
-            ("⌥Space (Option + Space)", .optionSpace),
-            ("⌃Space (Control + Space)", .controlSpace),
-            ("⌘⇧Space (Command + Shift + Space)", .commandShiftSpace)
+            (L("⌘Space — Mặc định (Command + Space)", "⌘Space — Default (Command + Space)"), .commandSpace),
+            (L("⌥Space (Option + Space)", "⌥Space (Option + Space)"), .optionSpace),
+            (L("⌃Space (Control + Space)", "⌃Space (Control + Space)"), .controlSpace),
+            (L("⌘⇧Space (Command + Shift + Space)", "⌘⇧Space (Command + Shift + Space)"), .commandShiftSpace)
         ]
         for (idx, preset) in presets.enumerated() {
             let pItem = NSMenuItem(
@@ -204,7 +246,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         shortcutMenu.addItem(.separator())
 
         let recordUAItem = NSMenuItem(
-            title: "Tự bấm thiết lập phím tắt Universal Actions trên Finder (\(settings.universalActionHotKey.readableDisplay))...",
+            title: L(
+                "Tự bấm thiết lập phím tắt Universal Actions trên Finder (\(settings.universalActionHotKey.readableDisplay))...",
+                "Record custom Universal Actions shortcut (\(settings.universalActionHotKey.readableDisplay))..."
+            ),
             action: #selector(recordUniversalShortcutAction),
             keyEquivalent: ""
         )
@@ -212,10 +257,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         shortcutMenu.addItem(recordUAItem)
 
         let uaPresets: [(String, HotKeyBinding)] = [
-            ("⌘/ — Mặc định Finder (Command + /)", .commandSlash),
-            ("⌘\\ (Command + \\)", .commandBackslash),
-            ("⌥⌘/ (Option + Command + /)", .optionCommandSlash),
-            ("⌘⇧A (Command + Shift + A)", .commandShiftA)
+            (L("⌘/ — Mặc định Finder (Command + /)", "⌘/ — Default Finder (Command + /)"), .commandSlash),
+            (L("⌘\\ (Command + \\)", "⌘\\ (Command + \\)"), .commandBackslash),
+            (L("⌥⌘/ (Option + Command + /)", "⌥⌘/ (Option + Command + /)"), .optionCommandSlash),
+            (L("⌘⇧A (Command + Shift + A)", "⌘⇧A (Command + Shift + A)"), .commandShiftA)
         ]
         for (idx, uaPreset) in uaPresets.enumerated() {
             let uItem = NSMenuItem(
@@ -232,7 +277,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         shortcutMenu.addItem(.separator())
 
         let recordWinItem = NSMenuItem(
-            title: "Tự bấm thiết lập phím tắt Windows Preview (\(settings.windowSwitcherHotKey.readableDisplay))...",
+            title: L(
+                "Tự bấm thiết lập phím tắt Windows Preview (\(settings.windowSwitcherHotKey.readableDisplay))...",
+                "Record custom Windows Preview shortcut (\(settings.windowSwitcherHotKey.readableDisplay))..."
+            ),
             action: #selector(recordWindowSwitcherShortcutAction),
             keyEquivalent: ""
         )
@@ -240,9 +288,9 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         shortcutMenu.addItem(recordWinItem)
 
         let winPresets: [(String, HotKeyBinding)] = [
-            ("⌘⇥ — Mặc định Windows Preview (Command + Tab)", .commandTab),
-            ("⌥⇥ (Option + Tab)", .optionTab),
-            ("⌃⇥ (Control + Tab)", .controlTab)
+            (L("⌘⇥ — Mặc định Windows Preview (Command + Tab)", "⌘⇥ — Default Windows Preview (Command + Tab)"), .commandTab),
+            (L("⌥⇥ (Option + Tab)", "⌥⇥ (Option + Tab)"), .optionTab),
+            (L("⌃⇥ (Control + Tab)", "⌃⇥ (Control + Tab)"), .controlTab)
         ]
         for (idx, wPreset) in winPresets.enumerated() {
             let wItem = NSMenuItem(
@@ -257,7 +305,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         }
 
         let toggleMinItem = NSMenuItem(
-            title: "Hiển thị cửa sổ đang Minimize trong Windows Preview",
+            title: L("Hiển thị cửa sổ đang Minimize trong Windows Preview", "Show minimized windows in Windows Preview"),
             action: #selector(toggleWindowSwitcherMinimizedAction),
             keyEquivalent: ""
         )
@@ -268,7 +316,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         shortcutMenu.addItem(.separator())
 
         let resetHotkeysItem = NSMenuItem(
-            title: "Khôi phục mặc định (⌘Space • ⌘/ • ⌘⇥)",
+            title: L("Khôi phục mặc định (⌘Space • ⌘/ • ⌘⇥)", "Restore Defaults (⌘Space • ⌘/ • ⌘⇥)"),
             action: #selector(resetDefaultShortcutsAction),
             keyEquivalent: ""
         )
@@ -280,7 +328,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         // Dock Show/Hide & Launch at Login Toggles
         let showDockItem = NSMenuItem(
-            title: "Hiển thị biểu tượng trên thanh Dock",
+            title: L("Hiển thị biểu tượng trên thanh Dock", "Show icon in Dock"),
             action: #selector(toggleShowDockAction),
             keyEquivalent: ""
         )
@@ -289,7 +337,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(showDockItem)
 
         let launchItem = NSMenuItem(
-            title: "Khởi động cùng macOS",
+            title: L("Khởi động cùng macOS", "Launch at login"),
             action: #selector(toggleLaunchAtLoginAction),
             keyEquivalent: ""
         )
@@ -298,7 +346,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(launchItem)
 
         let showOnStartupItem = NSMenuItem(
-            title: "Bật bảng Tìm kiếm khi khởi động",
+            title: L("Bật bảng Tìm kiếm khi khởi động", "Show Search window on startup"),
             action: #selector(toggleShowLauncherOnStartupAction),
             keyEquivalent: ""
         )
@@ -311,7 +359,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         // Auto-Update Section
         if let newVer = updater.availableVersion {
             let installItem = NSMenuItem(
-                title: "Tải & Cập nhật tự động v\(newVer)",
+                title: L("Tải & Cập nhật tự động v\(newVer)", "Download & Update automatically v\(newVer)"),
                 action: #selector(installUpdateAction),
                 keyEquivalent: ""
             )
@@ -322,10 +370,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         let checkTitle: String = {
             switch updater.state {
-            case .checking: return "Đang kiểm tra cập nhật..."
-            case .downloading(let v): return "Đang tải v\(v)..."
-            case .installing(let v): return "Đang cài đặt v\(v)..."
-            default: return "Kiểm tra cập nhật từ GitHub..."
+            case .checking: return L("Đang kiểm tra cập nhật...", "Checking for updates...")
+            case .downloading(let v): return L("Đang tải v\(v)...", "Downloading v\(v)...")
+            case .installing(let v): return L("Đang cài đặt v\(v)...", "Installing v\(v)...")
+            default: return L("Kiểm tra cập nhật từ GitHub...", "Check for updates from GitHub...")
             }
         }()
         let checkItem = NSMenuItem(
@@ -339,22 +387,22 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(checkItem)
 
         let rebuildTitle = drive.isRebuildingFolders
-            ? (drive.rebuildProgressText ?? "Đang quét lại Cache Google Drive...")
-            : "Quét lại Cache Google Drive ngay"
+            ? (drive.rebuildProgressText ?? L("Đang quét lại Cache Google Drive...", "Rebuilding Google Drive Cache..."))
+            : L("Quét lại Cache Google Drive ngay", "Rebuild Google Drive Cache now")
         let rebuildItem = NSMenuItem(title: rebuildTitle, action: #selector(rebuildCacheAction), keyEquivalent: "")
         rebuildItem.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)
         rebuildItem.isEnabled = !drive.isRebuildingFolders
         rebuildItem.target = self
         menu.addItem(rebuildItem)
 
-        let prefsItem = NSMenuItem(title: "Cài đặt & Quản lý DriveBar...", action: #selector(openPrefsAction), keyEquivalent: ",")
+        let prefsItem = NSMenuItem(title: L("Cài đặt & Quản lý DriveBar...", "Settings & Preferences..."), action: #selector(openPrefsAction), keyEquivalent: ",")
         prefsItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
         prefsItem.target = self
         menu.addItem(prefsItem)
 
         menu.addItem(.separator())
 
-        let quitItem = NSMenuItem(title: "Thoát DriveBar", action: #selector(quitAction), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: L("Thoát DriveBar", "Quit DriveBar"), action: #selector(quitAction), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
     }
@@ -403,8 +451,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let urls = SelectionCaptureService.fetchFinderSelectionURLs()
         guard !urls.isEmpty else {
             FloatingToastController.shared.showError(
-                title: "Chưa chọn tệp nào trong Finder",
-                subtitle: "Hãy chọn ít nhất 1 tệp tài liệu trong Finder"
+                title: L("Chưa chọn tệp nào trong Finder", "No files selected in Finder"),
+                subtitle: L("Hãy chọn ít nhất 1 tệp tài liệu trong Finder", "Please select at least 1 file in Finder")
             )
             return
         }
@@ -464,8 +512,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     @objc private func resetDefaultShortcutsAction() {
         AppSettings.shared.resetShortcutsToDefault()
         FloatingToastController.shared.showSuccess(
-            title: "Đã khôi phục phím tắt mặc định",
-            subtitle: "Tìm: ⌘Space  •  Finder: ⌘/  •  Windows: ⌘⇥"
+            title: L("Đã khôi phục phím tắt mặc định", "Restored default shortcuts"),
+            subtitle: L("Tìm: ⌘Space  •  Finder: ⌘/  •  Windows: ⌘⇥", "Search: ⌘Space  •  Finder: ⌘/  •  Windows: ⌘⇥")
         )
     }
 

@@ -27,6 +27,7 @@ struct PortableSyncSettingsPayload: Codable, Sendable {
     var customMacFolders: [String]?
     var disabledSystemCommandIDs: [String]?
     var confirmSystemCommandIDs: [String]?
+    var appLanguage: String?
 }
 
 @MainActor
@@ -218,7 +219,8 @@ final class SyncAndLatchingService: ObservableObject {
             pinnedPaths: GoogleDriveIndexService.shared.exportPortablePathList(s.pinnedPaths),
             customMacFolders: GoogleDriveIndexService.shared.exportPortablePathList(s.customMacFolders),
             disabledSystemCommandIDs: Array(s.disabledSystemCommandIDs).sorted(),
-            confirmSystemCommandIDs: Array(s.confirmSystemCommandIDs).sorted()
+            confirmSystemCommandIDs: Array(s.confirmSystemCommandIDs).sorted(),
+            appLanguage: s.appLanguage.rawValue
         )
         let targetFile = "\(expandedSyncDir)/portable_settings.json"
         isWritingSyncFiles = true
@@ -307,6 +309,11 @@ final class SyncAndLatchingService: ObservableObject {
             if s.confirmSystemCommandIDs != set {
                 s.confirmSystemCommandIDs = set
             }
+        }
+        if let rawLang = remote.appLanguage,
+           let parsedLang = AppLanguagePreference(rawValue: rawLang),
+           s.appLanguage != parsedLang {
+            s.appLanguage = parsedLang
         }
     }
 

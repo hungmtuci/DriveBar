@@ -30,12 +30,13 @@ final class SelectionCaptureService {
 
         // 2. Try Accessibility API for selected text without touching Clipboard
         if AXIsProcessTrusted(), let selectedText = readAXSelectedText(), !selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return classifyString(selectedText, note: "Văn bản bôi đen (\(frontApp?.localizedName ?? "App"))")
+            let appLabel = frontApp.map(AppLocalization.localizedRunningAppName) ?? "App"
+            return classifyString(selectedText, note: L("Văn bản bôi đen (\(appLabel))", "Selected Text (\(appLabel))"))
         }
 
         // 3. Try non-destructive simulated ⌘C if Accessibility is granted (only fall back on Finder if AppleEvents was blocked)
         if (bundleID != "com.apple.finder" || !finderScriptSucceeded) && AXIsProcessTrusted() {
-            if let captured = await simulateCopyAndCapture(sourceAppName: frontApp?.localizedName) {
+            if let captured = await simulateCopyAndCapture(sourceAppName: frontApp.map(AppLocalization.localizedRunningAppName)) {
                 return captured
             }
         }
@@ -44,7 +45,7 @@ final class SelectionCaptureService {
         if bundleID != "com.apple.finder" {
             let res = await Self.fetchFinderSelectionAsync(includeOpenWindowFallback: false)
             if !res.urls.isEmpty {
-                return .files(res.urls, sourceNote: "Đang chọn trong Finder")
+                return .files(res.urls, sourceNote: L("Đang chọn trong Finder", "Selected in Finder"))
             }
         }
 
@@ -132,10 +133,10 @@ final class SelectionCaptureService {
 
         let scriptSucceeded = (rawOutput != nil)
         guard let text = rawOutput, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return ([], "Đang chọn trong Finder", scriptSucceeded)
+            return ([], L("Đang chọn trong Finder", "Selected in Finder"), scriptSucceeded)
         }
 
-        var note = "Đang chọn trong Finder"
+        var note = L("Đang chọn trong Finder", "Selected in Finder")
         var urls: [URL] = []
 
         for line in text.components(separatedBy: .newlines) {
@@ -144,7 +145,7 @@ final class SelectionCaptureService {
             var isDirHint = false
             if rawPath.hasPrefix("WINDOW_TARGET::") {
                 rawPath = String(rawPath.dropFirst("WINDOW_TARGET::".count))
-                note = "Thư mục đang mở trong Finder"
+                note = L("Thư mục đang mở trong Finder", "Active Finder Folder")
                 isDirHint = true
             }
             if rawPath.count > 1 && rawPath.hasSuffix("/") {
@@ -221,13 +222,13 @@ final class SelectionCaptureService {
             return nil
         }
 
-        let target = extractTarget(from: pb, note: sourceAppName.map { "Chọn từ \($0)" })
+        let target = extractTarget(from: pb, note: sourceAppName.map { L("Chọn từ \($0)", "Selected from \($0)") })
         restorePasteboard(pb, snapshot: savedItems)
         return target
     }
 
     func readFromCurrentClipboard() -> ActionTarget? {
-        extractTarget(from: .general, note: "Từ Clipboard")
+        extractTarget(from: .general, note: L("Từ Clipboard", "From Clipboard"))
     }
 
     private func extractTarget(from pb: NSPasteboard, note: String?) -> ActionTarget? {
@@ -248,7 +249,7 @@ final class SelectionCaptureService {
            let types = pb.types,
            (types.contains(.png) || types.contains(.tiff)),
            let imgURL = ClipboardHistoryService.shared.materializeCurrentClipboardImageURL() {
-            return .files([imgURL], sourceNote: "Ảnh chụp / Hình ảnh từ Clipboard")
+            return .files([imgURL], sourceNote: L("Ảnh chụp / Hình ảnh từ Clipboard", "Screenshot / Image from Clipboard"))
         }
         return nil
     }

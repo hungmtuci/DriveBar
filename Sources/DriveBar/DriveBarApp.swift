@@ -68,37 +68,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenuItem = NSMenuItem()
         mainMenu.addItem(appMenuItem)
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "Cài đặt DriveBar...", action: #selector(openSettingsWindow), keyEquivalent: ",").target = self
-        appMenu.addItem(withTitle: "Mở Thanh Tìm Kiếm", action: #selector(toggleLauncherFromMenu), keyEquivalent: "f").target = self
-        appMenu.addItem(withTitle: "Mở Windows Preview (Chuyển cửa sổ)", action: #selector(openWindowSwitcherFromMenu), keyEquivalent: "").target = self
-        appMenu.addItem(withTitle: "Tìm kiếm Thư mục trên Mac ('m ')", action: #selector(openMacFoldersFromMenu), keyEquivalent: "").target = self
-        appMenu.addItem(withTitle: "Tra cứu Danh bạ ('c ')", action: #selector(openContactsFromMenu), keyEquivalent: "").target = self
-        appMenu.addItem(withTitle: "Mở Lịch sử Clipboard ('cb ')", action: #selector(openClipboardHistoryFromMenu), keyEquivalent: "").target = self
-        appMenu.addItem(withTitle: "Mở Lệnh Hệ thống ('s ')", action: #selector(openSystemCommandsFromMenu), keyEquivalent: "").target = self
-        appMenu.addItem(withTitle: "Kiểm tra cập nhật từ GitHub...", action: #selector(checkUpdatesFromMenu), keyEquivalent: "").target = self
+        appMenu.addItem(withTitle: L("Cài đặt DriveBar...", "DriveBar Settings..."), action: #selector(openSettingsWindow), keyEquivalent: ",").target = self
+        appMenu.addItem(withTitle: L("Mở Thanh Tìm Kiếm", "Open Search Bar"), action: #selector(toggleLauncherFromMenu), keyEquivalent: "f").target = self
+        appMenu.addItem(withTitle: L("Mở Windows Preview (Chuyển cửa sổ)", "Open Windows Preview (Window Switcher)"), action: #selector(openWindowSwitcherFromMenu), keyEquivalent: "").target = self
+        appMenu.addItem(withTitle: L("Tìm kiếm Thư mục trên Mac ('m ')", "Search Mac Folders ('m ')"), action: #selector(openMacFoldersFromMenu), keyEquivalent: "").target = self
+        appMenu.addItem(withTitle: L("Tra cứu Danh bạ ('c ')", "Search Contacts ('c ')"), action: #selector(openContactsFromMenu), keyEquivalent: "").target = self
+        appMenu.addItem(withTitle: L("Mở Lịch sử Clipboard ('cb ')", "Open Clipboard History ('cb ')"), action: #selector(openClipboardHistoryFromMenu), keyEquivalent: "").target = self
+        appMenu.addItem(withTitle: L("Mở Lệnh Hệ thống ('s ')", "Open System Commands ('s ')"), action: #selector(openSystemCommandsFromMenu), keyEquivalent: "").target = self
+        appMenu.addItem(withTitle: L("Kiểm tra cập nhật từ GitHub...", "Check for Updates from GitHub..."), action: #selector(checkUpdatesFromMenu), keyEquivalent: "").target = self
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Ẩn DriveBar", action: #selector(handleMenuHide(_:)), keyEquivalent: "h").target = self
-        appMenu.addItem(withTitle: "Thoát DriveBar", action: #selector(handleMenuQuit(_:)), keyEquivalent: "q").target = self
+        appMenu.addItem(withTitle: L("Ẩn DriveBar", "Hide DriveBar"), action: #selector(handleMenuHide(_:)), keyEquivalent: "h").target = self
+        appMenu.addItem(withTitle: L("Thoát DriveBar", "Quit DriveBar"), action: #selector(handleMenuQuit(_:)), keyEquivalent: "q").target = self
         appMenuItem.submenu = appMenu
 
         // Edit Menu
         let editMenuItem = NSMenuItem()
         mainMenu.addItem(editMenuItem)
-        let editMenu = NSMenu(title: "Chỉnh sửa")
-        editMenu.addItem(withTitle: "Hoàn tác", action: Selector(("undo:")), keyEquivalent: "z")
-        editMenu.addItem(withTitle: "Làm lại", action: Selector(("redo:")), keyEquivalent: "Z")
+        let editMenu = NSMenu(title: L("Chỉnh sửa", "Edit"))
+        editMenu.addItem(withTitle: L("Hoàn tác", "Undo"), action: Selector(("undo:")), keyEquivalent: "z")
+        editMenu.addItem(withTitle: L("Làm lại", "Redo"), action: Selector(("redo:")), keyEquivalent: "Z")
         editMenu.addItem(.separator())
-        editMenu.addItem(withTitle: "Cắt", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-        editMenu.addItem(withTitle: "Sao chép", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        editMenu.addItem(withTitle: "Dán", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        editMenu.addItem(withTitle: "Chọn tất cả", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(withTitle: L("Cắt", "Cut"), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: L("Sao chép", "Copy"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: L("Dán", "Paste"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: L("Chọn tất cả", "Select All"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editMenuItem.submenu = editMenu
 
         // Window Menu
         let winMenuItem = NSMenuItem()
         mainMenu.addItem(winMenuItem)
-        let winMenu = NSMenu(title: "Cửa sổ")
-        winMenu.addItem(withTitle: "Đóng cửa sổ", action: #selector(handleMenuCloseWindow(_:)), keyEquivalent: "w").target = self
+        let winMenu = NSMenu(title: L("Cửa sổ", "Window"))
+        winMenu.addItem(withTitle: L("Đóng cửa sổ", "Close Window"), action: #selector(handleMenuCloseWindow(_:)), keyEquivalent: "w").target = self
         winMenuItem.submenu = winMenu
 
         NSApp.mainMenu = mainMenu
@@ -106,6 +106,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.shared = self
+
+        NotificationCenter.default.addObserver(
+            forName: AppLocalization.languageDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            Task { @MainActor in
+                AppDelegate.shared?.installMainMenu()
+                StatusBarController.shared.refreshTooltip()
+            }
+        }
 
         if let bundleID = Bundle.main.bundleIdentifier {
             let ownPID = ProcessInfo.processInfo.processIdentifier
@@ -175,7 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let valid = urls.filter { $0.path.contains("/Library/CloudStorage/") || FileManager.default.fileExists(atPath: $0.path) }
         guard !valid.isEmpty else { return }
         LauncherViewModel.shared.openUniversalActions(
-            for: .files(valid, sourceNote: "Mở trực tiếp / Kéo vào Dock"),
+            for: .files(valid, sourceNote: L("Mở trực tiếp / Kéo vào Dock", "Direct open / Dragged to Dock")),
             directExternalTrigger: true
         )
         LauncherPanelController.shared.showAndFocus()
@@ -250,7 +261,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 backing: .buffered,
                 defer: false
             )
-            win.title = "Cài đặt DriveBar"
+            win.title = L("Cài đặt DriveBar", "DriveBar Settings")
             win.titleVisibility = .hidden
             win.titlebarAppearsTransparent = true
             win.minSize = NSSize(width: 780, height: 540)

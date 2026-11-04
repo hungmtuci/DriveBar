@@ -213,7 +213,7 @@ private struct ZoomedWindowPreviewCard: View {
                                     .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
                             }
                             .buttonStyle(.plain)
-                            .help("Chia cửa sổ sang Nửa trái màn hình (⌃←)")
+                            .help(L("Chia cửa sổ sang Nửa trái màn hình (⌃←)", "Snap window to Left Half (⌃←)"))
 
                             Button { onSnapWindow(.rightHalf) } label: {
                                 Image(systemName: "rectangle.righthalf.inset.filled")
@@ -223,7 +223,7 @@ private struct ZoomedWindowPreviewCard: View {
                                     .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
                             }
                             .buttonStyle(.plain)
-                            .help("Chia cửa sổ sang Nửa phải màn hình (⌃→)")
+                            .help(L("Chia cửa sổ sang Nửa phải màn hình (⌃→)", "Snap window to Right Half (⌃→)"))
 
                             Button { onSnapWindow(.maximize) } label: {
                                 Image(systemName: "arrow.up.left.and.arrow.down.right.rectangle")
@@ -233,7 +233,7 @@ private struct ZoomedWindowPreviewCard: View {
                                     .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
                             }
                             .buttonStyle(.plain)
-                            .help("Phóng tối đa cửa sổ vừa khít màn hình (⌃↑)")
+                            .help(L("Phóng tối đa cửa sổ vừa khít màn hình (⌃↑)", "Maximize window to fit display (⌃↑)"))
                         }
 
                         Button(action: onToggleMinimize) {
@@ -244,7 +244,7 @@ private struct ZoomedWindowPreviewCard: View {
                                 .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
                         }
                         .buttonStyle(.plain)
-                        .help(item.isMinimized ? "Khôi phục cửa sổ (⌘M)" : "Thu nhỏ cửa sổ xuống Dock (⌘M)")
+                        .help(item.isMinimized ? L("Khôi phục cửa sổ (⌘M)", "Restore window (⌘M)") : L("Thu nhỏ cửa sổ xuống Dock (⌘M)", "Minimize window to Dock (⌘M)"))
 
                         Button(action: onCloseWindow) {
                             Image(systemName: "xmark")
@@ -254,7 +254,7 @@ private struct ZoomedWindowPreviewCard: View {
                                 .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
                         }
                         .buttonStyle(.plain)
-                        .help(hasAccessibilityPermission ? "Đóng cửa sổ này (⌘W)" : "Cấp quyền Trợ năng để đóng cửa sổ (⌘W)")
+                        .help(hasAccessibilityPermission ? L("Đóng cửa sổ này (⌘W)", "Close this window (⌘W)") : L("Cấp quyền Trợ năng để đóng cửa sổ (⌘W)", "Grant Accessibility permission to close window (⌘W)"))
                     }
 
                     if canQuitApp {
@@ -269,7 +269,7 @@ private struct ZoomedWindowPreviewCard: View {
                                 .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
                         }
                         .buttonStyle(.plain)
-                        .help("Thoát ứng dụng \(item.appName) (⌘Q • Giữ ⌥ để buộc thoát ⌥⌘Q)")
+                        .help(L("Thoát ứng dụng \(item.appName) (⌘Q • Giữ ⌥ để buộc thoát ⌥⌘Q)", "Quit \(item.appName) (⌘Q • Hold ⌥ to force quit ⌥⌘Q)"))
                     }
                 }
             }
@@ -314,17 +314,17 @@ private struct ZoomedWindowPreviewCard: View {
 
                             if !hasScreenRecordingPermission && !item.isWindowlessApp {
                                 Button(action: onRequestScreenRecording) {
-                                    Text("Cấp quyền Ghi màn hình để xem ảnh chụp nội dung trực tiếp")
+                                    Text(L("Cấp quyền Ghi màn hình để xem ảnh chụp nội dung trực tiếp", "Grant Screen Recording permission to preview live window content"))
                                         .font(.system(size: 11.5, weight: .medium))
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
                             } else if item.isMinimized {
-                                Text("Cửa sổ đang thu nhỏ dưới thanh Dock • Nhấn Enter hoặc click để khôi phục ngay")
+                                Text(L("Cửa sổ đang thu nhỏ dưới thanh Dock • Nhấn Enter hoặc click để khôi phục ngay", "Window minimized to Dock • Press Enter or click to restore"))
                                     .font(.system(size: 11.5))
                                     .foregroundStyle(.secondary)
                             } else if item.isWindowlessApp {
-                                Text("Ứng dụng đang chạy nền chưa có cửa sổ mở • Nhấn Enter hoặc click để mở")
+                                Text(L("Ứng dụng đang chạy nền chưa có cửa sổ mở • Nhấn Enter hoặc click để mở", "App running with no open windows • Press Enter or click to activate"))
                                     .font(.system(size: 11.5))
                                     .foregroundStyle(.secondary)
                             }
@@ -382,8 +382,8 @@ private struct WindowThumbnailStripCard: View {
                 NativeSearchInputField(
                     text: $service.filterQuery,
                     placeholder: service.sessionSameAppPID != nil
-                        ? "Lọc trong \(service.sessionSameAppName ?? "ứng dụng đang chọn") (bấm ↓ hoặc ↑ để hiện lại tất cả ứng dụng)..."
-                        : "Gõ từ khóa lọc cửa sổ (← → di chuyển • ↑ cửa sổ cùng ứng dụng • ⌘ / Enter để mở)...",
+                        ? L("Lọc trong \(service.sessionSameAppName ?? "ứng dụng đang chọn") (bấm ↓ hoặc ↑ để hiện lại tất cả ứng dụng)...", "Filter in \(service.sessionSameAppName ?? "selected app") (press ↓ or ↑ to show all apps)...")
+                        : L("Gõ từ khóa lọc cửa sổ (← → di chuyển • ↑ cửa sổ cùng ứng dụng • ⌘ / Enter để mở)...", "Type to filter windows (← → move • ↑ same-app windows • ⌘ / Enter to open)..."),
                     fontSize: 13,
                     focusTrigger: service.focusSearchTrigger,
                     selectAllOnFocus: false,
@@ -425,7 +425,7 @@ private struct WindowThumbnailStripCard: View {
                                     .interpolation(.high)
                                     .frame(width: 14, height: 14)
                             }
-                            Text(service.sessionSameAppName ?? "Cùng ứng dụng")
+                            Text(service.sessionSameAppName ?? L("Cùng ứng dụng", "Same App"))
                                 .font(.system(size: 11, weight: .semibold))
                                 .lineLimit(1)
                             Image(systemName: "xmark")
@@ -446,7 +446,7 @@ private struct WindowThumbnailStripCard: View {
                         .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.plain)
-                    .help("Đang lọc các cửa sổ của \(service.sessionSameAppName ?? "ứng dụng này") • Bấm ↓, ↑ hoặc click để quay lại tất cả ứng dụng")
+                    .help(L("Đang lọc các cửa sổ của \(service.sessionSameAppName ?? "ứng dụng này") • Bấm ↓, ↑ hoặc click để quay lại tất cả ứng dụng", "Filtering windows for \(service.sessionSameAppName ?? "this app") • Press ↓, ↑ or click to show all apps"))
                 }
 
                 if !service.filterQuery.isEmpty {
@@ -459,10 +459,10 @@ private struct WindowThumbnailStripCard: View {
                             .foregroundStyle(.tertiary)
                     }
                     .buttonStyle(.plain)
-                    .help("Xóa từ khóa lọc (Esc)")
+                    .help(L("Xóa từ khóa lọc (Esc)", "Clear filter query (Esc)"))
                 }
 
-                Text("\(service.items.count) cửa sổ")
+                Text(L("\(service.items.count) cửa sổ", "\(service.items.count) windows"))
                     .font(.system(size: 11, weight: .regular))
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: true, vertical: false)
@@ -477,14 +477,14 @@ private struct WindowThumbnailStripCard: View {
             if service.items.isEmpty {
                 VStack(spacing: 8) {
                     Text(service.filterQuery.isEmpty
-                         ? "Không có cửa sổ nào khớp bộ lọc hiện tại"
-                         : "Không có cửa sổ hay ứng dụng nào khớp từ khóa '\(service.filterQuery)'")
+                         ? L("Không có cửa sổ nào khớp bộ lọc hiện tại", "No windows match current filter")
+                         : L("Không có cửa sổ hay ứng dụng nào khớp từ khóa '\(service.filterQuery)'", "No windows or apps match '\(service.filterQuery)'"))
                         .font(.system(size: 13.5, weight: .medium))
                         .foregroundStyle(.secondary)
 
                     HStack(spacing: 8) {
                         if !service.filterQuery.isEmpty {
-                            Button("Xóa từ khóa lọc") {
+                            Button(L("Xóa từ khóa lọc", "Clear filter query")) {
                                 service.filterQuery = ""
                                 service.triggerSearchInputFocus()
                             }
@@ -492,7 +492,7 @@ private struct WindowThumbnailStripCard: View {
                             .controlSize(.small)
                         }
                         if service.sessionSameAppPID != nil {
-                            Button("Hiện tất cả ứng dụng") {
+                            Button(L("Hiện tất cả ứng dụng", "Show all apps")) {
                                 controller.pinOpenFromInteraction()
                                 service.clearSameAppFilter()
                             }
@@ -500,7 +500,7 @@ private struct WindowThumbnailStripCard: View {
                             .controlSize(.small)
                         }
                         if settings.windowSwitcherScope != .allSpacesAndDisplays {
-                            Button("Mở rộng sang Tất cả Desktop & Màn hình") {
+                            Button(L("Mở rộng sang Tất cả Desktop & Màn hình", "Expand to All Desktops & Displays")) {
                                 controller.pinOpenFromInteraction()
                                 settings.windowSwitcherScope = .allSpacesAndDisplays
                                 service.rebuildFilteredItemsPreservingSelection()
@@ -562,7 +562,7 @@ private struct WindowThumbnailStripCard: View {
                                             }
                                         )
                                         .padding(13)
-                                        .help("Đóng cửa sổ này (⌘W)")
+                                        .help(L("Đóng cửa sổ này (⌘W)", "Close this window (⌘W)"))
                                     }
                                 }
                                 .background(
@@ -582,39 +582,39 @@ private struct WindowThumbnailStripCard: View {
                                     }
                                 }
                                 .contextMenu {
-                                    Button("Mở cửa sổ này (↩ / ⌘)") {
+                                    Button(L("Mở cửa sổ này (↩ / ⌘)", "Open this window (↩ / ⌘)")) {
                                         controller.selectAndActivateAtIndex(idx)
                                     }
                                     if service.sessionSameAppPID == nil {
-                                        Button("Hiện các cửa sổ của \(item.appName) (↑)") {
+                                        Button(L("Hiện các cửa sổ của \(item.appName) (↑)", "Show windows for \(item.appName) (↑)")) {
                                             controller.pinOpenFromInteraction()
                                             service.focusSameAppWindows(for: item)
                                         }
                                     } else {
-                                        Button("Hiện lại tất cả ứng dụng (↓)") {
+                                        Button(L("Hiện lại tất cả ứng dụng (↓)", "Show all apps (↓)")) {
                                             controller.pinOpenFromInteraction()
                                             service.clearSameAppFilter()
                                         }
                                     }
                                     if !item.isWindowlessApp {
                                         Divider()
-                                        Button("Đóng cửa sổ (⌘W)") {
+                                        Button(L("Đóng cửa sổ (⌘W)", "Close window (⌘W)")) {
                                             controller.triggerCloseWindowItem(item)
                                         }
-                                        Button(item.isMinimized ? "Khôi phục cửa sổ (⌘M)" : "Thu nhỏ xuống Dock (⌘M)") {
+                                        Button(item.isMinimized ? L("Khôi phục cửa sổ (⌘M)", "Restore window (⌘M)") : L("Thu nhỏ xuống Dock (⌘M)", "Minimize to Dock (⌘M)")) {
                                             controller.triggerMinimizeWindowItem(item)
                                         }
                                     }
                                     if item.pid != ProcessInfo.processInfo.processIdentifier {
                                         Divider()
-                                        Button(item.isAppHidden ? "Hiện ứng dụng \(item.appName) (⌘H)" : "Ẩn ứng dụng \(item.appName) (⌘H)") {
+                                        Button(item.isAppHidden ? L("Hiện ứng dụng \(item.appName) (⌘H)", "Unhide \(item.appName) (⌘H)") : L("Ẩn ứng dụng \(item.appName) (⌘H)", "Hide \(item.appName) (⌘H)")) {
                                             controller.triggerHideAppForItem(item)
                                         }
                                         if item.bundleIdentifier != "com.apple.finder" {
-                                            Button("Thoát \(item.appName) (⌘Q)") {
+                                            Button(L("Thoát \(item.appName) (⌘Q)", "Quit \(item.appName) (⌘Q)")) {
                                                 controller.triggerQuitAppForItem(item, force: false)
                                             }
-                                            Button("Buộc thoát \(item.appName) (⌥⌘Q)") {
+                                            Button(L("Buộc thoát \(item.appName) (⌥⌘Q)", "Force Quit \(item.appName) (⌥⌘Q)")) {
                                                 controller.triggerQuitAppForItem(item, force: true)
                                             }
                                         }
@@ -651,22 +651,22 @@ private struct WindowThumbnailStripCard: View {
 
             // Subtle Single-Line Controls & Filter Toggles Footer
             HStack(spacing: 8) {
-                FooterShortcutHint(key: "↩ / ⌘ / ⌥ / Space", label: "Mở")
-                FooterShortcutHint(key: "← →", label: "Di chuyển")
+                FooterShortcutHint(key: "↩ / ⌘ / ⌥ / Space", label: L("Mở", "Open"))
+                FooterShortcutHint(key: "← →", label: L("Di chuyển", "Navigate"))
                 FooterShortcutHint(
                     key: service.sessionSameAppPID == nil ? "↑" : "↓",
-                    label: service.sessionSameAppPID == nil ? "Cùng App" : "Tất cả App"
+                    label: service.sessionSameAppPID == nil ? L("Cùng App", "Same App") : L("Tất cả App", "All Apps")
                 )
-                FooterShortcutHint(key: "⌃←→↑", label: "Chia đôi")
-                FooterShortcutHint(key: "⌘Y", label: settings.windowSwitcherShowZoomPreview ? "Ẩn phóng to" : "Phóng to")
-                FooterShortcutHint(key: "⌘W", label: "Đóng")
-                FooterShortcutHint(key: "⌘Q", label: "Thoát")
+                FooterShortcutHint(key: "⌃←→↑", label: L("Chia đôi", "Snap"))
+                FooterShortcutHint(key: "⌘Y", label: settings.windowSwitcherShowZoomPreview ? L("Ẩn phóng to", "Hide preview") : L("Phóng to", "Zoom preview"))
+                FooterShortcutHint(key: "⌘W", label: L("Đóng", "Close"))
+                FooterShortcutHint(key: "⌘Q", label: L("Thoát", "Quit"))
                 FooterShortcutHint(key: "⌘M", label: "Minimize")
                 FooterShortcutHint(
                     key: "Esc",
                     label: !service.filterQuery.isEmpty
-                        ? "Xóa lọc"
-                        : (service.sessionSameAppPID != nil && !controller.openedDirectlyInSameAppMode ? "Tất cả App" : "Đóng")
+                        ? L("Xóa lọc", "Clear filter")
+                        : (service.sessionSameAppPID != nil && !controller.openedDirectlyInSameAppMode ? L("Tất cả App", "All Apps") : L("Đóng", "Dismiss"))
                 )
 
                 Spacer(minLength: 8)
@@ -679,7 +679,7 @@ private struct WindowThumbnailStripCard: View {
                         HStack(spacing: 4) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .font(.system(size: 9.5, weight: .semibold))
-                            Text("Bật quyền Trợ năng (⌘W / ⌘⇥)")
+                            Text(L("Bật quyền Trợ năng (⌘W / ⌘⇥)", "Enable Accessibility (⌘W / ⌘⇥)"))
                                 .font(.system(size: 10.5, weight: .semibold))
                                 .lineLimit(1)
                         }
@@ -697,7 +697,7 @@ private struct WindowThumbnailStripCard: View {
                         .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.plain)
-                    .help("Cấp quyền Trợ năng (Accessibility) để đóng cửa sổ bằng ⌘W, thu nhỏ bằng ⌘M và dùng phím tắt ⌘Tab")
+                    .help(L("Cấp quyền Trợ năng (Accessibility) để đóng cửa sổ bằng ⌘W, thu nhỏ bằng ⌘M và dùng phím tắt ⌘Tab", "Grant Accessibility permission to close windows with ⌘W, minimize with ⌘M and use ⌘Tab shortcut"))
                 }
 
                 if !service.hasScreenRecordingPermission {
@@ -705,10 +705,10 @@ private struct WindowThumbnailStripCard: View {
                         controller.dismissWithoutActivating(restorePreviousApp: false)
                         service.promptScreenRecordingPermission()
                     } label: {
-                        filterTogglePill(title: "Bật ảnh chụp nội dung", isActive: true)
+                        filterTogglePill(title: L("Bật ảnh chụp nội dung", "Enable Live Previews"), isActive: true)
                     }
                     .buttonStyle(.plain)
-                    .help("Cấp quyền Screen Recording để hiện ảnh chụp nội dung cửa sổ trực tiếp")
+                    .help(L("Cấp quyền Screen Recording để hiện ảnh chụp nội dung cửa sổ trực tiếp", "Grant Screen Recording permission to show live window content previews"))
                 }
 
                 Button {
@@ -722,7 +722,7 @@ private struct WindowThumbnailStripCard: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .help("⌘1: Đổi phạm vi hiển thị (Tất cả màn hình & Desktop / Màn hình này / Desktop này)")
+                .help(L("⌘1: Đổi phạm vi hiển thị (Tất cả màn hình & Desktop / Màn hình này / Desktop này)", "⌘1: Switch display scope (All Displays & Desktops / This Display / This Desktop)"))
 
                 Button {
                     controller.pinOpenFromInteraction()
@@ -730,12 +730,12 @@ private struct WindowThumbnailStripCard: View {
                     service.rebuildFilteredItemsPreservingSelection()
                 } label: {
                     filterTogglePill(
-                        title: settings.windowSwitcherShowMinimized ? "Minimize: Hiện" : "Minimize: Ẩn",
+                        title: settings.windowSwitcherShowMinimized ? L("Minimize: Hiện", "Minimize: Show") : L("Minimize: Ẩn", "Minimize: Hide"),
                         isActive: settings.windowSwitcherShowMinimized
                     )
                 }
                 .buttonStyle(.plain)
-                .help("⌘2: Bật/tắt hiển thị các cửa sổ đang thu nhỏ dưới Dock")
+                .help(L("⌘2: Bật/tắt hiển thị các cửa sổ đang thu nhỏ dưới Dock", "⌘2: Toggle showing windows minimized to Dock"))
 
                 Button {
                     controller.pinOpenFromInteraction()
@@ -743,24 +743,24 @@ private struct WindowThumbnailStripCard: View {
                     service.rebuildFilteredItemsPreservingSelection()
                 } label: {
                     filterTogglePill(
-                        title: settings.windowSwitcherShowHiddenApps ? "App ẩn: Hiện" : "App ẩn: Ẩn",
+                        title: settings.windowSwitcherShowHiddenApps ? L("App ẩn: Hiện", "Hidden Apps: Show") : L("App ẩn: Ẩn", "Hidden Apps: Hide"),
                         isActive: settings.windowSwitcherShowHiddenApps
                     )
                 }
                 .buttonStyle(.plain)
-                .help("⌘3: Bật/tắt hiển thị cửa sổ của ứng dụng đang ẩn bằng ⌘H")
+                .help(L("⌘3: Bật/tắt hiển thị cửa sổ của ứng dụng đang ẩn bằng ⌘H", "⌘3: Toggle showing windows of apps hidden with ⌘H"))
 
                 Button {
                     controller.pinOpenFromInteraction()
                     controller.toggleSameAppFilterLive()
                 } label: {
                     filterTogglePill(
-                        title: "Cùng App",
+                        title: L("Cùng App", "Same App"),
                         isActive: service.sessionSameAppPID != nil
                     )
                 }
                 .buttonStyle(.plain)
-                .help("⌘4: Chỉ lọc các cửa sổ thuộc cùng 1 ứng dụng")
+                .help(L("⌘4: Chỉ lọc các cửa sổ thuộc cùng 1 ứng dụng", "⌘4: Filter windows belonging to the same app"))
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 7.5)

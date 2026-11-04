@@ -3,6 +3,7 @@ import AppKit
 
 struct MarkdownPreviewView: View {
     @ObservedObject var viewModel: LauncherViewModel
+    @ObservedObject private var settings = AppSettings.shared
     let title: String
     let sourceURL: URL
     let savedMDURL: URL?
@@ -26,7 +27,7 @@ struct MarkdownPreviewView: View {
                     HStack(spacing: 10) {
                         Text("Engine: \(engineUsed)")
                         Text("•")
-                        Text("\(markdown.count.formatted()) ký tự")
+                        Text(L("\(markdown.count.formatted()) ký tự", "\(markdown.count.formatted()) chars"))
                         Text("•")
                         Text("~\(estimatedTokens.formatted()) LLM tokens")
                             .fontWeight(.medium)
@@ -43,7 +44,7 @@ struct MarkdownPreviewView: View {
                         LauncherPanelController.shared.hide()
                         NSWorkspace.shared.activateFileViewerSelecting([savedMDURL])
                     } label: {
-                        Label("Hiện file .md", systemImage: "folder")
+                        Label(L("Hiện file .md", "Show .md in Finder"), systemImage: "folder")
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -55,11 +56,11 @@ struct MarkdownPreviewView: View {
                     pb.setString(markdown, forType: .string)
                     LauncherPanelController.shared.hide()
                     FloatingToastController.shared.showSuccess(
-                        title: "Đã sao chép Markdown vào Clipboard",
-                        subtitle: "Nhấn ⌘V trực tiếp vào Claude / ChatGPT / Gemini"
+                        title: L("Đã sao chép Markdown vào Clipboard", "Copied Markdown to Clipboard"),
+                        subtitle: L("Nhấn ⌘V trực tiếp vào Claude / ChatGPT / Gemini", "Press ⌘V directly in Claude / ChatGPT / Gemini")
                     )
                 } label: {
-                    Label("Copy Markdown", systemImage: "doc.on.clipboard")
+                    Label(L("Copy Markdown", "Copy Markdown"), systemImage: "doc.on.clipboard")
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
@@ -81,11 +82,11 @@ struct MarkdownPreviewView: View {
             Divider()
 
             HStack {
-                Text("Mẹo: Văn bản đã được chuẩn hóa Unicode NFC Tiếng Việt & rút gọn dòng trống để tiết kiệm Token cho AI.")
+                Text(L("Mẹo: Văn bản đã được chuẩn hóa Unicode NFC Tiếng Việt & rút gọn dòng trống để tiết kiệm Token cho AI.", "Tip: Text has been NFC normalized & trimmed to save LLM tokens."))
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
                 Spacer()
-                FooterShortcutHint(key: "Esc", label: "Quay lại")
+                FooterShortcutHint(key: "Esc", label: L("Quay lại", "Back"))
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)

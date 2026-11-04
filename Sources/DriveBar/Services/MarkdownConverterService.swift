@@ -40,11 +40,11 @@ enum MarkdownConversionError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .fileNotFound(let name):
-            return "Không tìm thấy tệp: \(name)"
+            return L("Không tìm thấy tệp: \(name)", "File not found: \(name)")
         case .unsupportedFormat(let ext):
-            return "Định dạng '\(ext)' chưa được hỗ trợ chuyển đổi."
+            return L("Định dạng '\(ext)' chưa được hỗ trợ chuyển đổi.", "Format '\(ext)' is not supported for conversion.")
         case .libreOfficeMissing:
-            return "Chưa cài đặt LibreOffice (/Applications/LibreOffice.app) để chuyển định dạng này sang PDF."
+            return L("Chưa cài đặt LibreOffice (/Applications/LibreOffice.app) để chuyển định dạng này sang PDF.", "LibreOffice (/Applications/LibreOffice.app) is required to convert this format to PDF.")
         case .conversionFailed(let detail):
             return detail
         }
@@ -302,8 +302,8 @@ final class MarkdownConverterService: ObservableObject {
         guard GoogleDriveIndexService.isCloudDatalessFile(url) else { return }
 
         FloatingToastController.shared.showProgress(
-            title: "Đang tải từ Google Drive về máy...",
-            subtitle: "\(url.lastPathComponent) (Tệp Online-only)"
+            title: L("Đang tải từ Google Drive về máy...", "Downloading from Google Drive..."),
+            subtitle: "\(url.lastPathComponent) (\(L("Tệp Online-only", "Online-only file")))"
         )
 
         await Task.detached(priority: .userInitiated) {
@@ -311,7 +311,7 @@ final class MarkdownConverterService: ObservableObject {
         }.value
 
         FloatingToastController.shared.showProgress(
-            title: "Đang chuyển đổi sang Markdown...",
+            title: L("Đang chuyển đổi sang Markdown...", "Converting to Markdown..."),
             subtitle: url.lastPathComponent
         )
     }
@@ -359,7 +359,7 @@ final class MarkdownConverterService: ObservableObject {
         }.value
 
         guard !expandedFiles.isEmpty else {
-            throw MarkdownConversionError.conversionFailed("Không tìm thấy tệp tài liệu hợp lệ để gộp.")
+            throw MarkdownConversionError.conversionFailed(L("Không tìm thấy tệp tài liệu hợp lệ để gộp.", "No valid document files found to merge."))
         }
 
         for f in expandedFiles {
@@ -389,7 +389,7 @@ final class MarkdownConverterService: ObservableObject {
             }
 
             guard !docPayloads.isEmpty else {
-                throw MarkdownConversionError.conversionFailed("Không trích xuất được nội dung từ các tệp đã chọn.")
+                throw MarkdownConversionError.conversionFailed(L("Không trích xuất được nội dung từ các tệp đã chọn.", "Failed to extract content from selected files."))
             }
 
             let first = urls[0]
@@ -810,22 +810,22 @@ final class MarkdownConverterService: ObservableObject {
         // 4. Tier B: 100% Native Swift Article DOM Cleaner (Offline / Corporate / Direct)
         guard let (htmlData, statusCode) = synchronousHTTPGet(url: url, headers: [:], timeout: 14),
               (200...399).contains(statusCode) else {
-            throw MarkdownConversionError.conversionFailed("Không thể tải nội dung từ địa chỉ: \(abs)")
+            throw MarkdownConversionError.conversionFailed(L("Không thể tải nội dung từ địa chỉ: \(abs)", "Failed to fetch content from: \(abs)"))
         }
 
         let html = String(data: htmlData, encoding: .utf8)
             ?? String(data: htmlData, encoding: .isoLatin1)
             ?? ""
         guard !html.isEmpty else {
-            throw MarkdownConversionError.conversionFailed("Trang web trả về dữ liệu rỗng.")
+            throw MarkdownConversionError.conversionFailed(L("Trang web trả về dữ liệu rỗng.", "Web page returned empty content."))
         }
 
-        let pageTitle = extractHTMLTitle(from: html) ?? (url.host ?? "Trang Web")
+        let pageTitle = extractHTMLTitle(from: html) ?? (url.host ?? L("Trang Web", "Webpage"))
         let articleHTML = extractPrimaryArticleBody(from: html)
         let cleanedMD = richWebHTMLToMarkdown(articleHTML, baseURL: url)
 
         guard hasMeaningfulText(cleanedMD, minChars: 20) else {
-            throw MarkdownConversionError.conversionFailed("Trang web sử dụng JavaScript động hoàn toàn hoặc chặn trình đọc tự động.")
+            throw MarkdownConversionError.conversionFailed(L("Trang web sử dụng JavaScript động hoàn toàn hoặc chặn trình đọc tự động.", "Web page requires JavaScript or blocked automated reader."))
         }
 
         return (cleanedMD, pageTitle, "Native Swift Web Reader")
@@ -1237,7 +1237,7 @@ final class MarkdownConverterService: ObservableObject {
            let firstPDF = items.first(where: { $0.pathExtension.lowercased() == "pdf" }) {
             return firstPDF
         }
-        throw MarkdownConversionError.conversionFailed("LibreOffice không xuất được tệp PDF.")
+        throw MarkdownConversionError.conversionFailed(L("LibreOffice không xuất được tệp PDF.", "LibreOffice failed to export PDF."))
     }
 
     // MARK: - Native PDFKit + Apple Vision Vietnamese OCR
@@ -1248,7 +1248,7 @@ final class MarkdownConverterService: ObservableObject {
         forceAllPagesOCR: Bool
     ) throws -> String {
         guard let pdf = PDFDocument(url: url) else {
-            throw MarkdownConversionError.conversionFailed("Không thể đọc tệp PDF: \(url.lastPathComponent)")
+            throw MarkdownConversionError.conversionFailed(L("Không thể đọc tệp PDF: \(url.lastPathComponent)", "Unable to read PDF file: \(url.lastPathComponent)"))
         }
 
         let pageCount = pdf.pageCount
@@ -1314,7 +1314,7 @@ final class MarkdownConverterService: ObservableObject {
     private nonisolated static func performVisionOCROnImage(url: URL) throws -> String {
         guard let nsImage = NSImage(contentsOf: url),
               let cgImage = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
-            throw MarkdownConversionError.conversionFailed("Không thể mở tệp hình ảnh: \(url.lastPathComponent)")
+            throw MarkdownConversionError.conversionFailed(L("Không thể mở tệp hình ảnh: \(url.lastPathComponent)", "Unable to open image file: \(url.lastPathComponent)"))
         }
         return try recognizeTextInCGImage(cgImage)
     }
@@ -1404,7 +1404,7 @@ final class MarkdownConverterService: ObservableObject {
             return attr.string
         }
 
-        throw MarkdownConversionError.conversionFailed("Không thể chuyển đổi '\(url.lastPathComponent)'. Hãy kiểm tra cài đặt LibreOffice hoặc AI Toolkit.")
+        throw MarkdownConversionError.conversionFailed(L("Không thể chuyển đổi '\(url.lastPathComponent)'. Hãy kiểm tra cài đặt LibreOffice hoặc AI Toolkit.", "Unable to convert '\(url.lastPathComponent)'. Check LibreOffice or AI Toolkit setup."))
     }
 
     private nonisolated static func convertRFC4180CSVToMarkdownTable(_ csv: String) -> String {
@@ -1729,7 +1729,7 @@ final class MarkdownConverterService: ObservableObject {
         let waitResult = group.wait(timeout: .now() + max(5, timeout))
         if waitResult == .timedOut {
             proc.terminate()
-            throw MarkdownConversionError.conversionFailed("Quá thời gian xử lý (\(Int(timeout))s).")
+            throw MarkdownConversionError.conversionFailed(L("Quá thời gian xử lý (\(Int(timeout))s).", "Conversion timed out (\(Int(timeout))s)."))
         }
         proc.waitUntilExit()
 

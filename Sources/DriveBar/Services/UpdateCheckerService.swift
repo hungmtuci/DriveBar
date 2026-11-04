@@ -77,7 +77,10 @@ final class UpdateCheckerService: ObservableObject {
 
         if manual {
             state = .checking
-            AppSettings.shared.statusBannerMessage = "Đang kiểm tra phiên bản mới từ GitHub Releases (hungmtuci/DriveBar)..."
+            AppSettings.shared.statusBannerMessage = L(
+                "Đang kiểm tra phiên bản mới từ GitHub Releases (hungmtuci/DriveBar)...",
+                "Checking for updates from GitHub Releases (hungmtuci/DriveBar)..."
+            )
         }
 
         var req = URLRequest(url: latestReleaseAPI)
@@ -91,14 +94,17 @@ final class UpdateCheckerService: ObservableObject {
             if let http = response as? HTTPURLResponse, http.statusCode == 404 {
                 state = .upToDate(version: currentVersion)
                 if manual {
-                    AppSettings.shared.statusBannerMessage = "Bạn đang sử dụng phiên bản DriveBar mới nhất (v\(currentVersion))."
+                    AppSettings.shared.statusBannerMessage = L(
+                        "Bạn đang sử dụng phiên bản DriveBar mới nhất (v\(currentVersion)).",
+                        "You are using the latest version of DriveBar (v\(currentVersion))."
+                    )
                 }
                 return
             }
 
             guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
                 if manual {
-                    let msg = "Không kết nối được GitHub Releases. Vui lòng thử lại sau."
+                    let msg = L("Không kết nối được GitHub Releases. Vui lòng thử lại sau.", "Could not reach GitHub Releases. Please try again later.")
                     state = .failed(message: msg)
                     AppSettings.shared.statusBannerMessage = msg
                 }
@@ -123,17 +129,26 @@ final class UpdateCheckerService: ObservableObject {
                 )
                 StatusBarController.shared.refreshTooltip()
                 if manual {
-                    AppSettings.shared.statusBannerMessage = "Đã có phiên bản mới DriveBar v\(remoteVersion)! Nhấn 'Tự động cập nhật v\(remoteVersion)' để cài đặt ngay."
+                    AppSettings.shared.statusBannerMessage = L(
+                        "Đã có phiên bản mới DriveBar v\(remoteVersion)! Nhấn 'Tự động cập nhật v\(remoteVersion)' để cài đặt ngay.",
+                        "DriveBar v\(remoteVersion) is available! Click 'Update Automatically v\(remoteVersion)' to install now."
+                    )
                 }
             } else {
                 state = .upToDate(version: localVer)
                 if manual {
-                    AppSettings.shared.statusBannerMessage = "Bạn đang sử dụng phiên bản DriveBar mới nhất (v\(localVer))."
+                    AppSettings.shared.statusBannerMessage = L(
+                        "Bạn đang sử dụng phiên bản DriveBar mới nhất (v\(localVer)).",
+                        "You are using the latest version of DriveBar (v\(localVer))."
+                    )
                 }
             }
         } catch {
             if manual {
-                let msg = "Không thể kiểm tra cập nhật (\(error.localizedDescription))."
+                let msg = L(
+                    "Không thể kiểm tra cập nhật (\(error.localizedDescription)).",
+                    "Could not check for updates (\(error.localizedDescription))."
+                )
                 state = .failed(message: msg)
                 AppSettings.shared.statusBannerMessage = msg
             }
@@ -149,10 +164,13 @@ final class UpdateCheckerService: ObservableObject {
         }
 
         state = .downloading(version: version)
-        AppSettings.shared.statusBannerMessage = "Đang tải DriveBar v\(version) từ GitHub Releases..."
+        AppSettings.shared.statusBannerMessage = L(
+            "Đang tải DriveBar v\(version) từ GitHub Releases...",
+            "Downloading DriveBar v\(version) from GitHub Releases..."
+        )
         FloatingToastController.shared.showProgress(
-            title: "Đang tải bản cập nhật DriveBar v\(version)...",
-            subtitle: "Từ GitHub Releases (hungmtuci/DriveBar)"
+            title: L("Đang tải bản cập nhật DriveBar v\(version)...", "Downloading DriveBar update v\(version)..."),
+            subtitle: L("Từ GitHub Releases (hungmtuci/DriveBar)", "From GitHub Releases (hungmtuci/DriveBar)")
         )
 
         Task { @MainActor in
@@ -181,10 +199,13 @@ final class UpdateCheckerService: ObservableObject {
                 try FileManager.default.moveItem(at: tempDownloadedURL, to: zipDest)
 
                 state = .installing(version: version)
-                AppSettings.shared.statusBannerMessage = "Đang giải nén và cài đặt DriveBar v\(version)..."
+                AppSettings.shared.statusBannerMessage = L(
+                    "Đang giải nén và cài đặt DriveBar v\(version)...",
+                    "Extracting and installing DriveBar v\(version)..."
+                )
                 FloatingToastController.shared.showProgress(
-                    title: "Đang cài đặt DriveBar v\(version)...",
-                    subtitle: "Ứng dụng sẽ tự động khởi động lại sau giây lát"
+                    title: L("Đang cài đặt DriveBar v\(version)...", "Installing DriveBar v\(version)..."),
+                    subtitle: L("Ứng dụng sẽ tự động khởi động lại sau giây lát", "The app will restart automatically in a moment")
                 )
 
                 let extractedAppURL = try await Self.extractAndValidateZipOffMain(
@@ -211,10 +232,16 @@ final class UpdateCheckerService: ObservableObject {
                 NSApp.terminate(nil)
             } catch {
                 try? FileManager.default.removeItem(at: stageDir)
-                let msg = "Cập nhật tự động thất bại: \(error.localizedDescription) — đang mở trang tải thủ công..."
+                let msg = L(
+                    "Cập nhật tự động thất bại: \(error.localizedDescription) — đang mở trang tải thủ công...",
+                    "Auto-update failed: \(error.localizedDescription) — opening download page..."
+                )
                 state = .failed(message: msg)
                 AppSettings.shared.statusBannerMessage = msg
-                FloatingToastController.shared.showError(title: "Cập nhật tự động thất bại", subtitle: error.localizedDescription)
+                FloatingToastController.shared.showError(
+                    title: L("Cập nhật tự động thất bại", "Auto-update failed"),
+                    subtitle: error.localizedDescription
+                )
                 NSWorkspace.shared.open(releasePageURL)
             }
         }

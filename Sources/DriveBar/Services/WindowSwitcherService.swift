@@ -19,10 +19,10 @@ enum WindowSnapPlacement: String, Sendable {
 
     var toastLabel: String {
         switch self {
-        case .leftHalf: return "Đã căn cửa sổ sang Nửa trái (⌃←)"
-        case .rightHalf: return "Đã căn cửa sổ sang Nửa phải (⌃→)"
-        case .maximize: return "Đã phóng tối đa cửa sổ (⌃↑)"
-        case .centerRestore: return "Đã đưa cửa sổ ra giữa màn hình (⌃↓)"
+        case .leftHalf: return L("Đã căn cửa sổ sang Nửa trái (⌃←)", "Snapped window Left Half (⌃←)")
+        case .rightHalf: return L("Đã căn cửa sổ sang Nửa phải (⌃→)", "Snapped window Right Half (⌃→)")
+        case .maximize: return L("Đã phóng tối đa cửa sổ (⌃↑)", "Maximized window (⌃↑)")
+        case .centerRestore: return L("Đã đưa cửa sổ ra giữa màn hình (⌃↓)", "Centered window (⌃↓)")
         }
     }
 }
@@ -453,7 +453,7 @@ final class WindowSwitcherService: ObservableObject {
         for app in runningApps {
             let pid = app.processIdentifier
             let bundleID = app.bundleIdentifier ?? ""
-            let appName = app.localizedName ?? "Ứng dụng"
+            let appName = AppLocalization.localizedRunningAppName(app)
             let appIcon = app.icon ?? NSWorkspace.shared.icon(for: .applicationBundle)
             let appHidden = app.isHidden
 
@@ -864,7 +864,7 @@ final class WindowSwitcherService: ObservableObject {
 
         // Fallback (e.g. minimized window whose CGS space list is empty while docked)
         let fallbackSpace = spaceCatalog.defaultSpaceForDisplayID[geometricDisplay.displayID]
-        let deskLabel = isFullscreen ? "Toàn màn hình" : (fallbackSpace?.desktopName ?? "Desktop 1")
+        let deskLabel = isFullscreen ? L("Toàn màn hình", "Fullscreen") : (fallbackSpace?.desktopName ?? "Desktop 1")
         let visibleNow = !isMinimized && !isAppHidden && cgIsOnScreen
         return ResolvedWindowLocation(
             display: geometricDisplay,
@@ -1343,8 +1343,8 @@ final class WindowSwitcherService: ObservableObject {
         guard hasAccessibilityPermission else {
             WindowSwitcherController.shared.dismissWithoutActivating(restorePreviousApp: false)
             FloatingToastController.shared.showError(
-                title: "Cần bật lại quyền Trợ năng (Accessibility) để đóng cửa sổ (⌘W)",
-                subtitle: "Đang mở Cài đặt Trợ năng macOS — hãy bật công tắc DriveBar"
+                title: L("Cần bật lại quyền Trợ năng (Accessibility) để đóng cửa sổ (⌘W)", "Accessibility permission required to close windows (⌘W)"),
+                subtitle: L("Đang mở Cài đặt Trợ năng macOS — hãy bật công tắc DriveBar", "Opening macOS Accessibility Settings — please toggle DriveBar")
             )
             promptAccessibilityPermission()
             return
@@ -1459,8 +1459,8 @@ final class WindowSwitcherService: ObservableObject {
         guard hasAccessibilityPermission else {
             WindowSwitcherController.shared.dismissWithoutActivating(restorePreviousApp: false)
             FloatingToastController.shared.showError(
-                title: "Cần bật lại quyền Trợ năng (Accessibility) để thu nhỏ cửa sổ (⌘M)",
-                subtitle: "Đang mở Cài đặt Trợ năng macOS — hãy bật công tắc DriveBar"
+                title: L("Cần bật lại quyền Trợ năng (Accessibility) để thu nhỏ cửa sổ (⌘M)", "Accessibility permission required to minimize windows (⌘M)"),
+                subtitle: L("Đang mở Cài đặt Trợ năng macOS — hãy bật công tắc DriveBar", "Opening macOS Accessibility Settings — please toggle DriveBar")
             )
             promptAccessibilityPermission()
             return
@@ -1511,8 +1511,8 @@ final class WindowSwitcherService: ObservableObject {
             guard hasAccessibilityPermission else {
                 WindowSwitcherController.shared.dismissWithoutActivating(restorePreviousApp: false)
                 FloatingToastController.shared.showError(
-                    title: "Cần bật lại quyền Trợ năng (Accessibility) để đóng cửa sổ Finder",
-                    subtitle: "Đang mở Cài đặt Trợ năng macOS — hãy bật công tắc DriveBar"
+                    title: L("Cần bật lại quyền Trợ năng (Accessibility) để đóng cửa sổ Finder", "Accessibility permission required to close Finder window"),
+                    subtitle: L("Đang mở Cài đặt Trợ năng macOS — hãy bật công tắc DriveBar", "Opening macOS Accessibility Settings — please toggle DriveBar")
                 )
                 promptAccessibilityPermission()
                 return
@@ -1546,7 +1546,7 @@ final class WindowSwitcherService: ObservableObject {
         if force {
             _ = app.forceTerminate()
             FloatingToastController.shared.showSuccess(
-                title: "Đã buộc thoát \(item.appName)",
+                title: L("Đã buộc thoát \(item.appName)", "Force Quit \(item.appName)"),
                 subtitle: "Force Quit (⌥⌘Q)",
                 symbol: "xmark.octagon"
             )
@@ -1773,7 +1773,7 @@ final class WindowSwitcherService: ObservableObject {
                 displayID: id,
                 uuidString: uuidStr,
                 cgBounds: CGDisplayBounds(id),
-                name: cleanName.isEmpty ? "Màn hình \(idx + 1)" : cleanName,
+                name: cleanName.isEmpty ? L("Màn hình \(idx + 1)", "Display \(idx + 1)") : cleanName,
                 isActiveDisplay: id == activeID
             )
         }
@@ -1828,7 +1828,7 @@ final class WindowSwitcherService: ObservableObject {
                     displayID: CGMainDisplayID(),
                     uuidString: "",
                     cgBounds: CGDisplayBounds(CGMainDisplayID()),
-                    name: "Màn hình chính",
+                    name: L("Màn hình chính", "Main Display"),
                     isActiveDisplay: true
                 )
             }()
@@ -1859,7 +1859,7 @@ final class WindowSwitcherService: ObservableObject {
                     desktopLabel = customName.isEmpty ? "Desktop \(globalDesktopCounter)" : customName
                 } else {
                     orderVal = globalDesktopCounter + 100
-                    desktopLabel = customName.isEmpty ? "Toàn màn hình" : "Toàn màn hình (\(customName))"
+                    desktopLabel = customName.isEmpty ? L("Toàn màn hình", "Fullscreen") : L("Toàn màn hình (\(customName))", "Fullscreen (\(customName))")
                 }
 
                 let isCur = (sid == currentSpaceID)
@@ -1900,7 +1900,7 @@ final class WindowSwitcherService: ObservableObject {
                 displayID: CGMainDisplayID(),
                 uuidString: "",
                 cgBounds: CGDisplayBounds(CGMainDisplayID()),
-                name: "Màn hình chính",
+                name: L("Màn hình chính", "Main Display"),
                 isActiveDisplay: true
             )
         }

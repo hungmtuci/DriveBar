@@ -11,22 +11,22 @@ enum WindowSwitcherScope: String, Codable, CaseIterable, Sendable {
     var displayName: String {
         switch self {
         case .allSpacesAndDisplays:
-            return "Tất cả Desktop & Màn hình"
+            return L("Tất cả Desktop & Màn hình", "All Desktops & Displays")
         case .currentDisplayOnly:
-            return "Màn hình hiện tại"
+            return L("Màn hình hiện tại", "Current Display")
         case .currentSpaceOnly:
-            return "Desktop hiện tại"
+            return L("Desktop hiện tại", "Current Desktop")
         }
     }
 
     var shortBadgeTitle: String {
         switch self {
         case .allSpacesAndDisplays:
-            return "Tất cả màn hình & Desktop"
+            return L("Tất cả màn hình & Desktop", "All Displays & Desktops")
         case .currentDisplayOnly:
-            return "Màn hình này"
+            return L("Màn hình này", "This Display")
         case .currentSpaceOnly:
-            return "Desktop này"
+            return L("Desktop này", "This Desktop")
         }
     }
 
@@ -127,7 +127,7 @@ struct SwitchableWindowItem: Identifiable {
         if isMinimized {
             parts.append("Minimize")
         } else if isWindowlessApp {
-            parts.append("Không có cửa sổ")
+            parts.append(L("Không có cửa sổ", "No windows"))
         }
         if !desktopName.isEmpty {
             parts.append(desktopName)
@@ -144,10 +144,10 @@ struct SwitchableWindowItem: Identifiable {
             return "Minimize"
         }
         if isAppHidden {
-            return "Đang ẩn"
+            return L("Đang ẩn", "Hidden")
         }
         if isFullscreen {
-            return "Toàn màn hình"
+            return L("Toàn màn hình", "Fullscreen")
         }
         return nil
     }
@@ -180,10 +180,10 @@ struct SwitchableWindowItem: Identifiable {
             badges.append("Minimize")
         }
         if isAppHidden {
-            badges.append("Đang ẩn (⌘H)")
+            badges.append(L("Đang ẩn (⌘H)", "Hidden (⌘H)"))
         }
         if isWindowlessApp {
-            badges.append("Không có cửa sổ")
+            badges.append(L("Không có cửa sổ", "No windows"))
         }
         if !desktopName.isEmpty {
             badges.append(desktopName)

@@ -13,11 +13,15 @@ struct DriveAccountMount: Identifiable, Equatable, Sendable {
 }
 
 struct InstalledAppEntry: Sendable {
-    let name: String
+    let nameEN: String
+    let nameVI: String
+    var name: String { L(nameVI, nameEN) }
     let path: String
     let bundleIdentifier: String
     let cleanFull: String
+    let cleanFullVI: String
     let acronym: String
+    let acronymVI: String
     let words: [String]
     let aliasWords: [String]
     let isNestedHelper: Bool
@@ -484,18 +488,19 @@ final class GoogleDriveIndexService: ObservableObject {
                         let rel = String(eventPath.dropFirst(sd.count + 1))
                         let segs = rel.split(separator: "/").map(String.init)
                         let sigs = segs.map { Self.extractSignatures($0) }
+                        let sharedPrefix = L("Bộ nhớ dùng chung", "Shared Drives")
                         fresh.append(SharedDriveEntry(
                             path: eventPath,
                             isDir: true,
-                            displaySub: "Bộ nhớ dùng chung/\(rel)",
-                            cleanSegs: ["bonhodungchung"] + sigs.map(\.clean),
+                            displaySub: "\(sharedPrefix)/\(rel)",
+                            cleanSegs: ["bonhodungchungshareddrives"] + sigs.map(\.clean),
                             acrSegs: [""] + sigs.map(\.acronym)
                         ))
                         Self.walkSharedTree(
                             rootDir: eventPath,
                             baseStripPath: sd,
-                            prefixDisplay: "Bộ nhớ dùng chung",
-                            prefixClean: "bonhodungchung",
+                            prefixDisplay: sharedPrefix,
+                            prefixClean: "bonhodungchungshareddrives",
                             into: &fresh
                         )
                         for item in fresh {
@@ -833,43 +838,54 @@ final class GoogleDriveIndexService: ObservableObject {
                 .replacingOccurrences(of: ".app", with: "", options: [.caseInsensitive, .anchored, .backwards])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
 
-            let primaryName: String = {
-                if !finderDisplay.isEmpty && finderDisplay.lowercased() != rawFileName.lowercased() {
-                    return finderDisplay
-                }
-                if !bundleDisplayName.isEmpty {
-                    return bundleDisplayName
-                }
-                return rawFileName
-            }()
+            let (locEN, locVI, locKeywords) = AppLocalization.localizedBundleNames(
+                forAppAt: full,
+                plist: plist,
+                rawFileName: rawFileName
+            )
+            let nameEN = locEN.isEmpty ? rawFileName : locEN
+            let nameVI = locVI.isEmpty ? nameEN : locVI
 
-            let dedupKey = "\(bundleID.lowercased())::\(primaryName.lowercased())"
+            let dedupKey = "\(bundleID.lowercased())::\(nameEN.lowercased())"
             if !bundleID.isEmpty && !seenBundleAndName.insert(dedupKey).inserted {
                 continue
             }
 
             var wordList: [String] = []
             var seenWords = Set<String>()
-            for variant in [primaryName, rawFileName, bundleDisplayName, bundleShortName] where !variant.isEmpty {
+            for variant in ([nameEN, nameVI, rawFileName, bundleDisplayName, bundleShortName, finderDisplay] + locKeywords) where !variant.isEmpty {
                 for w in extractAppWords(variant) where seenWords.insert(w).inserted {
                     wordList.append(w)
                 }
             }
 
-            let primaryWords = extractAppWords(primaryName)
+            let wordsEN = extractAppWords(nameEN)
+            let wordsVI = extractAppWords(nameVI)
             let acronym: String = {
-                if primaryWords.count > 1 {
-                    return String(primaryWords.compactMap(\.first))
+                if wordsEN.count > 1 {
+                    return String(wordsEN.compactMap(\.first))
                 }
                 if wordList.count > 1 {
                     return String(wordList.compactMap(\.first))
                 }
                 return ""
             }()
+            let acronymVI: String = wordsVI.count > 1 ? String(wordsVI.compactMap(\.first)) : ""
 
-            let cleanFull = cleanString(primaryName)
-            let aliases = builtInAliases(bundleID: bundleID, cleanFull: cleanFull, rawFileClean: cleanString(rawFileName))
-            let lowerName = primaryName.lowercased()
+            let rawCleanEN = cleanString(nameEN)
+            let cleanFull = rawCleanEN.isEmpty ? cleanString(rawFileName) : rawCleanEN
+            let rawCleanVI = cleanString(nameVI)
+            let cleanFullVI = rawCleanVI.isEmpty ? cleanFull : rawCleanVI
+
+            var aliases = builtInAliases(bundleID: bundleID, cleanFull: cleanFull, rawFileClean: cleanString(rawFileName))
+            var seenAliases = Set(aliases)
+            for extraAlias in [cleanFullVI, cleanFull, cleanString(rawFileName), acronymVI] where !extraAlias.isEmpty {
+                if extraAlias != cleanFull && seenAliases.insert(extraAlias).inserted {
+                    aliases.append(extraAlias)
+                }
+            }
+
+            let lowerName = "\(nameEN) \(rawFileName)".lowercased()
             let isHelper = candidate.depth >= 2 && (
                 lowerName.contains("uninstall") ||
                 lowerName.contains("license") ||
@@ -880,11 +896,14 @@ final class GoogleDriveIndexService: ObservableObject {
             )
 
             entries.append(InstalledAppEntry(
-                name: primaryName,
+                nameEN: nameEN,
+                nameVI: nameVI,
                 path: full,
                 bundleIdentifier: bundleID,
-                cleanFull: cleanFull.isEmpty ? cleanString(rawFileName) : cleanFull,
+                cleanFull: cleanFull,
+                cleanFullVI: cleanFullVI,
                 acronym: acronym,
+                acronymVI: acronymVI,
                 words: wordList,
                 aliasWords: aliases,
                 isNestedHelper: isHelper
@@ -972,6 +991,38 @@ final class GoogleDriveIndexService: ObservableObject {
             return ["active", "monitor", "task", "manager", "process", "cpu", "ram", "memory", "giam", "sat", "hoat", "dong"]
         case "com.apple.systempreferences":
             return ["system", "preferences", "settings", "cai", "dat", "he", "thong", "tuy", "chon"]
+        case "com.apple.iCal":
+            return ["calendar", "ical", "lich"]
+        case "com.apple.Notes":
+            return ["notes", "ghi", "chu"]
+        case "com.apple.reminders":
+            return ["reminders", "loi", "nhac"]
+        case "com.apple.mail":
+            return ["mail", "thu", "email"]
+        case "com.apple.MobileSMS":
+            return ["messages", "imessage", "tin", "nhan"]
+        case "com.apple.AddressBook":
+            return ["contacts", "danh", "ba"]
+        case "com.apple.Maps":
+            return ["maps", "ban", "do"]
+        case "com.apple.Photos":
+            return ["photos", "anh", "hinh"]
+        case "com.apple.calculator":
+            return ["calculator", "calc", "may", "tinh"]
+        case "com.apple.Preview":
+            return ["preview", "xem", "truoc"]
+        case "com.apple.Dictionary":
+            return ["dictionary", "tu", "dien"]
+        case "com.apple.Music":
+            return ["music", "itunes", "nhac"]
+        case "com.apple.weather":
+            return ["weather", "thoi", "tiet"]
+        case "com.apple.clock":
+            return ["clock", "dong", "ho", "alarm"]
+        case "com.apple.VoiceMemos":
+            return ["voice", "memos", "ghi", "am"]
+        case "com.apple.Passwords":
+            return ["passwords", "keychain", "mat", "khau"]
         case "com.microsoft.edgemac":
             return ["msedge", "edge", "browser", "trinh", "duyet"]
         case "com.microsoft.Word":
@@ -1305,7 +1356,7 @@ final class GoogleDriveIndexService: ObservableObject {
         guard !mounts.isEmpty else { return }
 
         isRebuildingFolders = true
-        rebuildProgressText = "Đang quét My Drive..."
+        rebuildProgressText = L("Đang quét My Drive...", "Scanning My Drive...")
         let targetCachePath = folderCachePath
         let primaryRoot = myDrivePath
 
@@ -1352,7 +1403,7 @@ final class GoogleDriveIndexService: ObservableObject {
                         if count % 2500 == 0 {
                             let cSnap = count
                             await MainActor.run {
-                                GoogleDriveIndexService.shared.rebuildProgressText = "Đang quét: \(cSnap.formatted()) thư mục..."
+                                GoogleDriveIndexService.shared.rebuildProgressText = L("Đang quét: \(cSnap.formatted()) thư mục...", "Scanning: \(cSnap.formatted()) folders...")
                             }
                         }
 
@@ -1407,18 +1458,19 @@ final class GoogleDriveIndexService: ObservableObject {
                         var isDir: ObjCBool = false
                         guard fm.fileExists(atPath: drivePath, isDirectory: &isDir), isDir.boolValue else { continue }
                         let (c, a) = Self.extractSignatures(d)
+                        let sharedPrefix = L("Bộ nhớ dùng chung", "Shared Drives")
                         items.append(SharedDriveEntry(
                             path: drivePath,
                             isDir: true,
-                            displaySub: "Bộ nhớ dùng chung/\(d)",
-                            cleanSegs: ["bonhodungchung", c],
+                            displaySub: "\(sharedPrefix)/\(d)",
+                            cleanSegs: ["bonhodungchungshareddrives", c],
                             acrSegs: ["", a]
                         ))
                         Self.walkSharedTree(
                             rootDir: drivePath,
                             baseStripPath: sdPath,
-                            prefixDisplay: "Bộ nhớ dùng chung",
-                            prefixClean: "bonhodungchung",
+                            prefixDisplay: sharedPrefix,
+                            prefixClean: "bonhodungchungshareddrives",
                             into: &items
                         )
                     }
@@ -1433,10 +1485,11 @@ final class GoogleDriveIndexService: ObservableObject {
                             var isDir: ObjCBool = false
                             guard fm.fileExists(atPath: itemPath, isDirectory: &isDir) else { continue }
                             let (c, a) = Self.extractSignatures(name)
+                            let sharedWithMePrefix = L("Được chia sẻ", "Shared With Me")
                             items.append(SharedDriveEntry(
                                 path: itemPath,
                                 isDir: isDir.boolValue,
-                                displaySub: "Được chia sẻ/\(name)",
+                                displaySub: "\(sharedWithMePrefix)/\(name)",
                                 cleanSegs: ["duocchiase", c],
                                 acrSegs: ["", a]
                             ))
@@ -1444,7 +1497,7 @@ final class GoogleDriveIndexService: ObservableObject {
                                 Self.walkSharedTree(
                                     rootDir: itemPath,
                                     baseStripPath: idDir,
-                                    prefixDisplay: "Được chia sẻ",
+                                    prefixDisplay: sharedWithMePrefix,
                                     prefixClean: "duocchiase",
                                     into: &items
                                 )
@@ -1829,12 +1882,14 @@ final class GoogleDriveIndexService: ObservableObject {
             baseLabel = multiAccount ? "My Drive (\(acc.email))" : "My Drive"
         } else if let sd = acc.sharedDrivesPath, path.hasPrefix(sd + "/") {
             rel = String(path.dropFirst(sd.count + 1))
-            baseLabel = multiAccount ? "Bộ nhớ dùng chung (\(acc.email))" : "Bộ nhớ dùng chung"
+            let sharedTitle = L("Bộ nhớ dùng chung", "Shared Drives")
+            baseLabel = multiAccount ? "\(sharedTitle) (\(acc.email))" : sharedTitle
         } else if let st = acc.shortcutTargetsPath, path.hasPrefix(st + "/") {
             let relSt = String(path.dropFirst(st.count + 1))
             let parts = relSt.split(separator: "/").map(String.init)
             rel = parts.count > 1 ? parts.dropFirst().joined(separator: "/") : (parts.first ?? "")
-            baseLabel = multiAccount ? "Được chia sẻ (\(acc.email))" : "Được chia sẻ"
+            let sharedWithMeTitle = L("Được chia sẻ", "Shared With Me")
+            baseLabel = multiAccount ? "\(sharedWithMeTitle) (\(acc.email))" : sharedWithMeTitle
         } else if path.hasPrefix(acc.rootPath + "/") {
             rel = String(path.dropFirst(acc.rootPath.count + 1))
             baseLabel = multiAccount ? "Google Drive (\(acc.email))" : "Google Drive"
@@ -1845,7 +1900,7 @@ final class GoogleDriveIndexService: ObservableObject {
         let parts = rel.split(separator: "/").map(String.init)
         let ancestors = parts.dropLast()
         if ancestors.isEmpty {
-            return baseLabel.isEmpty ? "Thư mục gốc" : baseLabel
+            return baseLabel.isEmpty ? L("Thư mục gốc", "Root Folder") : baseLabel
         }
 
         var reversed = Array(ancestors.reversed())
@@ -1882,18 +1937,21 @@ final class GoogleDriveIndexService: ObservableObject {
         let pinned = AppSettings.shared.pinnedPaths
         guard !pinned.isEmpty else { return [] }
         var out: [SearchResultItem] = []
+        let pinnedBadge = L("Đã ghim", "Pinned")
+        let unpinHint = L("Đã ghim (⌘D bỏ ghim)", "Pinned (⌘D to unpin)")
         for p in pinned {
             let lower = p.lowercased()
             if lower.hasSuffix(".app") {
-                let appTitle = ((p as NSString).lastPathComponent as NSString).deletingPathExtension
+                let appLoc = AppLocalization.localizedBundleNames(forAppAt: p)
+                let appTitle = AppLocalization.isVietnamese ? appLoc.vi : appLoc.en
                 out.append(SearchResultItem(
                     id: "pin:app:\(p)",
                     title: appTitle,
-                    subtitle: "Đã ghim (⌘D bỏ ghim) • \(p)",
+                    subtitle: "\(unpinHint) • \(p)",
                     path: p,
                     isDirectory: false,
                     kind: .localApp(path: p),
-                    badge: "Đã ghim",
+                    badge: pinnedBadge,
                     sfSymbolFallback: "app.fill"
                 ))
             } else {
@@ -1901,11 +1959,11 @@ final class GoogleDriveIndexService: ObservableObject {
                 out.append(SearchResultItem(
                     id: "pin:\(p)",
                     title: (p as NSString).lastPathComponent,
-                    subtitle: "Đã ghim (⌘D bỏ ghim) ‹ \(formatHierarchicalSubtitle(p))",
+                    subtitle: "\(unpinHint) ‹ \(formatHierarchicalSubtitle(p))",
                     path: p,
                     isDirectory: isDir,
                     kind: isDir ? .driveFolder(path: p) : .driveFile(path: p),
-                    badge: "Đã ghim",
+                    badge: pinnedBadge,
                     sfSymbolFallback: isDir ? "folder.fill" : "doc.fill"
                 ))
             }
@@ -1937,7 +1995,7 @@ final class GoogleDriveIndexService: ObservableObject {
             if !knownFolderSet.isEmpty && !knownFolderSet.contains(hPath) {
                 continue
             }
-            let sub = "Mở gần đây (\(rec.count) lần) ‹ \(formatHierarchicalSubtitle(hPath))"
+            let sub = "\(L("Mở gần đây (\(rec.count) lần)", "Recently opened (\(rec.count) times)")) ‹ \(formatHierarchicalSubtitle(hPath))"
             items.append(SearchResultItem(
                 id: "recent:\(hPath)",
                 title: (hPath as NSString).lastPathComponent,
@@ -1982,7 +2040,7 @@ final class GoogleDriveIndexService: ObservableObject {
             guard inSD || inST else { continue }
             let isDir = sharedByPath[hPath]?.isDir ?? true
 
-            let sub = "Mở gần đây (\(rec.count) lần) ‹ \(formatHierarchicalSubtitle(hPath))"
+            let sub = "\(L("Mở gần đây (\(rec.count) lần)", "Recently opened (\(rec.count) times)")) ‹ \(formatHierarchicalSubtitle(hPath))"
             items.append(SearchResultItem(
                 id: "srecent:\(hPath)",
                 title: (hPath as NSString).lastPathComponent,
@@ -2338,11 +2396,11 @@ final class GoogleDriveIndexService: ObservableObject {
     ) -> SearchResultItem {
         var subParts: [String] = []
         if historyCount > 0 {
-            subParts.append("Mở gần đây (\(historyCount) lần)")
+            subParts.append("\(L("Mở gần đây (\(historyCount) lần)", "Recently opened (\(historyCount) times)"))")
         } else if isRunning {
-            subParts.append("Đang chạy")
+            subParts.append(L("Đang chạy", "Running"))
         } else {
-            subParts.append("Ứng dụng macOS")
+            subParts.append(L("Ứng dụng macOS", "macOS Application"))
         }
         subParts.append(app.path)
         return SearchResultItem(
@@ -2352,7 +2410,7 @@ final class GoogleDriveIndexService: ObservableObject {
             path: app.path,
             isDirectory: false,
             kind: .localApp(path: app.path),
-            badge: isRunning ? "Đang chạy" : "App",
+            badge: isRunning ? L("Đang chạy", "Running") : "App",
             sfSymbolFallback: "app.fill"
         )
     }
@@ -2363,17 +2421,17 @@ final class GoogleDriveIndexService: ObservableObject {
         joinedQuery: String,
         isAppOnlyMode: Bool
     ) -> Int? {
-        // 1. Direct joined query match against full clean name or acronym (e.g. "microsoftedge", "am", "me", "spss")
-        if app.cleanFull == joinedQuery {
+        // 1. Direct joined query match against full clean name or acronym in EN or VI (e.g. "lich", "calendar", "microsoftedge", "am", "me", "spss")
+        if app.cleanFull == joinedQuery || app.cleanFullVI == joinedQuery {
             return 2_600
         }
-        if !app.acronym.isEmpty && app.acronym == joinedQuery {
+        if (!app.acronym.isEmpty && app.acronym == joinedQuery) || (!app.acronymVI.isEmpty && app.acronymVI == joinedQuery) {
             return 2_450
         }
-        if app.cleanFull.hasPrefix(joinedQuery) {
+        if app.cleanFull.hasPrefix(joinedQuery) || app.cleanFullVI.hasPrefix(joinedQuery) {
             return 2_250
         }
-        if !app.acronym.isEmpty && app.acronym.hasPrefix(joinedQuery) && joinedQuery.count >= 2 {
+        if ((!app.acronym.isEmpty && app.acronym.hasPrefix(joinedQuery)) || (!app.acronymVI.isEmpty && app.acronymVI.hasPrefix(joinedQuery))) && joinedQuery.count >= 2 {
             return 2_050
         }
 
@@ -2425,13 +2483,13 @@ final class GoogleDriveIndexService: ObservableObject {
                 }
             }
 
-            // Check cross-word substring inside cleanFull (e.g. "note" inside "endnote", "studio" inside "rstudio")
-            if bestForToken == nil && (token.count >= 3 || (isAppOnlyMode && token.count >= 2)) && app.cleanFull.contains(token) {
+            // Check cross-word substring inside cleanFull or cleanFullVI (e.g. "note" inside "endnote", "studio" inside "rstudio")
+            if bestForToken == nil && (token.count >= 3 || (isAppOnlyMode && token.count >= 2)) && (app.cleanFull.contains(token) || app.cleanFullVI.contains(token)) {
                 bestForToken = 1_480
             }
 
             // In `a <keyword>` App-Only Mode, also allow ordered subsequence matching (e.g. "actmon", "msedg", "stse")
-            if bestForToken == nil && isAppOnlyMode && token.count >= 2 && isOrderedSubsequence(token, in: app.cleanFull) {
+            if bestForToken == nil && isAppOnlyMode && token.count >= 2 && (isOrderedSubsequence(token, in: app.cleanFull) || isOrderedSubsequence(token, in: app.cleanFullVI)) {
                 bestForToken = 1_220
             }
 
@@ -2509,7 +2567,7 @@ final class GoogleDriveIndexService: ObservableObject {
             if results.count >= maxResults { break }
             let sub: String
             if hit.historyCount > 0 {
-                sub = "Mở gần đây (\(hit.historyCount) lần) ‹ \(formatHierarchicalSubtitle(hit.path))"
+                sub = "\(L("Mở gần đây (\(hit.historyCount) lần)", "Recently opened (\(hit.historyCount) times)")) ‹ \(formatHierarchicalSubtitle(hit.path))"
             } else {
                 sub = formatHierarchicalSubtitle(hit.path)
             }
@@ -2535,7 +2593,7 @@ final class GoogleDriveIndexService: ObservableObject {
         results.reserveCapacity(min(topHits.count, maxResults))
         for hit in topHits.prefix(maxResults) {
             let sub = hit.historyCount > 0
-                ? "Mở gần đây (\(hit.historyCount) lần) ‹ \(formatHierarchicalSubtitle(hit.entry.path))"
+                ? "\(L("Mở gần đây (\(hit.historyCount) lần)", "Recently opened (\(hit.historyCount) times)")) ‹ \(formatHierarchicalSubtitle(hit.entry.path))"
                 : formatHierarchicalSubtitle(hit.entry.path)
             results.append(SearchResultItem(
                 id: "sh:\(hit.entry.path)",
@@ -2771,14 +2829,15 @@ final class GoogleDriveIndexService: ObservableObject {
         for p in AppSettings.shared.pinnedPaths where !p.lowercased().hasSuffix(".app") && !isKnownDirectory(p) {
             guard seen.insert(p).inserted else { continue }
             let ext = (p as NSString).pathExtension.uppercased()
+            let pinnedText = L("Đã ghim", "Pinned")
             results.append(SearchResultItem(
                 id: "ffile:pin:\(p)",
                 title: (p as NSString).lastPathComponent,
-                subtitle: "Đã ghim ‹ \(formatHierarchicalSubtitle(p))",
+                subtitle: "\(pinnedText) ‹ \(formatHierarchicalSubtitle(p))",
                 path: p,
                 isDirectory: false,
                 kind: .driveFile(path: p),
-                badge: ext.isEmpty ? "Đã ghim" : "Đã ghim • \(ext)",
+                badge: ext.isEmpty ? pinnedText : "\(pinnedText) • \(ext)",
                 sfSymbolFallback: "doc.fill"
             ))
         }
@@ -2792,7 +2851,7 @@ final class GoogleDriveIndexService: ObservableObject {
             results.append(SearchResultItem(
                 id: "ffile:hist:\(hPath)",
                 title: (hPath as NSString).lastPathComponent,
-                subtitle: "Mở gần đây (\(rec.count) lần) ‹ \(formatHierarchicalSubtitle(hPath))",
+                subtitle: "\(L("Mở gần đây (\(rec.count) lần)", "Recently opened (\(rec.count) times)")) ‹ \(formatHierarchicalSubtitle(hPath))",
                 path: hPath,
                 isDirectory: false,
                 kind: .driveFile(path: hPath),
@@ -2811,7 +2870,7 @@ final class GoogleDriveIndexService: ObservableObject {
                 path: f.path,
                 isDirectory: false,
                 kind: .driveFile(path: f.path),
-                badge: f.ext.isEmpty ? "Tệp" : f.ext.uppercased(),
+                badge: f.ext.isEmpty ? L("Tệp", "File") : f.ext.uppercased(),
                 sfSymbolFallback: "doc.fill"
             ))
             if results.count >= limit { break }
@@ -2821,13 +2880,13 @@ final class GoogleDriveIndexService: ObservableObject {
             results.append(SearchResultItem(
                 id: "ffile:empty",
                 title: isRebuildingFiles
-                    ? "Đang lập chỉ mục tệp tin Google Drive & máy cục bộ ở nền..."
-                    : "Gõ từ khóa sau 'ff ' để tìm trực tiếp tệp tin (.docx, .pdf, .xlsx, .sav...)",
-                subtitle: "Hỗ trợ Google Drive, ~/Desktop, ~/Downloads, ~/Documents • Nhấn ⇧ xem Quick Look, ⇥ Convert .MD",
+                    ? L("Đang lập chỉ mục tệp tin Google Drive & máy cục bộ ở nền...", "Indexing Google Drive & local files in background...")
+                    : L("Gõ từ khóa sau 'ff ' để tìm trực tiếp tệp tin (.docx, .pdf, .xlsx, .sav...)", "Type keywords after 'ff ' to directly search files (.docx, .pdf, .xlsx, .sav...)"),
+                subtitle: L("Hỗ trợ Google Drive, ~/Desktop, ~/Downloads, ~/Documents • Nhấn ⇧ xem Quick Look, ⇥ Convert .MD", "Supports Google Drive, ~/Desktop, ~/Downloads, ~/Documents • ⇧ Quick Look, ⇥ Convert .MD"),
                 path: nil,
                 isDirectory: false,
                 kind: .infoBanner,
-                badge: "Tệp tin",
+                badge: L("Tệp tin", "Files"),
                 sfSymbolFallback: "doc.text.magnifyingglass"
             ))
         }
@@ -2914,14 +2973,15 @@ final class GoogleDriveIndexService: ObservableObject {
     ) -> [SearchResultItem] {
         hits.prefix(maxResults).map { hit in
             let extUpper = hit.entry.ext.uppercased()
+            let pinnedText = L("Đã ghim", "Pinned")
             let badge: String? = hit.isPinned
-                ? (extUpper.isEmpty ? "Đã ghim" : "Đã ghim • \(extUpper)")
-                : (extUpper.isEmpty ? "Tệp" : extUpper)
+                ? (extUpper.isEmpty ? pinnedText : "\(pinnedText) • \(extUpper)")
+                : (extUpper.isEmpty ? L("Tệp", "File") : extUpper)
             let subPrefix: String
             if hit.isPinned {
-                subPrefix = "Đã ghim ‹ "
+                subPrefix = "\(pinnedText) ‹ "
             } else if hit.historyCount > 0 {
-                subPrefix = "Mở gần đây (\(hit.historyCount) lần) ‹ "
+                subPrefix = "\(L("Mở gần đây (\(hit.historyCount) lần)", "Recently opened (\(hit.historyCount) times)")) ‹ "
             } else {
                 subPrefix = ""
             }
@@ -2981,12 +3041,12 @@ final class GoogleDriveIndexService: ObservableObject {
     func defaultCustomMacFolderResultItems(validDirs: [String], limit: Int = 25) -> [SearchResultItem] {
         let addPromptItem = SearchResultItem(
             id: "mac_folder:add_prompt",
-            title: "Thêm thư mục trên Mac vào danh sách tìm kiếm...",
-            subtitle: "Bấm ↩ để chọn thêm thư mục từ máy Mac (tìm nhanh qua tiền tố 'm <từ khóa>')",
+            title: L("Thêm thư mục trên Mac vào danh sách tìm kiếm...", "Add Mac folder to search list..."),
+            subtitle: L("Bấm ↩ để chọn thêm thư mục từ máy Mac (tìm nhanh qua tiền tố 'm <từ khóa>')", "Press ↩ to choose a folder from Mac (quick search via prefix 'm <keyword>')"),
             path: nil,
             isDirectory: true,
             kind: .addCustomMacFolder,
-            badge: "+ Thêm",
+            badge: L("+ Thêm", "+ Add"),
             sfSymbolFallback: "folder.badge.plus"
         )
 
@@ -2995,12 +3055,12 @@ final class GoogleDriveIndexService: ObservableObject {
                 addPromptItem,
                 SearchResultItem(
                     id: "mac_folder:empty_hint",
-                    title: "Chưa có thư mục nào trên Mac được thêm",
-                    subtitle: "Nhấn ↩ vào mục trên để chọn thư mục đầu tiên (hoặc vào Cài đặt > Cài đặt chung)",
+                    title: L("Chưa có thư mục nào trên Mac được thêm", "No Mac folders added yet"),
+                    subtitle: L("Nhấn ↩ vào mục trên để chọn thư mục đầu tiên (hoặc vào Cài đặt > Cài đặt chung)", "Press ↩ on the item above to choose first folder (or go to Settings > General)"),
                     path: nil,
                     isDirectory: false,
                     kind: .infoBanner,
-                    badge: "Hướng dẫn",
+                    badge: L("Hướng dẫn", "Guide"),
                     sfSymbolFallback: "info.circle"
                 )
             ]
@@ -3009,6 +3069,7 @@ final class GoogleDriveIndexService: ObservableObject {
         var items: [SearchResultItem] = []
         var seenPaths = Set<String>()
         let pinnedSet = Set(AppSettings.shared.pinnedPaths)
+        let pinnedText = L("Đã ghim", "Pinned")
 
         // 1. Pinned items located inside configured Mac folders
         for p in AppSettings.shared.pinnedPaths {
@@ -3019,11 +3080,11 @@ final class GoogleDriveIndexService: ObservableObject {
             items.append(SearchResultItem(
                 id: "mac_pin:\(p)",
                 title: (p as NSString).lastPathComponent,
-                subtitle: "Đã ghim (⌘D bỏ ghim) ‹ \(formatHierarchicalSubtitle(p, maxLevels: 3))",
+                subtitle: "\(L("Đã ghim (⌘D bỏ ghim)", "Pinned (⌘D to unpin)")) ‹ \(formatHierarchicalSubtitle(p, maxLevels: 3))",
                 path: p,
                 isDirectory: isDir,
                 kind: isDir ? .driveFolder(path: p) : .driveFile(path: p),
-                badge: isDir ? "Đã ghim" : (ext.isEmpty ? "Đã ghim" : "Đã ghim • \(ext)"),
+                badge: isDir ? pinnedText : (ext.isEmpty ? pinnedText : "\(pinnedText) • \(ext)"),
                 sfSymbolFallback: isDir ? "folder.fill" : "doc.fill"
             ))
         }
@@ -3035,11 +3096,11 @@ final class GoogleDriveIndexService: ObservableObject {
             items.append(SearchResultItem(
                 id: "mac_folder:\(dir)",
                 title: folderName,
-                subtitle: "\(prettyPath)  •  ↩ Duyệt thư mục • ⌘↩ Xem trong Finder • ⇥ Actions",
+                subtitle: "\(prettyPath)  •  \(L("↩ Duyệt thư mục • ⌘↩ Xem trong Finder • ⇥ Actions", "↩ Browse folder • ⌘↩ Reveal in Finder • ⇥ Actions"))",
                 path: dir,
                 isDirectory: true,
                 kind: .driveFolder(path: dir),
-                badge: pinnedSet.contains(dir) ? "Đã ghim" : "Thư mục Mac",
+                badge: pinnedSet.contains(dir) ? pinnedText : L("Thư mục Mac", "Mac Folder"),
                 sfSymbolFallback: "folder.fill"
             ))
         }
@@ -3056,14 +3117,15 @@ final class GoogleDriveIndexService: ObservableObject {
             let isDir = isKnownDirectory(hPath)
             guard FileManager.default.fileExists(atPath: hPath) else { continue }
             let ext = (hPath as NSString).pathExtension.uppercased()
+            let recentBadge = L("Gần đây", "Recent")
             items.append(SearchResultItem(
                 id: "mac_recent:\(hPath)",
                 title: (hPath as NSString).lastPathComponent,
-                subtitle: "Mở gần đây (\(rec.count) lần) ‹ \(formatHierarchicalSubtitle(hPath, maxLevels: 3))",
+                subtitle: "\(L("Mở gần đây (\(rec.count) lần)", "Recently opened (\(rec.count) times)")) ‹ \(formatHierarchicalSubtitle(hPath, maxLevels: 3))",
                 path: hPath,
                 isDirectory: isDir,
                 kind: isDir ? .driveFolder(path: hPath) : .driveFile(path: hPath),
-                badge: isDir ? "Gần đây" : (ext.isEmpty ? "Gần đây" : ext),
+                badge: isDir ? recentBadge : (ext.isEmpty ? recentBadge : ext),
                 sfSymbolFallback: isDir ? "folder.fill" : "doc.fill"
             ))
         }
@@ -3236,20 +3298,21 @@ final class GoogleDriveIndexService: ObservableObject {
             let p = hit.entry.path
             let isDir = hit.entry.isDir
             let ext = (p as NSString).pathExtension.uppercased()
+            let pinnedText = L("Đã ghim", "Pinned")
             let badge: String
             if hit.isPinned {
-                badge = isDir ? "Đã ghim" : (ext.isEmpty ? "Đã ghim" : "Đã ghim • \(ext)")
+                badge = isDir ? pinnedText : (ext.isEmpty ? pinnedText : "\(pinnedText) • \(ext)")
             } else if isDir {
-                badge = "Thư mục"
+                badge = L("Thư mục", "Folder")
             } else {
-                badge = ext.isEmpty ? "Tệp Mac" : ext
+                badge = ext.isEmpty ? L("Tệp Mac", "Mac File") : ext
             }
 
             let subPrefix: String
             if hit.isPinned {
-                subPrefix = "Đã ghim ‹ "
+                subPrefix = "\(pinnedText) ‹ "
             } else if hit.historyCount > 0 {
-                subPrefix = "Mở gần đây (\(hit.historyCount) lần) ‹ "
+                subPrefix = "\(L("Mở gần đây (\(hit.historyCount) lần)", "Recently opened (\(hit.historyCount) times)")) ‹ "
             } else {
                 subPrefix = ""
             }

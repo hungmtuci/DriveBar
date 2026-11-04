@@ -100,7 +100,7 @@ private struct LargeTypeBannerView: View {
                     onClose()
                 }
 
-            Text("Nhấn phím bất kỳ hoặc Click để đóng")
+            Text(L("Nhấn phím bất kỳ hoặc Click để đóng", "Press any key or click to dismiss"))
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.white.opacity(0.6))
                 .padding(16)

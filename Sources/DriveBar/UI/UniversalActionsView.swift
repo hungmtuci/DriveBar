@@ -5,6 +5,7 @@ import AppKit
 /// prioritizing `Convert to Markdown`, `Convert for AI`, `Convert to PDF`, and live document preview.
 struct UniversalActionsView: View {
     @ObservedObject var viewModel: LauncherViewModel
+    @ObservedObject private var settings = AppSettings.shared
     let target: ActionTarget
 
     var body: some View {
@@ -33,7 +34,7 @@ struct UniversalActionsView: View {
                     Button {
                         viewModel.returnToSearchMode()
                     } label: {
-                        Label("Tìm kiếm", systemImage: "chevron.left")
+                        Label(L("Tìm kiếm", "Search"), systemImage: "chevron.left")
                             .font(.system(size: 11.5, weight: .medium))
                     }
                     .buttonStyle(.bordered)
@@ -52,7 +53,7 @@ struct UniversalActionsView: View {
 
                 NativeSearchInputField(
                     text: $viewModel.actionFilterText,
-                    placeholder: "Lọc nhanh hành động (vd: 'md', 'copy', 'ai', 'pdf', 'open')...",
+                    placeholder: L("Lọc nhanh hành động (vd: 'md', 'copy', 'ai', 'pdf', 'open')...", "Quick filter actions (e.g. 'md', 'copy', 'ai', 'pdf', 'open')..."),
                     fontSize: 15,
                     focusTrigger: viewModel.focusTrigger,
                     selectAllOnFocus: false,
@@ -100,7 +101,7 @@ struct UniversalActionsView: View {
                                     Image(systemName: "magnifyingglass")
                                         .font(.system(size: 22))
                                         .foregroundStyle(.tertiary)
-                                    Text("Không có hành động khớp '\(viewModel.actionFilterText)'")
+                                    Text(L("Không có hành động khớp '\(viewModel.actionFilterText)'", "No actions matching '\(viewModel.actionFilterText)'"))
                                         .font(.system(size: 12.5))
                                         .foregroundStyle(.secondary)
                                 }
@@ -150,8 +151,8 @@ struct UniversalActionsView: View {
                         .lineLimit(1)
                         .foregroundStyle(.secondary)
                 } else {
-                    FooterShortcutHint(key: "↩", label: "Thực hiện")
-                    FooterShortcutHint(key: "⌥↩", label: "Chỉ Copy Markdown")
+                    FooterShortcutHint(key: "↩", label: L("Thực hiện", "Execute"))
+                    FooterShortcutHint(key: "⌥↩", label: L("Chỉ Copy Markdown", "Copy Markdown Only"))
                 }
                 Spacer(minLength: 8)
                 Button {
@@ -172,10 +173,10 @@ struct UniversalActionsView: View {
                 }
                 .buttonStyle(.plain)
                 .fixedSize(horizontal: true, vertical: false)
-                .help("Bấm để đổi phím tắt mở Universal Actions khi thao tác trên Finder (Mặc định: ⌘/)")
+                .help(L("Bấm để đổi phím tắt mở Universal Actions khi thao tác trên Finder (Mặc định: ⌘/)", "Click to customize Universal Actions hotkey in Finder (Default: ⌘/)"))
 
                 FooterShortcutHint(key: "⇧", label: "Quick Look")
-                FooterShortcutHint(key: "Esc", label: "Đóng")
+                FooterShortcutHint(key: "Esc", label: L("Đóng", "Close"))
             }
             .font(.system(size: 10.5, weight: .regular))
             .foregroundStyle(.secondary)
@@ -240,7 +241,7 @@ private struct UniversalActionRowView: View {
                                 in: RoundedRectangle(cornerRadius: 4, style: .continuous)
                             )
                     } else if isLatchedFavorite {
-                        Text("Hay dùng")
+                        Text(L("Hay dùng", "Frequent"))
                             .font(.system(size: 9.5, weight: .medium))
                             .foregroundStyle(isSelected ? Color.white.opacity(0.92) : Color.secondary)
                             .padding(.horizontal, 5)
@@ -283,6 +284,7 @@ private struct UniversalActionRowView: View {
 
 private struct UniversalActionRightPreviewPane: View {
     @ObservedObject var viewModel: LauncherViewModel
+    @ObservedObject private var settings = AppSettings.shared
     let target: ActionTarget
 
     var body: some View {
@@ -312,7 +314,7 @@ private struct UniversalActionRightPreviewPane: View {
                 VStack(alignment: .leading, spacing: 5) {
                     if !viewModel.previewFileSizeText.isEmpty {
                         HStack {
-                            Text("Dung lượng")
+                            Text(L("Dung lượng", "Size"))
                                 .foregroundStyle(.secondary)
                             Spacer()
                             Text(viewModel.previewFileSizeText)
@@ -321,7 +323,7 @@ private struct UniversalActionRightPreviewPane: View {
                     }
                     if !viewModel.previewCreatedText.isEmpty {
                         HStack {
-                            Text("Ngày tạo")
+                            Text(L("Ngày tạo", "Created"))
                                 .foregroundStyle(.secondary)
                             Spacer()
                             Text(viewModel.previewCreatedText)
@@ -330,7 +332,7 @@ private struct UniversalActionRightPreviewPane: View {
                     }
                     if !viewModel.previewModifiedText.isEmpty {
                         HStack {
-                            Text("Cập nhật")
+                            Text(L("Cập nhật", "Modified"))
                                 .foregroundStyle(.secondary)
                             Spacer()
                             Text(viewModel.previewModifiedText)
@@ -339,7 +341,7 @@ private struct UniversalActionRightPreviewPane: View {
                     }
                     if !viewModel.previewRouteHint.isEmpty {
                         Divider().padding(.vertical, 3)
-                        Text("Chuyển đổi sang Markdown")
+                        Text(L("Chuyển đổi sang Markdown", "Markdown Conversion"))
                             .font(.system(size: 10.5, weight: .semibold))
                             .foregroundStyle(.secondary)
                         Text(viewModel.previewRouteHint)
@@ -373,7 +375,7 @@ private struct UniversalActionRightPreviewPane: View {
                                 viewModel: viewModel
                             )
                         } label: {
-                            Label("Sang .MD", systemImage: "doc.plaintext")
+                            Label(L("Sang .MD", "To .MD"), systemImage: "doc.plaintext")
                                 .font(.system(size: 11, weight: .medium))
                         }
                         .buttonStyle(.borderedProminent)
@@ -406,7 +408,7 @@ private struct UniversalActionRightPreviewPane: View {
                         .lineLimit(4)
 
                     Divider().padding(.vertical, 2)
-                    Text("Hỗ trợ lọc bài viết Web, Google Docs & GitHub sang Markdown sạch cho AI.")
+                    Text(L("Hỗ trợ lọc bài viết Web, Google Docs & GitHub sang Markdown sạch cho AI.", "Extracts Web articles, Google Docs & GitHub to clean Markdown for AI."))
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -420,7 +422,7 @@ private struct UniversalActionRightPreviewPane: View {
                                 viewModel: viewModel
                             )
                         } label: {
-                            Label("Copy Markdown", systemImage: "doc.on.clipboard")
+                            Label(L("Copy Markdown", "Copy Markdown"), systemImage: "doc.on.clipboard")
                                 .font(.system(size: 11, weight: .medium))
                         }
                         .buttonStyle(.borderedProminent)

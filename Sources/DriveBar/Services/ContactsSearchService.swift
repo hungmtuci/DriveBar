@@ -193,12 +193,12 @@ final class ContactsSearchService: ObservableObject {
             return [
                 SearchResultItem(
                     id: "contact:permission:prompt",
-                    title: "Cấp quyền truy cập Danh bạ (Contacts) cho DriveBar",
-                    subtitle: "Đang hiển thị hộp thoại xin quyền của macOS • Nhấn Enter (↩) nếu bạn cần mở lại yêu cầu cấp quyền",
+                    title: L("Cấp quyền truy cập Danh bạ (Contacts) cho DriveBar", "Grant Contacts Access to DriveBar"),
+                    subtitle: L("Đang hiển thị hộp thoại xin quyền của macOS • Nhấn Enter (↩) nếu bạn cần mở lại yêu cầu cấp quyền", "macOS permission prompt shown • Press Enter (↩) to request access again"),
                     path: nil,
                     isDirectory: false,
                     kind: .systemCommand(id: "contact.request_access"),
-                    badge: "Danh bạ",
+                    badge: L("Danh bạ", "Contacts"),
                     sfSymbolFallback: "person.crop.circle.badge.questionmark"
                 )
             ]
@@ -207,12 +207,12 @@ final class ContactsSearchService: ObservableObject {
             return [
                 SearchResultItem(
                     id: "contact:permission:denied",
-                    title: "Chưa cấp quyền Danh bạ — Nhấn Enter để mở Cài đặt Quyền riêng tư",
-                    subtitle: "Mở System Settings → Privacy & Security → Contacts rồi bật công tắc cho DriveBar",
+                    title: L("Chưa cấp quyền Danh bạ — Nhấn Enter để mở Cài đặt Quyền riêng tư", "Contacts Access Denied — Press Enter to open Privacy & Security Settings"),
+                    subtitle: L("Mở System Settings → Privacy & Security → Contacts rồi bật công tắc cho DriveBar", "Open System Settings → Privacy & Security → Contacts and toggle on for DriveBar"),
                     path: nil,
                     isDirectory: false,
                     kind: .systemCommand(id: "contact.open_settings"),
-                    badge: "Cần cấp quyền",
+                    badge: L("Cần cấp quyền", "Permission Required"),
                     sfSymbolFallback: "lock.shield"
                 )
             ]
@@ -227,12 +227,12 @@ final class ContactsSearchService: ObservableObject {
                 return [
                     SearchResultItem(
                         id: "contact:loading",
-                        title: "Đang tải danh sách Danh bạ macOS...",
-                        subtitle: "Hỗ trợ gõ tiếng Việt không dấu, tên viết tắt, số điện thoại hoặc email",
+                        title: L("Đang tải danh sách Danh bạ macOS...", "Loading macOS Contacts..."),
+                        subtitle: L("Hỗ trợ gõ tiếng Việt không dấu, tên viết tắt, số điện thoại hoặc email", "Supports search by name, acronym, phone number, or email"),
                         path: nil,
                         isDirectory: false,
                         kind: .infoBanner,
-                        badge: "Danh bạ",
+                        badge: L("Danh bạ", "Contacts"),
                         sfSymbolFallback: "person.crop.circle"
                     )
                 ]
@@ -244,12 +244,12 @@ final class ContactsSearchService: ObservableObject {
             return [
                 SearchResultItem(
                     id: "contact:empty_store",
-                    title: "Danh bạ macOS hiện chưa có liên hệ nào",
-                    subtitle: "Nhấn Enter (↩) để mở ứng dụng Danh bạ (Contacts.app) trên máy Mac",
+                    title: L("Danh bạ macOS hiện chưa có liên hệ nào", "No contacts in macOS Contacts"),
+                    subtitle: L("Nhấn Enter (↩) để mở ứng dụng Danh bạ (Contacts.app) trên máy Mac", "Press Enter (↩) to open Contacts.app on Mac"),
                     path: nil,
                     isDirectory: false,
                     kind: .systemCommand(id: "contact.open_app"),
-                    badge: "Danh bạ",
+                    badge: L("Danh bạ", "Contacts"),
                     sfSymbolFallback: "person.crop.circle"
                 )
             ]
@@ -300,12 +300,12 @@ final class ContactsSearchService: ObservableObject {
             return [
                 SearchResultItem(
                     id: "contact:nomatch:\(trimmed)",
-                    title: "Không tìm thấy liên hệ nào khớp '\(trimmed)'",
-                    subtitle: "Hỗ trợ tiếng Việt không dấu (vd: 'nguyen hung'), viết tắt ('nxh'), số điện thoại hoặc email",
+                    title: L("Không tìm thấy liên hệ nào khớp '\(trimmed)'", "No contacts matching '\(trimmed)'"),
+                    subtitle: L("Hỗ trợ tiếng Việt không dấu (vd: 'nguyen hung'), viết tắt ('nxh'), số điện thoại hoặc email", "Supports name search (e.g. 'nguyen hung'), acronym ('nxh'), phone number, or email"),
                     path: nil,
                     isDirectory: false,
                     kind: .infoBanner,
-                    badge: "Danh bạ",
+                    badge: L("Danh bạ", "Contacts"),
                     sfSymbolFallback: "person.crop.circle.badge.exclamationmark"
                 )
             ]
@@ -344,7 +344,7 @@ final class ContactsSearchService: ObservableObject {
 
         if !closeLauncher && !autoPaste {
             FloatingToastController.shared.showSuccess(
-                title: "Đã sao chép \(field.categoryLabel)",
+                title: "\(L("Đã sao chép", "Copied")) \(field.categoryLabel)",
                 subtitle: field.displayValue,
                 symbol: "doc.on.clipboard"
             )
@@ -373,7 +373,7 @@ final class ContactsSearchService: ObservableObject {
         }
 
         FloatingToastController.shared.showSuccess(
-            title: "Đã sao chép \(field.categoryLabel) — \(contactName)",
+            title: "\(L("Đã sao chép", "Copied")) \(field.categoryLabel) — \(contactName)",
             subtitle: field.displayValue,
             symbol: "doc.on.clipboard"
         )
@@ -481,7 +481,7 @@ final class ContactsSearchService: ObservableObject {
             if !digits.isEmpty { normalizedPhones.append(digits) }
             if !normPhone.isEmpty && normPhone != digits { normalizedPhones.append(normPhone) }
 
-            let label = localizedVietnameseLabel(labeledPhone.label, defaultLabel: "Điện thoại")
+            let label = localizedFieldLabel(labeledPhone.label, defaultLabel: L("Điện thoại", "Phone"))
             let telDigits = rawPhone.filter { $0.isNumber || $0 == "+" }
             let telURL = telDigits.isEmpty ? nil : URL(string: "tel://\(telDigits)")
             fields.append(ContactDetailField(
@@ -490,7 +490,7 @@ final class ContactsSearchService: ObservableObject {
                 displayValue: rawPhone,
                 copyValue: rawPhone,
                 actionURL: telURL,
-                actionHint: telURL != nil ? "⌘↩ Gọi" : nil,
+                actionHint: telURL != nil ? L("⌘↩ Gọi", "⌘↩ Call") : nil,
                 sfSymbol: "phone"
             ))
         }
@@ -500,7 +500,7 @@ final class ContactsSearchService: ObservableObject {
             let email = (labeledEmail.value as String).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !email.isEmpty else { continue }
             emailsLower.append(email.lowercased())
-            let label = localizedVietnameseLabel(labeledEmail.label, defaultLabel: "Email", isEmail: true)
+            let label = localizedFieldLabel(labeledEmail.label, defaultLabel: "Email", isEmail: true)
             let mailURL = URL(string: "mailto:\(email)")
             fields.append(ContactDetailField(
                 id: "email:\(idx):\(email)",
@@ -508,7 +508,7 @@ final class ContactsSearchService: ObservableObject {
                 displayValue: email,
                 copyValue: email,
                 actionURL: mailURL,
-                actionHint: mailURL != nil ? "⌘↩ Gửi Mail" : nil,
+                actionHint: mailURL != nil ? L("⌘↩ Gửi Mail", "⌘↩ Send Mail") : nil,
                 sfSymbol: "envelope"
             ))
         }
@@ -516,7 +516,7 @@ final class ContactsSearchService: ObservableObject {
         // 3. Full Name & Nickname
         fields.append(ContactDetailField(
             id: "name:full",
-            categoryLabel: "Họ và tên",
+            categoryLabel: L("Họ và tên", "Full Name"),
             displayValue: displayName,
             copyValue: displayName,
             actionURL: nil,
@@ -527,7 +527,7 @@ final class ContactsSearchService: ObservableObject {
         if !nick.isEmpty && nick != displayName {
             fields.append(ContactDetailField(
                 id: "name:nick",
-                categoryLabel: "Biệt danh",
+                categoryLabel: L("Biệt danh", "Nickname"),
                 displayValue: nick,
                 copyValue: nick,
                 actionURL: nil,
@@ -540,7 +540,7 @@ final class ContactsSearchService: ObservableObject {
         if !roleAndOrgLine.isEmpty {
             fields.append(ContactDetailField(
                 id: "org:combined",
-                categoryLabel: "Chức vụ & Cơ quan",
+                categoryLabel: L("Chức vụ & Cơ quan", "Role & Organization"),
                 displayValue: roleAndOrgLine,
                 copyValue: roleAndOrgLine,
                 actionURL: nil,
@@ -558,7 +558,7 @@ final class ContactsSearchService: ObservableObject {
                 .filter { !$0.isEmpty }
                 .joined(separator: ", ")
             guard !formattedAddr.isEmpty else { continue }
-            let label = localizedVietnameseLabel(labeledAddr.label, defaultLabel: "Địa chỉ")
+            let label = localizedFieldLabel(labeledAddr.label, defaultLabel: L("Địa chỉ", "Address"))
             let encodedQ = formattedAddr.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
             let mapsURL = encodedQ.isEmpty ? nil : URL(string: "http://maps.apple.com/?q=\(encodedQ)")
             fields.append(ContactDetailField(
@@ -567,7 +567,7 @@ final class ContactsSearchService: ObservableObject {
                 displayValue: formattedAddr,
                 copyValue: formattedAddr,
                 actionURL: mapsURL,
-                actionHint: mapsURL != nil ? "⌘↩ Bản đồ" : nil,
+                actionHint: mapsURL != nil ? L("⌘↩ Bản đồ", "⌘↩ Maps") : nil,
                 sfSymbol: "mappin.and.ellipse"
             ))
         }
@@ -582,7 +582,7 @@ final class ContactsSearchService: ObservableObject {
             }
             fields.append(ContactDetailField(
                 id: "birthday",
-                categoryLabel: "Ngày sinh",
+                categoryLabel: L("Ngày sinh", "Birthday"),
                 displayValue: bdayStr,
                 copyValue: bdayStr,
                 actionURL: nil,
@@ -599,21 +599,21 @@ final class ContactsSearchService: ObservableObject {
                 ? rawURL
                 : "https://\(rawURL)"
             let webURL = URL(string: normalizedURLStr)
-            let label = localizedVietnameseLabel(labeledURL.label, defaultLabel: "Website")
+            let label = localizedFieldLabel(labeledURL.label, defaultLabel: "Website")
             fields.append(ContactDetailField(
                 id: "url:\(idx):\(rawURL)",
                 categoryLabel: label,
                 displayValue: rawURL,
                 copyValue: rawURL,
                 actionURL: webURL,
-                actionHint: webURL != nil ? "⌘↩ Mở Web" : nil,
+                actionHint: webURL != nil ? L("⌘↩ Mở Web", "⌘↩ Open Web") : nil,
                 sfSymbol: "globe"
             ))
         }
 
         // 8. Social Profiles & Instant Messaging
         for (idx, social) in cn.socialProfiles.enumerated() {
-            let service = social.value.service.isEmpty ? "Mạng xã hội" : social.value.service
+            let service = social.value.service.isEmpty ? L("Mạng xã hội", "Social Profile") : social.value.service
             let username = social.value.username.trimmingCharacters(in: .whitespacesAndNewlines)
             let urlStr = social.value.urlString.trimmingCharacters(in: .whitespacesAndNewlines)
             let val = !username.isEmpty ? username : urlStr
@@ -630,7 +630,7 @@ final class ContactsSearchService: ObservableObject {
         }
 
         for (idx, im) in cn.instantMessageAddresses.enumerated() {
-            let service = im.value.service.isEmpty ? "Tin nhắn" : im.value.service
+            let service = im.value.service.isEmpty ? L("Tin nhắn", "Instant Message") : im.value.service
             let username = im.value.username.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !username.isEmpty else { continue }
             fields.append(ContactDetailField(
@@ -656,7 +656,7 @@ final class ContactsSearchService: ObservableObject {
             let fullCardText = summaryLines.joined(separator: "\n")
             fields.append(ContactDetailField(
                 id: "summary:all",
-                categoryLabel: "Toàn bộ thông tin liên hệ",
+                categoryLabel: L("Toàn bộ thông tin liên hệ", "Complete Contact Info"),
                 displayValue: summaryLines.dropFirst().joined(separator: " • "),
                 copyValue: fullCardText,
                 actionURL: nil,
@@ -670,7 +670,7 @@ final class ContactsSearchService: ObservableObject {
         if !roleAndOrgLine.isEmpty { subParts.append(roleAndOrgLine) }
         if !firstPhone.isEmpty { subParts.append(firstPhone) }
         if !firstEmail.isEmpty { subParts.append(firstEmail) }
-        subParts.append("↩ Xem chi tiết & Copy")
+        subParts.append(L("↩ Xem chi tiết & Copy", "↩ View Details & Copy"))
         let listSubtitle = subParts.joined(separator: "  •  ")
 
         let badgeText: String? = {
@@ -678,12 +678,12 @@ final class ContactsSearchService: ObservableObject {
                 return org.count > 22 ? String(org.prefix(20)) + "…" : org
             }
             let count = cn.phoneNumbers.count + cn.emailAddresses.count
-            return count > 0 ? "\(count) mục" : "Danh bạ"
+            return count > 0 ? "\(count) \(L("mục", "items"))" : L("Danh bạ", "Contacts")
         }()
 
         let quickField = fields.first
         let quickVal = quickField?.copyValue ?? displayName
-        let quickLabel = quickField?.categoryLabel ?? "Họ và tên"
+        let quickLabel = quickField?.categoryLabel ?? L("Họ và tên", "Full Name")
 
         // Precompute Vietnamese unaccented tokens & acronyms
         let combinedNameSpace = "\(displayName) \(vnName) \(westName) \(nick)"
@@ -868,17 +868,17 @@ final class ContactsSearchService: ObservableObject {
         return digits
     }
 
-    private nonisolated static func localizedVietnameseLabel(_ rawLabel: String?, defaultLabel: String, isEmail: Bool = false) -> String {
+    private nonisolated static func localizedFieldLabel(_ rawLabel: String?, defaultLabel: String, isEmail: Bool = false) -> String {
         guard let rawLabel, !rawLabel.isEmpty else { return defaultLabel }
         switch rawLabel {
-        case CNLabelPhoneNumberMobile: return "Di động"
+        case CNLabelPhoneNumberMobile: return L("Di động", "Mobile")
         case CNLabelPhoneNumberiPhone: return "iPhone"
-        case CNLabelPhoneNumberMain: return "Chính"
-        case CNLabelWork: return isEmail ? "Email công việc" : "Công việc"
-        case CNLabelHome: return isEmail ? "Email cá nhân" : "Nhà riêng"
-        case CNLabelSchool: return "Trường học"
-        case CNLabelOther: return isEmail ? "Email khác" : "\(defaultLabel) khác"
-        case CNLabelURLAddressHomePage: return "Trang chủ"
+        case CNLabelPhoneNumberMain: return L("Chính", "Main")
+        case CNLabelWork: return isEmail ? L("Email công việc", "Work Email") : L("Công việc", "Work")
+        case CNLabelHome: return isEmail ? L("Email cá nhân", "Home Email") : L("Nhà riêng", "Home")
+        case CNLabelSchool: return L("Trường học", "School")
+        case CNLabelOther: return isEmail ? L("Email khác", "Other Email") : "\(defaultLabel) \(L("khác", "Other"))"
+        case CNLabelURLAddressHomePage: return L("Trang chủ", "Homepage")
         default:
             let loc = CNLabeledValue<NSString>.localizedString(forLabel: rawLabel)
                 .trimmingCharacters(in: .whitespacesAndNewlines)

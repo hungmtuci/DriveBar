@@ -15,20 +15,45 @@ enum SystemUtilityCategory: String, CaseIterable, Sendable {
     case finderAndDisks = "Thùng rác, Finder & Ổ đĩa"
     case sessionAndPower = "Phiên làm việc & Nguồn máy"
     case driveBarTools = "Tiện ích DriveBar & AI"
+
+    var localizedTitle: String {
+        switch self {
+        case .displayAndSecurity:
+            return L("Màn hình & Bảo mật", "Display & Security")
+        case .audio:
+            return L("Âm thanh", "Audio & Sound")
+        case .apps:
+            return L("Quản lý Ứng dụng", "Application Management")
+        case .finderAndDisks:
+            return L("Thùng rác, Finder & Ổ đĩa", "Trash, Finder & Disks")
+        case .sessionAndPower:
+            return L("Phiên làm việc & Nguồn máy", "Session & Power")
+        case .driveBarTools:
+            return L("Tiện ích DriveBar & AI", "DriveBar Tools & AI")
+        }
+    }
 }
 
 struct SystemUtilityDefinition: Identifiable, Sendable {
     let id: String
     let category: SystemUtilityCategory
     let primaryKeyword: String
-    let title: String
-    let subtitle: String
+    let titleVI: String
+    let titleEN: String
+    var title: String { L(titleVI, titleEN) }
+    let subtitleVI: String
+    let subtitleEN: String
+    var subtitle: String { L(subtitleVI, subtitleEN) }
     let keywords: [String]
     let inlineExactKeywords: [String]
     let inlinePhrasePrefixes: [String]
     let supportsConfirmation: Bool
     let badge: String
     let sfSymbol: String
+
+    var bilingualSearchText: String {
+        "\(primaryKeyword) \(titleVI) \(titleEN) \(subtitleVI) \(subtitleEN) " + keywords.joined(separator: " ")
+    }
 }
 
 private struct MountedEjectableVolume {
@@ -342,8 +367,10 @@ enum InstantUtilityService {
             id: "sys.screensaver",
             category: .displayAndSecurity,
             primaryKeyword: "screensaver",
-            title: "Bật Trình bảo vệ màn hình (Screen Saver)",
-            subtitle: "Kích hoạt ngay trình bảo vệ màn hình của macOS",
+            titleVI: "Bật Trình bảo vệ màn hình (Screen Saver)",
+            titleEN: "Start Screen Saver",
+            subtitleVI: "Kích hoạt ngay trình bảo vệ màn hình của macOS",
+            subtitleEN: "Immediately launch macOS Screen Saver",
             keywords: ["screensaver", "screen", "saver", "man", "hinh", "cho", "bao", "ve"],
             inlineExactKeywords: ["screensaver"],
             inlinePhrasePrefixes: ["screen saver", "man hinh cho"],
@@ -355,8 +382,10 @@ enum InstantUtilityService {
             id: "sys.lock_screen",
             category: .displayAndSecurity,
             primaryKeyword: "lock",
-            title: "Khóa màn hình ngay (Lock Screen)",
-            subtitle: "Khóa máy Mac lập tức để bảo mật khi rời bàn làm việc",
+            titleVI: "Khóa màn hình ngay (Lock Screen)",
+            titleEN: "Lock Screen",
+            subtitleVI: "Khóa máy Mac lập tức để bảo mật khi rời bàn làm việc",
+            subtitleEN: "Lock your Mac screen immediately for security",
             keywords: ["lock", "screen", "khoa", "man", "hinh", "may", "security"],
             inlineExactKeywords: ["lock"],
             inlinePhrasePrefixes: ["lock screen", "khoa man hinh", "khoa may"],
@@ -368,8 +397,10 @@ enum InstantUtilityService {
             id: "sys.sleep_display",
             category: .displayAndSecurity,
             primaryKeyword: "sleepdisplays",
-            title: "Tắt sáng màn hình tạm nghỉ (Sleep Displays)",
-            subtitle: "Tắt sáng màn hình ngay mà không dừng các tiến trình đang chạy nền",
+            titleVI: "Tắt sáng màn hình tạm nghỉ (Sleep Displays)",
+            titleEN: "Sleep Displays",
+            subtitleVI: "Tắt sáng màn hình ngay mà không dừng các tiến trình đang chạy nền",
+            subtitleEN: "Turn off display backlights without stopping background processes",
             keywords: ["sleepdisplays", "sleep", "display", "displays", "monitor", "tat", "man", "hinh"],
             inlineExactKeywords: ["sleepdisplays"],
             inlinePhrasePrefixes: ["sleep display", "sleep displays", "tat man hinh"],
@@ -381,8 +412,10 @@ enum InstantUtilityService {
             id: "sys.dark_mode",
             category: .displayAndSecurity,
             primaryKeyword: "darkmode",
-            title: "Chuyển chế độ Tối / Sáng (Toggle Dark Mode)",
-            subtitle: "Đảo nhanh giao diện hệ thống macOS giữa Dark Mode và Light Mode",
+            titleVI: "Chuyển chế độ Tối / Sáng (Toggle Dark Mode)",
+            titleEN: "Toggle Dark Mode",
+            subtitleVI: "Đảo nhanh giao diện hệ thống macOS giữa Dark Mode và Light Mode",
+            subtitleEN: "Quickly switch macOS appearance between Dark and Light mode",
             keywords: ["darkmode", "dark", "light", "mode", "appearance", "che", "do", "toi", "sang", "giao", "dien"],
             inlineExactKeywords: ["darkmode"],
             inlinePhrasePrefixes: ["dark mode", "light mode", "che do toi", "che do sang"],
@@ -396,8 +429,10 @@ enum InstantUtilityService {
             id: "sys.vol_up",
             category: .audio,
             primaryKeyword: "volup",
-            title: "Tăng âm lượng hệ thống +10% (Volume Up)",
-            subtitle: "Tăng âm lượng loa macOS thêm 10% (hoặc gõ 'vol 0..100' để đặt mức chính xác)",
+            titleVI: "Tăng âm lượng hệ thống +10% (Volume Up)",
+            titleEN: "Volume Up (+10%)",
+            subtitleVI: "Tăng âm lượng loa macOS thêm 10% (hoặc gõ 'vol 0..100' để đặt mức chính xác)",
+            subtitleEN: "Increase speaker volume by 10% (or type 'vol 0..100' for exact level)",
             keywords: ["volup", "vol", "volume", "up", "tang", "am", "luong", "loa", "sound"],
             inlineExactKeywords: ["volup"],
             inlinePhrasePrefixes: ["volume up", "tang am luong"],
@@ -409,8 +444,10 @@ enum InstantUtilityService {
             id: "sys.vol_down",
             category: .audio,
             primaryKeyword: "voldown",
-            title: "Giảm âm lượng hệ thống -10% (Volume Down)",
-            subtitle: "Giảm âm lượng loa macOS đi 10% (hoặc gõ 'vol 0..100' để đặt mức chính xác)",
+            titleVI: "Giảm âm lượng hệ thống -10% (Volume Down)",
+            titleEN: "Volume Down (-10%)",
+            subtitleVI: "Giảm âm lượng loa macOS đi 10% (hoặc gõ 'vol 0..100' để đặt mức chính xác)",
+            subtitleEN: "Decrease speaker volume by 10% (or type 'vol 0..100' for exact level)",
             keywords: ["voldown", "vol", "volume", "down", "giam", "nho", "am", "luong", "loa"],
             inlineExactKeywords: ["voldown"],
             inlinePhrasePrefixes: ["volume down", "giam am luong"],
@@ -422,8 +459,10 @@ enum InstantUtilityService {
             id: "sys.vol_mute",
             category: .audio,
             primaryKeyword: "mute",
-            title: "Tắt / Bật tiếng hệ thống (Toggle Mute)",
-            subtitle: "Đảo trạng thái tắt tiếng (Mute / Unmute) âm thanh đầu ra của máy Mac",
+            titleVI: "Tắt / Bật tiếng hệ thống (Toggle Mute)",
+            titleEN: "Toggle Mute",
+            subtitleVI: "Đảo trạng thái tắt tiếng (Mute / Unmute) âm thanh đầu ra của máy Mac",
+            subtitleEN: "Toggle audio output between Muted and Unmuted",
             keywords: ["mute", "unmute", "tat", "bat", "tieng", "cam", "am", "thanh"],
             inlineExactKeywords: ["mute", "unmute"],
             inlinePhrasePrefixes: ["mute audio", "tat tieng", "bat tieng"],
@@ -437,8 +476,10 @@ enum InstantUtilityService {
             id: "sys.hide",
             category: .apps,
             primaryKeyword: "hide",
-            title: "Ẩn ứng dụng đang chạy (Hide Application)",
-            subtitle: "Gõ 'hide' hoặc 'hide <tên app>' để ẩn nhanh ứng dụng đang hiển thị trên màn hình",
+            titleVI: "Ẩn ứng dụng đang chạy (Hide Application)",
+            titleEN: "Hide Application",
+            subtitleVI: "Gõ 'hide' hoặc 'hide <tên app>' để ẩn nhanh ứng dụng đang hiển thị trên màn hình",
+            subtitleEN: "Type 'hide' or 'hide <app name>' to hide running application windows",
             keywords: ["hide", "app", "application", "an", "ung", "dung"],
             inlineExactKeywords: ["hide"],
             inlinePhrasePrefixes: ["hide app", "an ung dung"],
@@ -450,8 +491,10 @@ enum InstantUtilityService {
             id: "sys.quit",
             category: .apps,
             primaryKeyword: "quit",
-            title: "Thoát ứng dụng đang chạy (Quit Application)",
-            subtitle: "Gõ 'quit' hoặc 'quit <tên app>' để chọn và đóng an toàn ứng dụng đang mở",
+            titleVI: "Thoát ứng dụng đang chạy (Quit Application)",
+            titleEN: "Quit Application",
+            subtitleVI: "Gõ 'quit' hoặc 'quit <tên app>' để chọn và đóng an toàn ứng dụng đang mở",
+            subtitleEN: "Type 'quit' or 'quit <app name>' to safely close running application",
             keywords: ["quit", "close", "exit", "app", "thoat", "dong", "ung", "dung"],
             inlineExactKeywords: ["quit"],
             inlinePhrasePrefixes: ["quit app", "thoat ung dung"],
@@ -463,8 +506,10 @@ enum InstantUtilityService {
             id: "sys.quit_all",
             category: .apps,
             primaryKeyword: "quitall",
-            title: "Thoát tất cả ứng dụng đang mở (Quit All Apps)",
-            subtitle: "Đóng lần lượt toàn bộ các ứng dụng trên thanh Dock (trừ Finder & DriveBar)",
+            titleVI: "Thoát tất cả ứng dụng đang mở (Quit All Apps)",
+            titleEN: "Quit All Apps",
+            subtitleVI: "Đóng lần lượt toàn bộ các ứng dụng trên thanh Dock (trừ Finder & DriveBar)",
+            subtitleEN: "Safely close all Dock applications (except Finder & DriveBar)",
             keywords: ["quitall", "quit", "all", "apps", "thoat", "tat", "ca", "dong", "het"],
             inlineExactKeywords: ["quitall"],
             inlinePhrasePrefixes: ["quit all", "thoat tat ca"],
@@ -476,8 +521,10 @@ enum InstantUtilityService {
             id: "sys.force_quit",
             category: .apps,
             primaryKeyword: "forcequit",
-            title: "Buộc thoát ứng dụng bị treo (Force Quit)",
-            subtitle: "Gõ 'forcequit <tên app>' để buộc dừng ngay ứng dụng không phản hồi",
+            titleVI: "Buộc thoát ứng dụng bị treo (Force Quit)",
+            titleEN: "Force Quit",
+            subtitleVI: "Gõ 'forcequit <tên app>' để buộc dừng ngay ứng dụng không phản hồi",
+            subtitleEN: "Type 'forcequit <app name>' to forcefully terminate unresponsive app",
             keywords: ["forcequit", "force", "quit", "kill", "hang", "buoc", "thoat", "treo"],
             inlineExactKeywords: ["forcequit"],
             inlinePhrasePrefixes: ["force quit", "buoc thoat"],
@@ -491,8 +538,10 @@ enum InstantUtilityService {
             id: "sys.show_trash",
             category: .finderAndDisks,
             primaryKeyword: "trash",
-            title: "Mở Thùng rác trong Finder (Show Trash)",
-            subtitle: "Mở và kiểm tra các tệp đang nằm trong Thùng rác của máy Mac",
+            titleVI: "Mở Thùng rác trong Finder (Show Trash)",
+            titleEN: "Show Trash in Finder",
+            subtitleVI: "Mở và kiểm tra các tệp đang nằm trong Thùng rác của máy Mac",
+            subtitleEN: "Open and inspect files in macOS Trash",
             keywords: ["trash", "show", "bin", "open", "mo", "thung", "rac"],
             inlineExactKeywords: ["trash"],
             inlinePhrasePrefixes: ["show trash", "open trash", "mo thung rac"],
@@ -504,8 +553,10 @@ enum InstantUtilityService {
             id: "sys.empty_trash",
             category: .finderAndDisks,
             primaryKeyword: "emptytrash",
-            title: "Dọn sạch Thùng rác (Empty Trash)",
-            subtitle: "Xóa vĩnh viễn toàn bộ các mục đang nằm trong Thùng rác Finder",
+            titleVI: "Dọn sạch Thùng rác (Empty Trash)",
+            titleEN: "Empty Trash",
+            subtitleVI: "Xóa vĩnh viễn toàn bộ các mục đang nằm trong Thùng rác Finder",
+            subtitleEN: "Permanently delete all items currently in macOS Trash",
             keywords: ["emptytrash", "empty", "trash", "don", "sach", "thung", "rac", "xoa"],
             inlineExactKeywords: ["emptytrash"],
             inlinePhrasePrefixes: ["empty trash", "don thung rac", "xoa thung rac"],
@@ -517,8 +568,10 @@ enum InstantUtilityService {
             id: "sys.eject",
             category: .finderAndDisks,
             primaryKeyword: "eject",
-            title: "Tháo an toàn từng ổ đĩa ngoài / USB / DMG (Eject)",
-            subtitle: "Gõ 'eject' hoặc 'eject <tên ổ>' để liệt kê và ngắt kết nối từng ổ đĩa ngoài",
+            titleVI: "Tháo an toàn từng ổ đĩa ngoài / USB / DMG (Eject)",
+            titleEN: "Eject Mounted Volume / USB / DMG",
+            subtitleVI: "Gõ 'eject' hoặc 'eject <tên ổ>' để liệt kê và ngắt kết nối từng ổ đĩa ngoài",
+            subtitleEN: "Type 'eject' or 'eject <name>' to disconnect external volume",
             keywords: ["eject", "disk", "volume", "usb", "sd", "dmg", "unmount", "thao", "ngat", "o", "dia"],
             inlineExactKeywords: ["eject"],
             inlinePhrasePrefixes: ["eject disk", "thao o dia", "ngat usb"],
@@ -530,8 +583,10 @@ enum InstantUtilityService {
             id: "sys.eject_all",
             category: .finderAndDisks,
             primaryKeyword: "ejectall",
-            title: "Ngắt kết nối tất cả ổ đĩa ngoài & DMG (Eject All)",
-            subtitle: "Tháo an toàn đồng thời toàn bộ USB, thẻ nhớ, ổ cứng di động và đĩa ảo .dmg",
+            titleVI: "Ngắt kết nối tất cả ổ đĩa ngoài & DMG (Eject All)",
+            titleEN: "Eject All Disks & DMGs",
+            subtitleVI: "Tháo an toàn đồng thời toàn bộ USB, thẻ nhớ, ổ cứng di động và đĩa ảo .dmg",
+            subtitleEN: "Safely unmount all external drives, USB sticks, and .dmg images",
             keywords: ["ejectall", "eject", "all", "disks", "usb", "dmg", "thao", "tat", "ca", "o", "dia"],
             inlineExactKeywords: ["ejectall"],
             inlinePhrasePrefixes: ["eject all", "thao tat ca o dia"],
@@ -543,8 +598,10 @@ enum InstantUtilityService {
             id: "sys.finder_hidden",
             category: .finderAndDisks,
             primaryKeyword: "hiddenfiles",
-            title: "Hiện / Ẩn tệp ẩn hệ thống trong Finder",
-            subtitle: "Đảo cờ AppleShowAllFiles của Finder và làm mới cửa sổ Finder",
+            titleVI: "Hiện / Ẩn tệp ẩn hệ thống trong Finder",
+            titleEN: "Toggle Hidden Files in Finder",
+            subtitleVI: "Đảo cờ AppleShowAllFiles của Finder và làm mới cửa sổ Finder",
+            subtitleEN: "Toggle AppleShowAllFiles setting and restart Finder",
             keywords: ["hiddenfiles", "hidden", "files", "finder", "dotfiles", "tep", "an", "hien"],
             inlineExactKeywords: ["hiddenfiles"],
             inlinePhrasePrefixes: ["hidden files", "hien tep an", "an tep an"],
@@ -558,8 +615,10 @@ enum InstantUtilityService {
             id: "sys.sleep",
             category: .sessionAndPower,
             primaryKeyword: "sleep",
-            title: "Đưa máy Mac vào chế độ Ngủ (Sleep)",
-            subtitle: "Tạm ngủ toàn bộ hệ thống máy Mac để tiết kiệm năng lượng",
+            titleVI: "Đưa máy Mac vào chế độ Ngủ (Sleep)",
+            titleEN: "Sleep Mac",
+            subtitleVI: "Tạm ngủ toàn bộ hệ thống máy Mac để tiết kiệm năng lượng",
+            subtitleEN: "Put your entire Mac system to sleep to conserve energy",
             keywords: ["sleep", "mac", "ngu", "may", "che", "do", "ngu"],
             inlineExactKeywords: ["sleep"],
             inlinePhrasePrefixes: ["sleep mac", "che do ngu"],
@@ -571,8 +630,10 @@ enum InstantUtilityService {
             id: "sys.logout",
             category: .sessionAndPower,
             primaryKeyword: "logout",
-            title: "Đăng xuất tài khoản macOS (Log Out)",
-            subtitle: "Đóng phiên làm việc của tài khoản người dùng hiện tại trên macOS",
+            titleVI: "Đăng xuất tài khoản macOS (Log Out)",
+            titleEN: "Log Out",
+            subtitleVI: "Đóng phiên làm việc của tài khoản người dùng hiện tại trên macOS",
+            subtitleEN: "End current user session on macOS",
             keywords: ["logout", "log", "out", "signout", "dang", "xuat", "phien"],
             inlineExactKeywords: ["logout"],
             inlinePhrasePrefixes: ["log out", "sign out", "dang xuat"],
@@ -584,8 +645,10 @@ enum InstantUtilityService {
             id: "sys.restart",
             category: .sessionAndPower,
             primaryKeyword: "restart",
-            title: "Khởi động lại máy Mac (Restart)",
-            subtitle: "Đóng các ứng dụng và khởi động lại hệ điều hành macOS",
+            titleVI: "Khởi động lại máy Mac (Restart)",
+            titleEN: "Restart Mac",
+            subtitleVI: "Đóng các ứng dụng và khởi động lại hệ điều hành macOS",
+            subtitleEN: "Close applications and restart macOS",
             keywords: ["restart", "reboot", "khoi", "dong", "lai", "may"],
             inlineExactKeywords: ["restart", "reboot"],
             inlinePhrasePrefixes: ["restart mac", "khoi dong lai"],
@@ -597,8 +660,10 @@ enum InstantUtilityService {
             id: "sys.shutdown",
             category: .sessionAndPower,
             primaryKeyword: "shutdown",
-            title: "Tắt nguồn máy Mac (Shut Down)",
-            subtitle: "Đóng toàn bộ ứng dụng và tắt hẳn nguồn máy tính Mac",
+            titleVI: "Tắt nguồn máy Mac (Shut Down)",
+            titleEN: "Shut Down Mac",
+            subtitleVI: "Đóng toàn bộ ứng dụng và tắt hẳn nguồn máy tính Mac",
+            subtitleEN: "Close all apps and completely power off your Mac",
             keywords: ["shutdown", "shut", "down", "poweroff", "tat", "may", "nguon"],
             inlineExactKeywords: ["shutdown", "poweroff"],
             inlinePhrasePrefixes: ["shut down", "tat may", "tat nguon"],
@@ -612,8 +677,10 @@ enum InstantUtilityService {
             id: "sys.ocr_clipboard",
             category: .driveBarTools,
             primaryKeyword: "ocr",
-            title: "OCR Ảnh trong Clipboard sang Markdown / Văn bản",
-            subtitle: "Nhận diện chữ Tiếng Việt & Tiếng Anh từ ảnh chụp màn hình vừa lưu trong Clipboard",
+            titleVI: "OCR Ảnh trong Clipboard sang Markdown / Văn bản",
+            titleEN: "OCR Clipboard Image to Markdown / Text",
+            subtitleVI: "Nhận diện chữ Tiếng Việt & Tiếng Anh từ ảnh chụp màn hình vừa lưu trong Clipboard",
+            subtitleEN: "Recognize Vietnamese & English text from screenshot image in Clipboard",
             keywords: ["ocr", "clipboard", "screenshot", "image", "vision", "anh", "chup", "trich", "xuat"],
             inlineExactKeywords: [],
             inlinePhrasePrefixes: ["ocr clipboard", "ocr anh"],
@@ -625,8 +692,10 @@ enum InstantUtilityService {
             id: "sys.clear_clipboard",
             category: .driveBarTools,
             primaryKeyword: "clearclipboard",
-            title: "Xóa lịch sử Clipboard của DriveBar",
-            subtitle: "Làm sạch danh sách các mục đã lưu trong bộ nhớ lịch sử Clipboard ('cb ')",
+            titleVI: "Xóa lịch sử Clipboard của DriveBar",
+            titleEN: "Clear DriveBar Clipboard History",
+            subtitleVI: "Làm sạch danh sách các mục đã lưu trong bộ nhớ lịch sử Clipboard ('cb ')",
+            subtitleEN: "Clear all saved entries in Clipboard history ('cb ')",
             keywords: ["clearclipboard", "clear", "clipboard", "history", "xoa", "lich", "su"],
             inlineExactKeywords: ["clearclipboard"],
             inlinePhrasePrefixes: ["clear clipboard", "xoa clipboard"],
@@ -638,8 +707,10 @@ enum InstantUtilityService {
             id: "sys.rebuild_index",
             category: .driveBarTools,
             primaryKeyword: "rebuild",
-            title: "Quét lại toàn bộ chỉ mục Google Drive & Tệp tin",
-            subtitle: "Cập nhật nền danh sách thư mục, tệp tin và ứng dụng mới nhất",
+            titleVI: "Quét lại toàn bộ chỉ mục Google Drive & Tệp tin",
+            titleEN: "Rebuild Google Drive & File Index",
+            subtitleVI: "Cập nhật nền danh sách thư mục, tệp tin và ứng dụng mới nhất",
+            subtitleEN: "Background refresh of folders, files, and installed apps index",
             keywords: ["rebuild", "reindex", "refresh", "cache", "quet", "lai", "dong", "bo"],
             inlineExactKeywords: [],
             inlinePhrasePrefixes: ["rebuild cache", "quet lai google drive"],
@@ -680,8 +751,7 @@ enum InstantUtilityService {
                    (qNorm == def.primaryKeyword || qNorm.hasPrefix(def.primaryKeyword + " ")) {
                     return false
                 }
-                let hay = GoogleDriveIndexService.removeAccents("\(def.primaryKeyword) \(def.title) \(def.subtitle)").lowercased()
-                    + " " + def.keywords.joined(separator: " ")
+                let hay = GoogleDriveIndexService.removeAccents(def.bilingualSearchText).lowercased()
                 return tokens.allSatisfy { hay.contains($0) }
             }
             results.append(contentsOf: matched.map { makeResultItem($0, settings: settings) })
@@ -690,12 +760,12 @@ enum InstantUtilityService {
                 return [
                     SearchResultItem(
                         id: "sys:empty",
-                        title: "Không có lệnh hệ thống nào khớp '\(query)'",
-                        subtitle: "Thử gõ: lock, sleep, screensaver, trash, emptytrash, volup, mute, quit, forcequit, eject, restart, shutdown...",
+                        title: L("Không có lệnh hệ thống nào khớp '\(query)'", "No system command matching '\(query)'"),
+                        subtitle: L("Thử gõ: lock, sleep, screensaver, trash, emptytrash, volup, mute, quit, forcequit, eject, restart, shutdown...", "Try typing: lock, sleep, screensaver, trash, emptytrash, volup, mute, quit, forcequit, eject, restart, shutdown..."),
                         path: nil,
                         isDirectory: false,
                         kind: .infoBanner,
-                        badge: "Hệ thống",
+                        badge: L("Hệ thống", "System"),
                         sfSymbolFallback: "gearshape"
                     )
                 ]
@@ -733,10 +803,10 @@ enum InstantUtilityService {
             if let pct = Int(arg), (0...100).contains(pct) {
                 items.append(SearchResultItem(
                     id: "syscmd:vol_set:\(pct)",
-                    title: "Đặt âm lượng hệ thống thành \(pct)%",
+                    title: L("Đặt âm lượng hệ thống thành \(pct)%", "Set system volume to \(pct)%"),
                     subtitle: pct == 0
-                        ? "Nhấn Enter (↩) để đưa âm lượng về 0% (Tắt tiếng)"
-                        : "Nhấn Enter (↩) để điều chỉnh ngay âm lượng đầu ra macOS thành \(pct)%",
+                        ? L("Nhấn Enter (↩) để đưa âm lượng về 0% (Tắt tiếng)", "Press Enter (↩) to set volume to 0% (Muted)")
+                        : L("Nhấn Enter (↩) để điều chỉnh ngay âm lượng đầu ra macOS thành \(pct)%", "Press Enter (↩) to set macOS audio output volume to \(pct)%"),
                     path: nil,
                     isDirectory: false,
                     kind: .systemCommand(id: "sys.vol_set:\(pct)"),
@@ -752,11 +822,11 @@ enum InstantUtilityService {
             let appFilter = qNorm == "quit" ? "" : String(qNorm.dropFirst(5)).trimmingCharacters(in: .whitespaces)
             let apps = matchingRunningApps(filter: appFilter, onlyVisible: false, includeFinder: false)
             for app in apps.prefix(15) {
-                let name = app.localizedName ?? "Ứng dụng"
+                let name = AppLocalization.localizedRunningAppName(app)
                 items.append(SearchResultItem(
                     id: "syscmd:quit:\(app.processIdentifier)",
-                    title: "Thoát \(name) (Quit)",
-                    subtitle: "Đóng an toàn ứng dụng \(name) • PID \(app.processIdentifier)",
+                    title: "\(L("Thoát", "Quit")) \(name)",
+                    subtitle: "\(L("Đóng an toàn ứng dụng", "Safely close")) \(name) • PID \(app.processIdentifier)",
                     path: app.bundleURL?.path,
                     isDirectory: false,
                     kind: .systemCommand(id: "sys.quit_pid:\(app.processIdentifier)"),
@@ -780,26 +850,26 @@ enum InstantUtilityService {
             let needsConfirm = settings.requiresSystemCommandConfirmation("sys.force_quit")
             let apps = matchingRunningApps(filter: appFilter, onlyVisible: false, includeFinder: true)
             for app in apps.prefix(15) {
-                let name = app.localizedName ?? "Ứng dụng"
+                let name = AppLocalization.localizedRunningAppName(app)
                 let sub = needsConfirm
-                    ? "Buộc dừng ngay \(name) (Có hộp thoại xác nhận • ⌥↩ bỏ qua hỏi)"
-                    : "Buộc dừng ngay lập tức tiến trình \(name) (PID \(app.processIdentifier))"
+                    ? "\(L("Buộc dừng ngay \(name) (Có hộp thoại xác nhận • ⌥↩ bỏ qua hỏi)", "Force terminate \(name) (Confirmation prompt • ⌥↩ to skip)"))"
+                    : "\(L("Buộc dừng ngay lập tức tiến trình \(name)", "Immediately terminate process \(name)")) (PID \(app.processIdentifier))"
                 items.append(SearchResultItem(
                     id: "syscmd:forcequit:\(app.processIdentifier)",
-                    title: "Buộc thoát \(name) (Force Quit)",
+                    title: "\(L("Buộc thoát", "Force Quit")) \(name)",
                     subtitle: sub,
                     path: app.bundleURL?.path,
                     isDirectory: false,
                     kind: .systemCommand(id: "sys.force_quit_pid:\(app.processIdentifier)"),
-                    badge: needsConfirm ? "Xác nhận" : "Force Quit",
+                    badge: needsConfirm ? L("Xác nhận", "Confirm") : "Force Quit",
                     sfSymbolFallback: "bolt.slash.fill"
                 ))
             }
             if appFilter.isEmpty {
                 items.append(SearchResultItem(
                     id: "syscmd:forcequit:dialog",
-                    title: "Mở cửa sổ Buộc thoát Ứng dụng của macOS (⌘⌥Esc)",
-                    subtitle: "Hiển thị hộp thoại Force Quit Applications mặc định của hệ thống",
+                    title: L("Mở cửa sổ Buộc thoát Ứng dụng của macOS (⌘⌥Esc)", "Open macOS Force Quit Applications Dialog (⌘⌥Esc)"),
+                    subtitle: L("Hiển thị hộp thoại Force Quit Applications mặc định của hệ thống", "Display system Force Quit Applications dialog"),
                     path: nil,
                     isDirectory: false,
                     kind: .systemCommand(id: "sys.force_quit_dialog"),
@@ -815,11 +885,11 @@ enum InstantUtilityService {
             let appFilter = qNorm == "hide" ? "" : String(qNorm.dropFirst(5)).trimmingCharacters(in: .whitespaces)
             let apps = matchingRunningApps(filter: appFilter, onlyVisible: true, includeFinder: false)
             for app in apps.prefix(12) {
-                let name = app.localizedName ?? "Ứng dụng"
+                let name = AppLocalization.localizedRunningAppName(app)
                 items.append(SearchResultItem(
                     id: "syscmd:hide:\(app.processIdentifier)",
-                    title: "Ẩn \(name) (Hide)",
-                    subtitle: "Ẩn các cửa sổ đang mở của \(name) khỏi màn hình (⌘H)",
+                    title: "\(L("Ẩn", "Hide")) \(name)",
+                    subtitle: "\(L("Ẩn các cửa sổ đang mở của \(name) khỏi màn hình (⌘H)", "Hide open windows of \(name) from screen (⌘H)"))",
                     path: app.bundleURL?.path,
                     isDirectory: false,
                     kind: .systemCommand(id: "sys.hide_pid:\(app.processIdentifier)"),
@@ -837,20 +907,20 @@ enum InstantUtilityService {
             if volumes.isEmpty && volFilter.isEmpty {
                 items.append(SearchResultItem(
                     id: "syscmd:eject:none",
-                    title: "Không có ổ đĩa ngoài, USB hoặc đĩa ảo .DMG nào đang gắn",
-                    subtitle: "Gắn USB, thẻ nhớ hoặc mở file .dmg để tháo an toàn tại đây",
+                    title: L("Không có ổ đĩa ngoài, USB hoặc đĩa ảo .DMG nào đang gắn", "No external volumes, USB drives, or .DMG disks currently mounted"),
+                    subtitle: L("Gắn USB, thẻ nhớ hoặc mở file .dmg để tháo an toàn tại đây", "Connect a USB, memory card, or open a .dmg file to eject here"),
                     path: nil,
                     isDirectory: false,
                     kind: .infoBanner,
-                    badge: "Ổ đĩa",
+                    badge: L("Ổ đĩa", "Volumes"),
                     sfSymbolFallback: "eject.circle"
                 ))
             } else {
                 for vol in volumes {
                     items.append(SearchResultItem(
                         id: "syscmd:eject_vol:\(vol.url.path)",
-                        title: "Tháo ổ đĩa '\(vol.name)' (Eject)",
-                        subtitle: "\(vol.capacityDescription) • Nhấn Enter (↩) để ngắt kết nối an toàn",
+                        title: "\(L("Tháo ổ đĩa", "Eject")) '\(vol.name)'",
+                        subtitle: "\(vol.capacityDescription) • \(L("Nhấn Enter (↩) để ngắt kết nối an toàn", "Press Enter (↩) to safely disconnect"))",
                         path: vol.url.path,
                         isDirectory: true,
                         kind: .systemCommand(id: "sys.eject_vol:\(vol.url.path)"),
@@ -862,7 +932,7 @@ enum InstantUtilityService {
                     let names = volumes.map(\.name).joined(separator: ", ")
                     items.append(SearchResultItem(
                         id: "syscmd:eject_all_inline",
-                        title: "Ngắt kết nối tất cả \(volumes.count) ổ đĩa cùng lúc (Eject All)",
+                        title: L("Ngắt kết nối tất cả \(volumes.count) ổ đĩa cùng lúc (Eject All)", "Disconnect all \(volumes.count) volumes at once (Eject All)"),
                         subtitle: names,
                         path: nil,
                         isDirectory: false,
@@ -883,13 +953,16 @@ enum InstantUtilityService {
         var sub = def.subtitle
         if def.id == "sys.show_trash" || def.id == "sys.empty_trash" {
             let count = trashItemCountFast()
-            let trashNote = count == 0 ? "Thùng rác hiện đang trống" : "Đang có \(count) mục trong Thùng rác"
+            let trashNote = count == 0
+                ? L("Thùng rác hiện đang trống", "Trash is currently empty")
+                : L("Đang có \(count) mục trong Thùng rác", "\(count) item(s) in Trash")
             sub = "\(trashNote) • \(def.subtitle)"
         }
         if needsConfirm {
-            sub += " • Hỏi xác nhận (⌥↩ bỏ qua)"
+            sub += " • \(L("Hỏi xác nhận (⌥↩ bỏ qua)", "Confirmation required (⌥↩ to skip)"))"
         }
 
+        let confirmBadge = L("Xác nhận", "Confirm")
         return SearchResultItem(
             id: "syscmd:\(def.id)",
             title: def.title,
@@ -897,7 +970,7 @@ enum InstantUtilityService {
             path: nil,
             isDirectory: false,
             kind: .systemCommand(id: def.id),
-            badge: needsConfirm ? "\(def.badge) • Xác nhận" : def.badge,
+            badge: needsConfirm ? "\(def.badge) • \(confirmBadge)" : def.badge,
             sfSymbolFallback: def.sfSymbol
         )
     }
@@ -932,8 +1005,10 @@ enum InstantUtilityService {
                 _ = runOSAScript(script)
                 await MainActor.run {
                     FloatingToastController.shared.showSuccess(
-                        title: clamped == 0 ? "Đã tắt tiếng (0%)" : "Đã đặt âm lượng: \(clamped)%",
-                        subtitle: "Âm thanh hệ thống macOS",
+                        title: clamped == 0
+                            ? L("Đã tắt tiếng (0%)", "Muted (0%)")
+                            : "\(L("Đã đặt âm lượng", "Volume set to")): \(clamped)%",
+                        subtitle: L("Âm thanh hệ thống macOS", "macOS System Audio"),
                         symbol: clamped == 0 ? "speaker.slash.fill" : "speaker.wave.3.fill"
                     )
                 }
@@ -944,10 +1019,10 @@ enum InstantUtilityService {
         if id.hasPrefix("sys.quit_pid:"), let pid = Int32(id.dropFirst("sys.quit_pid:".count)) {
             LauncherPanelController.shared.hide()
             if let app = NSRunningApplication(processIdentifier: pid) {
-                let name = app.localizedName ?? "Ứng dụng"
+                let name = AppLocalization.localizedRunningAppName(app)
                 _ = app.terminate()
                 FloatingToastController.shared.showSuccess(
-                    title: "Đã gửi lệnh thoát \(name)",
+                    title: "\(L("Đã gửi lệnh thoát", "Quit command sent to")) \(name)",
                     subtitle: "Quit Application",
                     symbol: "xmark.app"
                 )
@@ -960,14 +1035,14 @@ enum InstantUtilityService {
                 LauncherPanelController.shared.hide()
                 return true
             }
-            let name = app.localizedName ?? "Ứng dụng"
+            let name = AppLocalization.localizedRunningAppName(app)
             LauncherPanelController.shared.hide()
             guard confirmIfRequired(
                 commandID: "sys.force_quit",
                 modifiers: modifiers,
-                title: "Buộc thoát '\(name)' ngay lập tức?",
-                message: "Mọi thay đổi chưa lưu trong '\(name)' sẽ bị mất nếu buộc dừng tiến trình này.",
-                confirmButtonTitle: "Buộc thoát"
+                title: L("Buộc thoát '\(name)' ngay lập tức?", "Force quit '\(name)' immediately?"),
+                message: L("Mọi thay đổi chưa lưu trong '\(name)' sẽ bị mất nếu buộc dừng tiến trình này.", "Any unsaved changes in '\(name)' will be lost if you force terminate this process."),
+                confirmButtonTitle: L("Buộc thoát", "Force Quit")
             ) else {
                 return true
             }
@@ -976,8 +1051,8 @@ enum InstantUtilityService {
                 _ = Darwin.kill(pid, SIGKILL)
             }
             FloatingToastController.shared.showSuccess(
-                title: "Đã buộc thoát \(name)",
-                subtitle: "Force Quit hoàn tất",
+                title: "\(L("Đã buộc thoát", "Force quit")) \(name)",
+                subtitle: L("Force Quit hoàn tất", "Force Quit completed"),
                 symbol: "bolt.slash.fill"
             )
             return true
@@ -994,10 +1069,10 @@ enum InstantUtilityService {
         if id.hasPrefix("sys.hide_pid:"), let pid = Int32(id.dropFirst("sys.hide_pid:".count)) {
             LauncherPanelController.shared.hide()
             if let app = NSRunningApplication(processIdentifier: pid) {
-                let name = app.localizedName ?? "Ứng dụng"
+                let name = AppLocalization.localizedRunningAppName(app)
                 _ = app.hide()
                 FloatingToastController.shared.showSuccess(
-                    title: "Đã ẩn \(name)",
+                    title: "\(L("Đã ẩn", "Hidden")) \(name)",
                     subtitle: "Hide Application",
                     symbol: "eye.slash.circle"
                 )
@@ -1011,7 +1086,7 @@ enum InstantUtilityService {
             let volName = (try? volURL.resourceValues(forKeys: [.volumeLocalizedNameKey]).volumeLocalizedName) ?? volURL.lastPathComponent
             LauncherPanelController.shared.hide()
             FloatingToastController.shared.showProgress(
-                title: "Đang tháo an toàn '\(volName)'...",
+                title: "\(L("Đang tháo an toàn", "Safely ejecting")) '\(volName)'...",
                 subtitle: volPath
             )
             Task.detached(priority: .userInitiated) {
@@ -1019,15 +1094,15 @@ enum InstantUtilityService {
                     try NSWorkspace.shared.unmountAndEjectDevice(at: volURL)
                     await MainActor.run {
                         FloatingToastController.shared.showSuccess(
-                            title: "Đã ngắt kết nối '\(volName)' an toàn",
-                            subtitle: "Bạn có thể rút thiết bị khỏi máy Mac",
+                            title: "\(L("Đã ngắt kết nối an toàn", "Safely disconnected")) '\(volName)'",
+                            subtitle: L("Bạn có thể rút thiết bị khỏi máy Mac", "You may now unplug the device from your Mac"),
                             symbol: "eject.fill"
                         )
                     }
                 } catch {
                     await MainActor.run {
                         FloatingToastController.shared.showError(
-                            title: "Không thể tháo '\(volName)'",
+                            title: "\(L("Không thể tháo", "Could not eject")) '\(volName)'",
                             subtitle: error.localizedDescription
                         )
                     }
@@ -1074,8 +1149,10 @@ enum InstantUtilityService {
                 let isDarkNow = out?.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
                 await MainActor.run {
                     FloatingToastController.shared.showSuccess(
-                        title: isDarkNow ? "Đã chuyển sang Chế độ Tối (Dark Mode)" : "Đã chuyển sang Chế độ Sáng (Light Mode)",
-                        subtitle: "Giao diện hệ thống macOS",
+                        title: isDarkNow
+                            ? L("Đã chuyển sang Chế độ Tối (Dark Mode)", "Switched to Dark Mode")
+                            : L("Đã chuyển sang Chế độ Sáng (Light Mode)", "Switched to Light Mode"),
+                        subtitle: L("Giao diện hệ thống macOS", "macOS System Appearance"),
                         symbol: "circle.lefthalf.filled"
                     )
                 }
@@ -1095,7 +1172,9 @@ enum InstantUtilityService {
                 let out = runOSAScript(script)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 await MainActor.run {
                     FloatingToastController.shared.showSuccess(
-                        title: out.isEmpty ? "Đã tăng âm lượng (+10%)" : "Âm lượng: \(out)%",
+                        title: out.isEmpty
+                            ? L("Đã tăng âm lượng (+10%)", "Volume Increased (+10%)")
+                            : "\(L("Âm lượng", "Volume")): \(out)%",
                         subtitle: "Volume Up",
                         symbol: "speaker.wave.3.fill"
                     )
@@ -1116,7 +1195,9 @@ enum InstantUtilityService {
                 let out = runOSAScript(script)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 await MainActor.run {
                     FloatingToastController.shared.showSuccess(
-                        title: out.isEmpty ? "Đã giảm âm lượng (-10%)" : "Âm lượng: \(out)%",
+                        title: out.isEmpty
+                            ? L("Đã giảm âm lượng (-10%)", "Volume Decreased (-10%)")
+                            : "\(L("Âm lượng", "Volume")): \(out)%",
                         subtitle: "Volume Down",
                         symbol: "speaker.wave.1.fill"
                     )
@@ -1137,7 +1218,9 @@ enum InstantUtilityService {
                 let isMuted = (out == "true")
                 await MainActor.run {
                     FloatingToastController.shared.showSuccess(
-                        title: isMuted ? "Đã tắt tiếng hệ thống (Muted)" : "Đã bật tiếng hệ thống (Unmuted)",
+                        title: isMuted
+                            ? L("Đã tắt tiếng hệ thống (Muted)", "Muted")
+                            : L("Đã bật tiếng hệ thống (Unmuted)", "Unmuted"),
                         subtitle: "Audio Output",
                         symbol: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill"
                     )
@@ -1151,10 +1234,10 @@ enum InstantUtilityService {
                !prev.isTerminated,
                prev.bundleIdentifier != "com.apple.finder" {
                 LauncherPanelController.shared.hide()
-                let name = prev.localizedName ?? "Ứng dụng"
+                let name = AppLocalization.localizedRunningAppName(prev)
                 _ = prev.hide()
                 FloatingToastController.shared.showSuccess(
-                    title: "Đã ẩn \(name)",
+                    title: "\(L("Đã ẩn", "Hidden")) \(name)",
                     subtitle: "Hide Application",
                     symbol: "eye.slash.circle"
                 )
@@ -1188,19 +1271,19 @@ enum InstantUtilityService {
             LauncherPanelController.shared.hide()
             guard !appsToQuit.isEmpty else {
                 FloatingToastController.shared.showSuccess(
-                    title: "Không có ứng dụng nào đang mở để đóng",
+                    title: L("Không có ứng dụng nào đang mở để đóng", "No running applications to close"),
                     subtitle: "Quit All Apps",
                     symbol: "xmark.rectangle"
                 )
                 return true
             }
-            let previewNames = appsToQuit.prefix(6).compactMap(\.localizedName).joined(separator: ", ")
+            let previewNames = appsToQuit.prefix(6).compactMap { AppLocalization.localizedRunningAppName($0) }.joined(separator: ", ")
             guard confirmIfRequired(
                 commandID: "sys.quit_all",
                 modifiers: modifiers,
-                title: "Thoát tất cả \(appsToQuit.count) ứng dụng đang mở?",
-                message: "DriveBar sẽ gửi lệnh đóng an toàn tới: \(previewNames)\(appsToQuit.count > 6 ? "..." : ""). Các ứng dụng có tài liệu chưa lưu sẽ hỏi bạn trước khi đóng.",
-                confirmButtonTitle: "Thoát tất cả"
+                title: L("Thoát tất cả \(appsToQuit.count) ứng dụng đang mở?", "Quit all \(appsToQuit.count) open applications?"),
+                message: L("DriveBar sẽ gửi lệnh đóng an toàn tới: \(previewNames)\(appsToQuit.count > 6 ? "..." : ""). Các ứng dụng có tài liệu chưa lưu sẽ hỏi bạn trước khi đóng.", "DriveBar will safely request quitting: \(previewNames)\(appsToQuit.count > 6 ? "..." : ""). Apps with unsaved changes will prompt you."),
+                confirmButtonTitle: L("Thoát tất cả", "Quit All")
             ) else {
                 return true
             }
@@ -1208,7 +1291,7 @@ enum InstantUtilityService {
                 _ = app.terminate()
             }
             FloatingToastController.shared.showSuccess(
-                title: "Đã gửi lệnh đóng \(appsToQuit.count) ứng dụng",
+                title: "\(L("Đã gửi lệnh đóng", "Quit command sent to")) \(appsToQuit.count) \(L("ứng dụng", "apps"))",
                 subtitle: previewNames,
                 symbol: "xmark.rectangle"
             )
@@ -1226,7 +1309,7 @@ enum InstantUtilityService {
             LauncherPanelController.shared.hide()
             if count == 0 {
                 FloatingToastController.shared.showSuccess(
-                    title: "Thùng rác hiện đang trống",
+                    title: L("Thùng rác hiện đang trống", "Trash is currently empty"),
                     subtitle: "Finder",
                     symbol: "trash.slash"
                 )
@@ -1235,14 +1318,14 @@ enum InstantUtilityService {
             guard confirmIfRequired(
                 commandID: "sys.empty_trash",
                 modifiers: modifiers,
-                title: "Dọn sạch Thùng rác (\(count) mục)?",
-                message: "Bạn có chắc chắn muốn xóa vĩnh viễn toàn bộ các mục trong Thùng rác không? Không thể hoàn tác thao tác này.",
-                confirmButtonTitle: "Dọn sạch Thùng rác"
+                title: L("Dọn sạch Thùng rác (\(count) mục)?", "Empty Trash (\(count) items)?"),
+                message: L("Bạn có chắc chắn muốn xóa vĩnh viễn toàn bộ các mục trong Thùng rác không? Không thể hoàn tác thao tác này.", "Are you sure you want to permanently delete all items in the Trash? This cannot be undone."),
+                confirmButtonTitle: L("Dọn sạch Thùng rác", "Empty Trash")
             ) else {
                 return true
             }
             FloatingToastController.shared.showProgress(
-                title: "Đang dọn sạch Thùng rác...",
+                title: L("Đang dọn sạch Thùng rác...", "Emptying Trash..."),
                 subtitle: "Finder"
             )
             Task.detached(priority: .userInitiated) {
@@ -1251,13 +1334,13 @@ enum InstantUtilityService {
                 await MainActor.run {
                     if ok {
                         FloatingToastController.shared.showSuccess(
-                            title: "Đã dọn sạch Thùng rác",
+                            title: L("Đã dọn sạch Thùng rác", "Trash Emptied"),
                             subtitle: "Finder",
                             symbol: "trash.slash"
                         )
                     } else {
                         FloatingToastController.shared.showError(
-                            title: "Không thể dọn Thùng rác hoặc cần xác nhận từ Finder",
+                            title: L("Không thể dọn Thùng rác hoặc cần xác nhận từ Finder", "Could not empty Trash or requires Finder confirmation"),
                             subtitle: "Finder"
                         )
                     }
@@ -1279,13 +1362,13 @@ enum InstantUtilityService {
                 await MainActor.run {
                     if finalNames.isEmpty {
                         FloatingToastController.shared.showSuccess(
-                            title: "Không có ổ đĩa ngoài hoặc DMG nào đang gắn",
-                            subtitle: "Tất cả thiết bị đã an toàn",
+                            title: L("Không có ổ đĩa ngoài hoặc DMG nào đang gắn", "No external volumes or DMGs currently mounted"),
+                            subtitle: L("Tất cả thiết bị đã an toàn", "All volumes are safe to unplug"),
                             symbol: "eject.fill"
                         )
                     } else {
                         FloatingToastController.shared.showSuccess(
-                            title: "Đã ngắt kết nối \(finalNames.count) ổ đĩa an toàn",
+                            title: "\(L("Đã ngắt kết nối an toàn", "Safely ejected")) \(finalNames.count) \(L("ổ đĩa", "volumes"))",
                             subtitle: finalNames.joined(separator: ", "),
                             symbol: "eject.fill"
                         )
@@ -1307,8 +1390,10 @@ enum InstantUtilityService {
                 let nowShowing = !currentlyShowing
                 await MainActor.run {
                     FloatingToastController.shared.showSuccess(
-                        title: nowShowing ? "Đã HIỆN các tệp ẩn trong Finder" : "Đã ẨN các tệp ẩn hệ thống trong Finder",
-                        subtitle: "Cửa sổ Finder đã được cập nhật",
+                        title: nowShowing
+                            ? L("Đã HIỆN các tệp ẩn trong Finder", "Hidden files are now SHOWN in Finder")
+                            : L("Đã ẨN các tệp ẩn hệ thống trong Finder", "Hidden files are now HIDDEN in Finder"),
+                        subtitle: L("Cửa sổ Finder đã được cập nhật", "Finder windows refreshed"),
                         symbol: "doc.badge.gearshape"
                     )
                 }
@@ -1331,9 +1416,9 @@ enum InstantUtilityService {
             guard confirmIfRequired(
                 commandID: "sys.logout",
                 modifiers: modifiers,
-                title: "Đăng xuất khỏi tài khoản macOS hiện tại?",
-                message: "Tất cả các ứng dụng đang chạy sẽ được đóng lại để kết thúc phiên làm việc.",
-                confirmButtonTitle: "Đăng xuất"
+                title: L("Đăng xuất khỏi tài khoản macOS hiện tại?", "Log out of current macOS account?"),
+                message: L("Tất cả các ứng dụng đang chạy sẽ được đóng lại để kết thúc phiên làm việc.", "All running applications will close to terminate user session."),
+                confirmButtonTitle: L("Đăng xuất", "Log Out")
             ) else {
                 return true
             }
@@ -1349,9 +1434,9 @@ enum InstantUtilityService {
             guard confirmIfRequired(
                 commandID: "sys.restart",
                 modifiers: modifiers,
-                title: "Khởi động lại máy Mac?",
-                message: "Bạn có chắc chắn muốn đóng các ứng dụng đang mở và khởi động lại máy Mac ngay bây giờ không?",
-                confirmButtonTitle: "Khởi động lại"
+                title: L("Khởi động lại máy Mac?", "Restart your Mac?"),
+                message: L("Bạn có chắc chắn muốn đóng các ứng dụng đang mở và khởi động lại máy Mac ngay bây giờ không?", "Are you sure you want to close apps and restart your Mac now?"),
+                confirmButtonTitle: L("Khởi động lại", "Restart")
             ) else {
                 return true
             }
@@ -1365,9 +1450,9 @@ enum InstantUtilityService {
             guard confirmIfRequired(
                 commandID: "sys.shutdown",
                 modifiers: modifiers,
-                title: "Tắt nguồn máy Mac?",
-                message: "Bạn có chắc chắn muốn đóng toàn bộ ứng dụng và tắt nguồn máy tính ngay bây giờ không?",
-                confirmButtonTitle: "Tắt máy"
+                title: L("Tắt nguồn máy Mac?", "Shut down your Mac?"),
+                message: L("Bạn có chắc chắn muốn đóng toàn bộ ứng dụng và tắt nguồn máy tính ngay bây giờ không?", "Are you sure you want to close all apps and shut down your Mac now?"),
+                confirmButtonTitle: L("Tắt máy", "Shut Down")
             ) else {
                 return true
             }
@@ -1384,7 +1469,7 @@ enum InstantUtilityService {
             ClipboardHistoryService.shared.clearHistory()
             LauncherPanelController.shared.hide()
             FloatingToastController.shared.showSuccess(
-                title: "Đã xóa lịch sử Clipboard",
+                title: L("Đã xóa lịch sử Clipboard", "Clipboard History Cleared"),
                 subtitle: "DriveBar Clipboard History",
                 symbol: "xmark.bin"
             )
@@ -1394,8 +1479,8 @@ enum InstantUtilityService {
             GoogleDriveIndexService.shared.rebuildAllCaches()
             LauncherPanelController.shared.hide()
             FloatingToastController.shared.showProgress(
-                title: "Đang quét lại chỉ mục Google Drive & Tệp tin...",
-                subtitle: "Hoạt động mượt ở nền"
+                title: L("Đang quét lại chỉ mục Google Drive & Tệp tin...", "Rebuilding Google Drive & File Index..."),
+                subtitle: L("Hoạt động mượt ở nền", "Running smoothly in background")
             )
             return true
 
@@ -1427,7 +1512,7 @@ enum InstantUtilityService {
         alert.messageText = title
         alert.informativeText = message
         alert.addButton(withTitle: confirmButtonTitle)
-        alert.addButton(withTitle: "Hủy")
+        alert.addButton(withTitle: L("Hủy", "Cancel"))
         return alert.runModal() == .alertFirstButtonReturn
     }
 
@@ -1456,7 +1541,7 @@ enum InstantUtilityService {
             }
             guard !filterTokens.isEmpty else { return true }
 
-            let name = app.localizedName ?? ""
+            let name = AppLocalization.localizedRunningAppName(app)
             let bundleName = app.bundleURL?.deletingPathExtension().lastPathComponent ?? ""
             let bundleID = app.bundleIdentifier ?? ""
             let hay = GoogleDriveIndexService.removeAccents("\(name) \(bundleName) \(bundleID)").lowercased()
@@ -1472,7 +1557,7 @@ enum InstantUtilityService {
             if a.processIdentifier == prevPID { return true }
             if b.processIdentifier == prevPID { return false }
             if a.isActive != b.isActive { return a.isActive && !b.isActive }
-            return (a.localizedName ?? "").localizedStandardCompare(b.localizedName ?? "") == .orderedAscending
+            return AppLocalization.localizedRunningAppName(a).localizedStandardCompare(AppLocalization.localizedRunningAppName(b)) == .orderedAscending
         }
     }
 
@@ -1509,9 +1594,9 @@ enum InstantUtilityService {
                     let totalStr = ByteCountFormatter.string(fromByteCount: Int64(total), countStyle: .file)
                     if let avail = vals.volumeAvailableCapacity, avail >= 0 {
                         let availStr = ByteCountFormatter.string(fromByteCount: Int64(avail), countStyle: .file)
-                        return "Trống \(availStr) / \(totalStr)"
+                        return "\(L("Trống", "Free")) \(availStr) / \(totalStr)"
                     }
-                    return "Dung lượng \(totalStr)"
+                    return "\(L("Dung lượng", "Capacity")) \(totalStr)"
                 }
                 return p
             }()

@@ -50,6 +50,18 @@ final class AppSettings: ObservableObject {
         static let enableClipboardHistory = "drivebar.enableClipboardHistory"
         static let disabledSystemCommandIDs = "drivebar.disabledSystemCommandIDs"
         static let confirmSystemCommandIDs = "drivebar.confirmSystemCommandIDs"
+        static let appLanguage = "drivebar.appLanguage"
+    }
+
+    @Published var appLanguage: AppLanguagePreference {
+        didSet {
+            defaults.set(appLanguage.rawValue, forKey: Keys.appLanguage)
+            AppLocalization.refresh(preference: appLanguage)
+            AppDelegate.shared?.installMainMenu()
+            StatusBarController.shared.refreshTooltip()
+            LauncherViewModel.shared.refreshSearchResults()
+            notifyPortableSettingsChanged()
+        }
     }
 
     static let defaultConfirmSystemCommandIDs: Set<String> = [
@@ -322,6 +334,11 @@ final class AppSettings: ObservableObject {
     @Published var statusBannerMessage: String?
 
     private init() {
+        let rawLang = defaults.string(forKey: Keys.appLanguage) ?? AppLanguagePreference.system.rawValue
+        let parsedLang = AppLanguagePreference(rawValue: rawLang) ?? .system
+        self.appLanguage = parsedLang
+        AppLocalization.refresh(preference: parsedLang)
+
         let didMigrateCmdSpace = defaults.bool(forKey: Keys.didMigrateCmdSpaceV121)
         let didMigrateCmdSlash = defaults.bool(forKey: Keys.didMigrateCmdSlashV123)
         var didPerformDefaultMigration = false
@@ -465,6 +482,21 @@ final class AppSettings: ObservableObject {
         }
 
         refreshLaunchAtLoginStatus()
+
+        NotificationCenter.default.addObserver(
+            forName: NSLocale.currentLocaleDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                AppLocalization.refresh(preference: self.appLanguage)
+                self.objectWillChange.send()
+                AppDelegate.shared?.installMainMenu()
+                StatusBarController.shared.refreshTooltip()
+                LauncherViewModel.shared.refreshSearchResults()
+            }
+        }
     }
 
     var localSettingsUpdatedAt: Double {
@@ -477,7 +509,10 @@ final class AppSettings: ObservableObject {
         universalActionHotKey = .defaultUniversalAction
         windowSwitcherHotKey = .defaultWindowSwitcher
         sameAppSwitcherHotKey = .defaultSameAppSwitcher
-        statusBannerMessage = "Đã khôi phục phím tắt mặc định: Tìm kiếm \(searchHotKey.readableDisplay) • Finder \(universalActionHotKey.readableDisplay) • Windows \(windowSwitcherHotKey.readableDisplay)"
+        statusBannerMessage = L(
+            "Đã khôi phục phím tắt mặc định: Tìm kiếm \(searchHotKey.readableDisplay) • Finder \(universalActionHotKey.readableDisplay) • Windows \(windowSwitcherHotKey.readableDisplay)",
+            "Restored default shortcuts: Search \(searchHotKey.readableDisplay) • Finder \(universalActionHotKey.readableDisplay) • Windows \(windowSwitcherHotKey.readableDisplay)"
+        )
     }
 
     var isFirstLaunch: Bool {
@@ -578,8 +613,11 @@ final class AppSettings: ObservableObject {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
         panel.canCreateDirectories = false
-        panel.prompt = "Thêm thư mục"
-        panel.message = "Chọn một hoặc nhiều thư mục trên máy Mac để tìm kiếm nhanh bằng tiền tố 'm'"
+        panel.prompt = L("Thêm thư mục", "Add Folder")
+        panel.message = L(
+            "Chọn một hoặc nhiều thư mục trên máy Mac để tìm kiếm nhanh bằng tiền tố 'm'",
+            "Select one or more folders on your Mac for instant search with the 'm' prefix"
+        )
         panel.begin { [weak self] response in
             guard let self, response == .OK else { return }
             for url in panel.urls {
@@ -633,7 +671,10 @@ final class AppSettings: ObservableObject {
                     writeFallbackLaunchAgentPlist()
                     refreshLaunchAtLoginStatus()
                     SMAppService.openSystemSettingsLoginItems()
-                    statusBannerMessage = "Nếu macOS yêu cầu xác nhận, hãy bật công tắc DriveBar trong mục Login Items."
+                    statusBannerMessage = L(
+                        "Nếu macOS yêu cầu xác nhận, hãy bật công tắc DriveBar trong mục Login Items.",
+                        "If macOS requests approval, enable DriveBar under System Settings → Login Items."
+                    )
                     return
                 }
             } catch {

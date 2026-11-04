@@ -44,6 +44,7 @@ struct ContactAvatarView: View {
 struct ContactDetailView: View {
     @ObservedObject var viewModel: LauncherViewModel
     @ObservedObject private var contactsService = ContactsSearchService.shared
+    @ObservedObject private var settings = AppSettings.shared
     let contactID: String
 
     var body: some View {
@@ -59,13 +60,13 @@ struct ContactDetailView: View {
                     HStack(spacing: 4) {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 11, weight: .semibold))
-                        Text("Danh bạ")
+                        Text(L("Danh bạ", "Contacts"))
                             .font(.system(size: 12, weight: .medium))
                     }
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .help("Quay lại danh sách tìm kiếm Danh bạ (Esc hoặc ←)")
+                .help(L("Quay lại danh sách tìm kiếm Danh bạ (Esc hoặc ←)", "Return to Contacts search list (Esc or ←)"))
 
                 ContactAvatarView(
                     contactID: contactID,
@@ -75,7 +76,7 @@ struct ContactDetailView: View {
                 )
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(record?.displayName ?? "Chi tiết liên hệ")
+                    Text(record?.displayName ?? L("Chi tiết liên hệ", "Contact Details"))
                         .font(.system(size: 15.5, weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
@@ -86,7 +87,7 @@ struct ContactDetailView: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     } else {
-                        Text("Chọn mục bất kỳ bên dưới và nhấn Enter (↩) hoặc Click để sao chép")
+                        Text(L("Chọn mục bất kỳ bên dưới và nhấn Enter (↩) hoặc Click để sao chép", "Select any field below and press Enter (↩) or Click to copy"))
                             .font(.system(size: 11.5))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -105,23 +106,23 @@ struct ContactDetailView: View {
                             previousApp: LauncherPanelController.shared.previousFrontApp
                         )
                     } label: {
-                        Label("Copy tất cả", systemImage: "doc.on.doc")
+                        Label(L("Copy tất cả", "Copy All"), systemImage: "doc.on.doc")
                             .font(.system(size: 11.5, weight: .medium))
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                    .help("Sao chép toàn bộ thông tin liên hệ vào Clipboard")
+                    .help(L("Sao chép toàn bộ thông tin liên hệ vào Clipboard", "Copy complete contact info to Clipboard"))
                 }
 
                 Button {
                     contactsService.openInContactsApp(contactID: contactID)
                 } label: {
-                    Label("Mở Danh bạ", systemImage: "arrow.up.forward.app")
+                    Label(L("Mở Danh bạ", "Open Contacts"), systemImage: "arrow.up.forward.app")
                         .font(.system(size: 11.5, weight: .medium))
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .help("Mở trực tiếp liên hệ này trong ứng dụng Danh bạ macOS (⌘O)")
+                .help(L("Mở trực tiếp liên hệ này trong ứng dụng Danh bạ macOS (⌘O)", "Open this contact directly in macOS Contacts app (⌘O)"))
             }
             .padding(.horizontal, 16)
             .padding(.top, 12)
@@ -135,7 +136,7 @@ struct ContactDetailView: View {
 
                 NativeSearchInputField(
                     text: $viewModel.contactDetailFilterText,
-                    placeholder: "Dùng phím ↑↓ chọn mục rồi nhấn Enter để Copy (hoặc gõ lọc: 'sdt', 'email', 'dia chi')...",
+                    placeholder: L("Dùng phím ↑↓ chọn mục rồi nhấn Enter để Copy (hoặc gõ lọc: 'sdt', 'email', 'dia chi')...", "Use ↑↓ to select, press Enter to copy (or type to filter: 'phone', 'email', 'address')..."),
                     fontSize: 13.5,
                     focusTrigger: viewModel.focusTrigger,
                     selectAllOnFocus: false,
@@ -182,7 +183,7 @@ struct ContactDetailView: View {
                             HStack(spacing: 10) {
                                 Image(systemName: "magnifyingglass")
                                     .foregroundStyle(.secondary)
-                                Text("Không có trường thông tin nào khớp '\(viewModel.contactDetailFilterText)'")
+                                Text("\(L("Không có trường thông tin nào khớp", "No fields matching")) '\(viewModel.contactDetailFilterText)'")
                                     .font(.system(size: 13))
                                     .foregroundStyle(.secondary)
                                 Spacer()
@@ -234,13 +235,13 @@ struct ContactDetailView: View {
 
             // 4. Footer Keyboard Hints
             HStack(spacing: 12) {
-                FooterShortcutHint(key: "↩", label: "Sao chép")
-                FooterShortcutHint(key: "⌘C", label: "Copy & Giữ mở")
-                FooterShortcutHint(key: "⌥↩", label: "Copy & Dán ngay")
-                FooterShortcutHint(key: "⇧", label: "Phóng to chữ")
-                FooterShortcutHint(key: "⌘O", label: "Mở Danh bạ")
+                FooterShortcutHint(key: "↩", label: L("Sao chép", "Copy"))
+                FooterShortcutHint(key: "⌘C", label: L("Copy & Giữ mở", "Copy & Keep Open"))
+                FooterShortcutHint(key: "⌥↩", label: L("Copy & Dán ngay", "Copy & Paste Now"))
+                FooterShortcutHint(key: "⇧", label: L("Phóng to chữ", "Large Type"))
+                FooterShortcutHint(key: "⌘O", label: L("Mở Danh bạ", "Open Contacts"))
                 Spacer()
-                FooterShortcutHint(key: "← / Esc", label: "Quay lại")
+                FooterShortcutHint(key: "← / Esc", label: L("Quay lại", "Back"))
             }
             .font(.system(size: 10.5, weight: .regular))
             .foregroundStyle(.secondary)
@@ -279,7 +280,7 @@ private struct ContactDetailFieldRow: View {
                         .foregroundStyle(isSelected ? Color.white.opacity(0.84) : Color.secondary)
 
                     if justCopied {
-                        Text("✓ Đã sao chép")
+                        Text("✓ \(L("Đã sao chép", "Copied"))")
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(isSelected ? Color.white : Color.primary)
                             .padding(.horizontal, 6)
@@ -342,7 +343,7 @@ private struct ContactDetailFieldRow: View {
                             .padding(3)
                     }
                     .buttonStyle(.plain)
-                    .help("Sao chép nhanh mục này (giữ cửa sổ mở)")
+                    .help(L("Sao chép nhanh mục này (giữ cửa sổ mở)", "Quick copy this item (keep window open)"))
 
                     if index < 9 {
                         Text("⌘\(index + 1)")
@@ -367,11 +368,11 @@ private struct ContactDetailFieldRow: View {
 
     private var primaryActionLabel: String {
         if activeModifiers.contains(.option) {
-            return "Copy & Dán ⌥↩"
+            return L("Copy & Dán ⌥↩", "Copy & Paste ⌥↩")
         }
         if activeModifiers.contains(.command), field.actionURL != nil {
-            return "Mở ⌘↩"
+            return L("Mở ⌘↩", "Open ⌘↩")
         }
-        return "Sao chép ↩"
+        return L("Sao chép ↩", "Copy ↩")
     }
 }

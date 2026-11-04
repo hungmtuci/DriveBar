@@ -7,8 +7,8 @@ cd "$PROJECT_DIR"
 
 APP_NAME="DriveBar"
 BUNDLE_ID="com.hunglx.DriveBar"
-VERSION="1.6.0"
-BUILD_NUMBER="25"
+VERSION="1.6.1"
+BUILD_NUMBER="26"
 APP_BUNDLE="$PROJECT_DIR/$APP_NAME.app"
 ROOT_APP_BUNDLE="$ROOT_WORKSPACE_DIR/$APP_NAME.app"
 DIST_DIR="$PROJECT_DIR/dist"
@@ -120,13 +120,31 @@ chmod +x "$STAGE_MACOS/$APP_NAME"
 
 iconutil -c icns "$ICONSET_DIR" -o "$STAGE_RESOURCES/AppIcon.icns" || true
 
+mkdir -p "$STAGE_RESOURCES/en.lproj" "$STAGE_RESOURCES/vi.lproj"
+cat > "$STAGE_RESOURCES/en.lproj/InfoPlist.strings" <<'EOF_EN'
+"NSAppleEventsUsageDescription" = "DriveBar needs Finder integration to read the current selection for Universal Actions and Markdown conversion.";
+"NSScreenCaptureUsageDescription" = "DriveBar uses Screen Recording permission to capture live window thumbnails and previews in Windows Preview (⌘Tab).";
+"NSContactsUsageDescription" = "DriveBar uses Contacts permission for instant accent-insensitive contact lookup ('c ') and quick phone/email copying.";
+EOF_EN
+
+cat > "$STAGE_RESOURCES/vi.lproj/InfoPlist.strings" <<'EOF_VI'
+"NSAppleEventsUsageDescription" = "DriveBar cần quyền tương tác với Finder để lấy danh sách tệp đang chọn cho Universal Actions và Convert sang Markdown.";
+"NSScreenCaptureUsageDescription" = "DriveBar sử dụng quyền Ghi màn hình để chụp ảnh xem trước và phóng to nội dung trực tiếp của các cửa sổ đang chạy trong Windows Preview (⌘Tab).";
+"NSContactsUsageDescription" = "DriveBar sử dụng quyền Danh bạ để tra cứu nhanh liên hệ bằng tiếng Việt không dấu ('c ') và xem chi tiết, sao chép số điện thoại, email, địa chỉ.";
+EOF_VI
+
 cat > "$STAGE_CONTENTS/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key>
-    <string>vi</string>
+    <string>en</string>
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>en</string>
+        <string>vi</string>
+    </array>
     <key>CFBundleExecutable</key>
     <string>${APP_NAME}</string>
     <key>CFBundleIconFile</key>
@@ -150,11 +168,11 @@ cat > "$STAGE_CONTENTS/Info.plist" <<EOF
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSAppleEventsUsageDescription</key>
-    <string>DriveBar cần quyền tương tác với Finder để lấy danh sách tệp đang chọn cho Universal Actions và Convert sang Markdown.</string>
+    <string>DriveBar needs Finder integration to read the current selection for Universal Actions and Markdown conversion.</string>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>DriveBar sử dụng quyền Ghi màn hình để chụp ảnh xem trước và phóng to nội dung trực tiếp của các cửa sổ đang chạy trong Windows Preview (⌘Tab).</string>
+    <string>DriveBar uses Screen Recording permission to capture live window thumbnails and previews in Windows Preview (⌘Tab).</string>
     <key>NSContactsUsageDescription</key>
-    <string>DriveBar sử dụng quyền Danh bạ để tra cứu nhanh liên hệ bằng tiếng Việt không dấu ('c ') và xem chi tiết, sao chép số điện thoại, email, địa chỉ.</string>
+    <string>DriveBar uses Contacts permission for instant accent-insensitive contact lookup ('c ') and quick phone/email copying.</string>
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>

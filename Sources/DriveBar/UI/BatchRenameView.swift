@@ -6,6 +6,15 @@ enum BatchRenameMode: String, CaseIterable {
     case replaceText = "Tìm & Thay thế"
     case prefixSuffix = "Tiền tố & Hậu tố"
     case sequential = "Đánh số (01, 02...)"
+
+    var localizedTitle: String {
+        switch self {
+        case .directSingle: return L("Đổi tên mới", "Single Rename")
+        case .replaceText: return L("Tìm & Thay thế", "Find & Replace")
+        case .prefixSuffix: return L("Tiền tố & Hậu tố", "Prefix & Suffix")
+        case .sequential: return L("Đánh số (01, 02...)", "Sequential (01, 02...)")
+        }
+    }
 }
 
 struct RenamePreviewRow: Identifiable, Equatable {
@@ -146,15 +155,15 @@ final class BatchRenameState: ObservableObject {
             var err: String?
 
             if item.newName.isEmpty {
-                err = "Tên mới không được để trống"
+                err = L("Tên mới không được để trống", "New name cannot be empty")
             } else if item.newName.contains("/") || item.newName.contains(":") {
-                err = "Chứa ký tự không hợp lệ (/ hoặc :)"
+                err = L("Chứa ký tự không hợp lệ (/ hoặc :)", "Contains invalid characters (/ or :)")
             } else if (targetPathCounts[lowerTarget] ?? 0) > 1 {
-                err = "Trùng tên đích trong danh sách"
+                err = L("Trùng tên đích trong danh sách", "Duplicate destination name in list")
             } else if item.newName != item.oldName &&
                       item.newName.lowercased() != item.oldName.lowercased() &&
                       FileManager.default.fileExists(atPath: targetURL.path) {
-                err = "Tệp tên này đã tồn tại trong thư mục"
+                err = L("Tệp tên này đã tồn tại trong thư mục", "File already exists in folder")
             }
 
             let didChange = (err == nil && item.newName != item.oldName)
@@ -164,7 +173,7 @@ final class BatchRenameState: ObservableObject {
             rows.append(RenamePreviewRow(
                 sourceURL: item.url,
                 oldName: item.oldName,
-                newName: item.newName.isEmpty ? "(Trống)" : item.newName,
+                newName: item.newName.isEmpty ? L("(Trống)", "(Empty)") : item.newName,
                 isChanged: didChange,
                 errorMessage: err
             ))
@@ -222,8 +231,8 @@ final class BatchRenameState: ObservableObject {
                     GoogleDriveIndexService.shared.rebuildAllCaches()
                     FloatingToastController.shared.showSuccess(
                         title: finalCount == 1
-                            ? "Đã đổi tên thành '\(finalURLs[0].lastPathComponent)'"
-                            : "Đã đổi tên hàng loạt \(finalCount) mục",
+                            ? L("Đã đổi tên thành '\(finalURLs[0].lastPathComponent)'", "Renamed to '\(finalURLs[0].lastPathComponent)'")
+                            : L("Đã đổi tên hàng loạt \(finalCount) mục", "Batch renamed \(finalCount) items"),
                         subtitle: finalURLs[0].deletingLastPathComponent().lastPathComponent,
                         symbol: "pencil"
                     )
@@ -232,8 +241,8 @@ final class BatchRenameState: ObservableObject {
                     }
                 } else {
                     FloatingToastController.shared.showError(
-                        title: "Không thể đổi tên tệp",
-                        subtitle: finalErr ?? "Kiểm tra quyền ghi thư mục"
+                        title: L("Không thể đổi tên tệp", "Unable to rename files"),
+                        subtitle: finalErr ?? L("Kiểm tra quyền ghi thư mục", "Check folder write permissions")
                     )
                 }
             }
@@ -244,6 +253,7 @@ final class BatchRenameState: ObservableObject {
 struct BatchRenameView: View {
     @ObservedObject var viewModel: LauncherViewModel
     @ObservedObject var state: BatchRenameState = BatchRenameState.shared
+    @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -255,17 +265,19 @@ struct BatchRenameView: View {
                         directExternalTrigger: viewModel.openedDirectlyInUniversalActions
                     )
                 } label: {
-                    Label("Quay lại", systemImage: "chevron.left")
+                    Label(L("Quay lại", "Back"), systemImage: "chevron.left")
                         .font(.system(size: 11.5, weight: .medium))
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
 
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(state.urls.count == 1 ? "Đổi tên mục đã chọn" : "Đổi tên hàng loạt (\(state.urls.count) mục)")
+                    Text(state.urls.count == 1
+                        ? L("Đổi tên mục đã chọn", "Rename Selected Item")
+                        : L("Đổi tên hàng loạt (\(state.urls.count) mục)", "Batch Rename (\(state.urls.count) items)"))
                         .font(.system(size: 13.5, weight: .semibold))
                         .foregroundStyle(.primary)
-                    Text("Xem trước kết quả trực tiếp trước khi áp dụng")
+                    Text(L("Xem trước kết quả trực tiếp trước khi áp dụng", "Live preview before applying changes"))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
@@ -274,7 +286,7 @@ struct BatchRenameView: View {
 
                 Picker("", selection: $state.mode) {
                     ForEach(state.availableModes, id: \.self) { m in
-                        Text(m.rawValue).tag(m)
+                        Text(m.localizedTitle).tag(m)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -290,10 +302,10 @@ struct BatchRenameView: View {
                 switch state.mode {
                 case .directSingle:
                     HStack(spacing: 10) {
-                        Text("Tên mới:")
+                        Text(L("Tên mới:", "New name:"))
                             .font(.system(size: 12.5, weight: .medium))
                             .foregroundStyle(.secondary)
-                        TextField("Nhập tên mới (giữ nguyên phần mở rộng)...", text: $state.singleNewStem)
+                        TextField(L("Nhập tên mới (giữ nguyên phần mở rộng)...", "Enter new name (keeps extension)..."), text: $state.singleNewStem)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(size: 13))
                             .onSubmit {
@@ -304,18 +316,18 @@ struct BatchRenameView: View {
                 case .replaceText:
                     HStack(spacing: 10) {
                         HStack(spacing: 6) {
-                            Text("Tìm:")
+                            Text(L("Tìm:", "Find:"))
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(.secondary)
-                            TextField("Cụm từ cần thay...", text: $state.findText)
+                            TextField(L("Cụm từ cần thay...", "Text to find..."), text: $state.findText)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(size: 12.5))
                         }
                         HStack(spacing: 6) {
-                            Text("Thay bằng:")
+                            Text(L("Thay bằng:", "Replace with:"))
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(.secondary)
-                            TextField("Nội dung mới (để trống nếu muốn xóa)...", text: $state.replaceWithText)
+                            TextField(L("Nội dung mới (để trống nếu muốn xóa)...", "Replacement text (leave empty to remove)..."), text: $state.replaceWithText)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(size: 12.5))
                                 .onSubmit {
@@ -327,18 +339,18 @@ struct BatchRenameView: View {
                 case .prefixSuffix:
                     HStack(spacing: 10) {
                         HStack(spacing: 6) {
-                            Text("Tiền tố (Đầu):")
+                            Text(L("Tiền tố (Đầu):", "Prefix:"))
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(.secondary)
-                            TextField("VD: 2026_...", text: $state.prefixText)
+                            TextField("2026_...", text: $state.prefixText)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(size: 12.5))
                         }
                         HStack(spacing: 6) {
-                            Text("Hậu tố (Cuối):")
+                            Text(L("Hậu tố (Cuối):", "Suffix:"))
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(.secondary)
-                            TextField("VD: _Final...", text: $state.suffixText)
+                            TextField("_Final...", text: $state.suffixText)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(size: 12.5))
                                 .onSubmit {
@@ -350,10 +362,10 @@ struct BatchRenameView: View {
                 case .sequential:
                     HStack(spacing: 12) {
                         HStack(spacing: 6) {
-                            Text("Tên gốc:")
+                            Text(L("Tên gốc:", "Base name:"))
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(.secondary)
-                            TextField("VD: BaiGiang...", text: $state.sequenceBaseName)
+                            TextField("Doc...", text: $state.sequenceBaseName)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(size: 12.5))
                                 .onSubmit {
@@ -361,7 +373,7 @@ struct BatchRenameView: View {
                                 }
                         }
                         Stepper(value: $state.sequenceStartNumber, in: 1...9999) {
-                            Text("Bắt đầu từ: \(state.sequenceStartNumber)")
+                            Text(L("Bắt đầu từ: \(state.sequenceStartNumber)", "Start at: \(state.sequenceStartNumber)"))
                                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                         }
                         .fixedSize(horizontal: true, vertical: false)
@@ -432,20 +444,20 @@ struct BatchRenameView: View {
 
             // Footer with Apply Button
             HStack(spacing: 12) {
-                FooterShortcutHint(key: "↩", label: "Áp dụng đổi tên")
-                FooterShortcutHint(key: "⌘↩", label: "Áp dụng & Mở Finder")
-                FooterShortcutHint(key: "Esc", label: "Hủy / Quay lại")
+                FooterShortcutHint(key: "↩", label: L("Áp dụng đổi tên", "Apply Rename"))
+                FooterShortcutHint(key: "⌘↩", label: L("Áp dụng & Mở Finder", "Apply & Reveal"))
+                FooterShortcutHint(key: "Esc", label: L("Hủy / Quay lại", "Cancel / Back"))
 
                 Spacer()
 
-                Text("\(state.validChangeCount)/\(state.urls.count) mục thay đổi")
+                Text(L("\(state.validChangeCount)/\(state.urls.count) mục thay đổi", "\(state.validChangeCount)/\(state.urls.count) items changed"))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
 
                 Button {
                     state.executeCommit(revealInFinder: NSEvent.modifierFlags.contains(.command))
                 } label: {
-                    Text("Áp dụng đổi tên")
+                    Text(L("Áp dụng đổi tên", "Apply Rename"))
                         .font(.system(size: 12, weight: .semibold))
                 }
                 .buttonStyle(.borderedProminent)

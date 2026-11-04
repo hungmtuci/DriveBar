@@ -149,14 +149,23 @@ final class HotKeyService: ObservableObject {
         if !isSearchHotKeyActive {
             let disp = settings.searchHotKey.readableDisplay
             if settings.searchHotKey == .commandSpace {
-                conflicts.append("Phím tắt Tìm kiếm (\(disp)) đang bị Spotlight hoặc ứng dụng khác giữ — hãy tắt 'Show Spotlight search' trong Cài đặt bàn phím macOS hoặc chọn phím khác.")
+                conflicts.append(L(
+                    "Phím tắt Tìm kiếm (\(disp)) đang bị Spotlight hoặc ứng dụng khác giữ — hãy tắt 'Show Spotlight search' trong Cài đặt bàn phím macOS hoặc chọn phím khác.",
+                    "Search shortcut (\(disp)) is held by Spotlight or another app — disable 'Show Spotlight search' in macOS Keyboard Settings or pick another shortcut."
+                ))
             } else {
-                conflicts.append("Phím tắt Tìm kiếm (\(disp)) đang bị hệ thống hoặc ứng dụng khác chiếm giữ.")
+                conflicts.append(L(
+                    "Phím tắt Tìm kiếm (\(disp)) đang bị hệ thống hoặc ứng dụng khác chiếm giữ.",
+                    "Search shortcut (\(disp)) is occupied by the system or another app."
+                ))
             }
         }
         if !isUniversalHotKeyActive {
             let uaDisp = settings.universalActionHotKey.readableDisplay
-            conflicts.append("Phím tắt Universal Actions (\(uaDisp)) đang bị ứng dụng khác (như Alfred) chiếm giữ — hãy đóng ứng dụng trùng hoặc chọn phím tắt khác.")
+            conflicts.append(L(
+                "Phím tắt Universal Actions (\(uaDisp)) đang bị ứng dụng khác (như Alfred) chiếm giữ — hãy đóng ứng dụng trùng hoặc chọn phím tắt khác.",
+                "Universal Actions shortcut (\(uaDisp)) is occupied by another app (e.g., Alfred) — close the conflicting app or pick another shortcut."
+            ))
         }
         if !conflicts.isEmpty {
             registrationWarning = conflicts.joined(separator: " ")
@@ -267,7 +276,10 @@ final class HotKeyService: ObservableObject {
             let isFunctionKey = (code >= kVK_F1 && code <= kVK_F19)
             guard carbonMods != 0 || isFunctionKey else {
                 NSSound.beep()
-                AppSettings.shared.statusBannerMessage = "Hãy giữ ít nhất 1 phím bổ trợ (⌘, ⌥, ⌃, ⇧) kèm phím chữ/số/Space (nhấn Esc để hủy)."
+                AppSettings.shared.statusBannerMessage = L(
+                    "Hãy giữ ít nhất 1 phím bổ trợ (⌘, ⌥, ⌃, ⇧) kèm phím chữ/số/Space (nhấn Esc để hủy).",
+                    "Hold at least 1 modifier (⌘, ⌥, ⌃, ⇧) with a character/digit/Space (press Esc to cancel)."
+                )
                 return nil
             }
 
@@ -284,18 +296,21 @@ final class HotKeyService: ObservableObject {
             if AppSettings.shared.universalActionHotKey == newBinding {
                 NSSound.beep()
                 registerAll()
-                AppSettings.shared.statusBannerMessage = "Phím tắt \(newBinding.readableDisplay) đang dùng cho Universal Actions. Hãy chọn tổ hợp khác."
+                AppSettings.shared.statusBannerMessage = L(
+                    "Phím tắt \(newBinding.readableDisplay) đang dùng cho Universal Actions. Hãy chọn tổ hợp khác.",
+                    "Shortcut \(newBinding.readableDisplay) is currently used for Universal Actions. Please pick another."
+                )
                 return
             }
             AppSettings.shared.searchHotKey = newBinding
             let ok = isSearchHotKeyActive
             AppSettings.shared.statusBannerMessage = ok
-                ? "Đã thiết lập phím tắt Mở Tìm kiếm: \(newBinding.readableDisplay)"
-                : "Đã lưu \(newBinding.readableDisplay), nhưng phím này đang bị ứng dụng khác/Spotlight giữ."
+                ? L("Đã thiết lập phím tắt Mở Tìm kiếm: \(newBinding.readableDisplay)", "Search shortcut configured: \(newBinding.readableDisplay)")
+                : L("Đã lưu \(newBinding.readableDisplay), nhưng phím này đang bị ứng dụng khác/Spotlight giữ.", "Saved \(newBinding.readableDisplay), but it is occupied by Spotlight or another app.")
             if ok {
                 FloatingToastController.shared.showSuccess(
-                    title: "Đã đổi phím tắt Tìm kiếm: \(newBinding.readableDisplay)",
-                    subtitle: "Bấm \(newBinding.readableDisplay) ở bất kỳ đâu để gọi nhanh DriveBar"
+                    title: L("Đã đổi phím tắt Tìm kiếm: \(newBinding.readableDisplay)", "Updated Search shortcut: \(newBinding.readableDisplay)"),
+                    subtitle: L("Bấm \(newBinding.readableDisplay) ở bất kỳ đâu để gọi nhanh DriveBar", "Press \(newBinding.readableDisplay) anywhere to open DriveBar")
                 )
             }
 
@@ -303,35 +318,44 @@ final class HotKeyService: ObservableObject {
             if AppSettings.shared.searchHotKey == newBinding {
                 NSSound.beep()
                 registerAll()
-                AppSettings.shared.statusBannerMessage = "Phím tắt \(newBinding.readableDisplay) đang dùng cho Thanh Tìm kiếm. Hãy chọn tổ hợp khác."
+                AppSettings.shared.statusBannerMessage = L(
+                    "Phím tắt \(newBinding.readableDisplay) đang dùng cho Thanh Tìm kiếm. Hãy chọn tổ hợp khác.",
+                    "Shortcut \(newBinding.readableDisplay) is currently used for Search. Please pick another."
+                )
                 return
             }
             AppSettings.shared.universalActionHotKey = newBinding
             let ok = isUniversalHotKeyActive
             AppSettings.shared.statusBannerMessage = ok
-                ? "Đã thiết lập phím tắt Universal Actions: \(newBinding.readableDisplay)"
-                : "Đã lưu \(newBinding.readableDisplay), nhưng phím này đang bị ứng dụng khác giữ."
+                ? L("Đã thiết lập phím tắt Universal Actions: \(newBinding.readableDisplay)", "Universal Actions shortcut configured: \(newBinding.readableDisplay)")
+                : L("Đã lưu \(newBinding.readableDisplay), nhưng phím này đang bị ứng dụng khác giữ.", "Saved \(newBinding.readableDisplay), but it is occupied by another app.")
             if ok {
                 FloatingToastController.shared.showSuccess(
-                    title: "Đã đổi phím tắt Universal Actions: \(newBinding.readableDisplay)",
-                    subtitle: "Chọn file hoặc văn bản rồi bấm \(newBinding.readableDisplay)"
+                    title: L("Đã đổi phím tắt Universal Actions: \(newBinding.readableDisplay)", "Updated Universal Actions shortcut: \(newBinding.readableDisplay)"),
+                    subtitle: L("Chọn file hoặc văn bản rồi bấm \(newBinding.readableDisplay)", "Select a file or text and press \(newBinding.readableDisplay)")
                 )
             }
 
         case .windowSwitcher:
             AppSettings.shared.windowSwitcherHotKey = newBinding
-            AppSettings.shared.statusBannerMessage = "Đã thiết lập phím tắt Windows Preview: \(newBinding.readableDisplay)"
+            AppSettings.shared.statusBannerMessage = L(
+                "Đã thiết lập phím tắt Windows Preview: \(newBinding.readableDisplay)",
+                "Windows Preview shortcut configured: \(newBinding.readableDisplay)"
+            )
             FloatingToastController.shared.showSuccess(
-                title: "Đã đổi phím tắt Windows Preview: \(newBinding.readableDisplay)",
-                subtitle: "Bấm \(newBinding.readableDisplay) để mở danh sách & phóng to cửa sổ đang chạy"
+                title: L("Đã đổi phím tắt Windows Preview: \(newBinding.readableDisplay)", "Updated Windows Preview shortcut: \(newBinding.readableDisplay)"),
+                subtitle: L("Bấm \(newBinding.readableDisplay) để mở danh sách & phóng to cửa sổ đang chạy", "Press \(newBinding.readableDisplay) to preview and switch running windows")
             )
 
         case .sameAppWindowSwitcher:
             AppSettings.shared.sameAppSwitcherHotKey = newBinding
-            AppSettings.shared.statusBannerMessage = "Đã thiết lập phím tắt chuyển cửa sổ cùng ứng dụng: \(newBinding.readableDisplay)"
+            AppSettings.shared.statusBannerMessage = L(
+                "Đã thiết lập phím tắt chuyển cửa sổ cùng ứng dụng: \(newBinding.readableDisplay)",
+                "Same-app window switch shortcut configured: \(newBinding.readableDisplay)"
+            )
             FloatingToastController.shared.showSuccess(
-                title: "Đã đổi phím tắt cửa sổ cùng ứng dụng: \(newBinding.readableDisplay)",
-                subtitle: "Bấm \(newBinding.readableDisplay) để chuyển nhanh giữa các cửa sổ của ứng dụng hiện tại"
+                title: L("Đã đổi phím tắt cửa sổ cùng ứng dụng: \(newBinding.readableDisplay)", "Updated same-app switcher shortcut: \(newBinding.readableDisplay)"),
+                subtitle: L("Bấm \(newBinding.readableDisplay) để chuyển nhanh giữa các cửa sổ của ứng dụng hiện tại", "Press \(newBinding.readableDisplay) to cycle windows of the current app")
             )
         }
     }
