@@ -166,6 +166,42 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         quickConvertMD.target = self
         menu.addItem(quickConvertMD)
 
+        let scratchpadItem = NSMenuItem(
+            title: L(
+                "Ghi chú nháp Scratchpad HUD ('n ')",
+                "Scratchpad HUD Notes ('n ')"
+            ),
+            action: #selector(openScratchpadAction),
+            keyEquivalent: ""
+        )
+        scratchpadItem.image = NSImage(systemSymbolName: "note.text", accessibilityDescription: nil)
+        scratchpadItem.target = self
+        menu.addItem(scratchpadItem)
+
+        let newFileItem = NSMenuItem(
+            title: L(
+                "Tạo nhanh tệp tại thư mục Finder ('nf ' / 'nfo ')",
+                "New File in active Finder folder ('nf ' / 'nfo ')"
+            ),
+            action: #selector(openNewFileAction),
+            keyEquivalent: ""
+        )
+        newFileItem.image = NSImage(systemSymbolName: "doc.badge.plus", accessibilityDescription: nil)
+        newFileItem.target = self
+        menu.addItem(newFileItem)
+
+        let dupScanItem = NSMenuItem(
+            title: L(
+                "Quét tệp trùng lặp Google Drive & Mac ('dup ')",
+                "Scan Duplicate Files ('dup ')"
+            ),
+            action: #selector(openDuplicatesAction),
+            keyEquivalent: ""
+        )
+        dupScanItem.image = NSImage(systemSymbolName: "archivebox.circle", accessibilityDescription: nil)
+        dupScanItem.target = self
+        menu.addItem(dupScanItem)
+
         menu.addItem(.separator())
 
         let recentHeader = NSMenuItem(
@@ -440,6 +476,22 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     @objc private func openSystemCommandsAction() {
         LauncherViewModel.shared.prepareForSearchLaunch()
         LauncherViewModel.shared.searchText = "s "
+        LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
+    }
+
+    @objc private func openScratchpadAction() {
+        ScratchpadHUDController.shared.show()
+    }
+
+    @objc private func openNewFileAction() {
+        LauncherViewModel.shared.prepareForSearchLaunch()
+        LauncherViewModel.shared.searchText = "nf "
+        LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
+    }
+
+    @objc private func openDuplicatesAction() {
+        LauncherViewModel.shared.prepareForSearchLaunch()
+        LauncherViewModel.shared.searchText = "dup "
         LauncherPanelController.shared.showAndFocus(selectExistingQuery: false)
     }
 

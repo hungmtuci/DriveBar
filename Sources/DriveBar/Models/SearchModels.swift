@@ -139,6 +139,9 @@ enum ResultItemKind: Equatable {
     case clipboardItem(id: String)
     case contactItem(id: String)
     case calculatorResult(expression: String, rawValue: String, formattedValue: String)
+    case newFileAction(rawInput: String, openAfter: Bool)
+    case scratchpadAction(appendQuery: String?)
+    case duplicateItem(filePath: String, sizeBytes: Int64, copiesCount: Int)
     case addCustomMacFolder
     case infoBanner
 }

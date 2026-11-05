@@ -657,6 +657,21 @@ final class LauncherViewModel: ObservableObject {
         if activeBrowseDirectory != nil || searchText.hasPrefix("/") || searchText.hasPrefix("~/") || searchText.hasPrefix("…") || searchText.hasPrefix("...") {
             return (L("Duyệt thư mục", "Browse Folder"), .secondary)
         }
+        if lowerTrimmed == "nfo" || lowerRaw.hasPrefix("nfo ") {
+            return (L("Tạo & Mở tệp", "New & Open"), .secondary)
+        }
+        if lowerTrimmed == "nf" || lowerRaw.hasPrefix("nf ") {
+            return (L("Tạo tệp mới", "New File"), .secondary)
+        }
+        if lowerTrimmed == "n" || lowerRaw.hasPrefix("n ") || lowerTrimmed == "note" || lowerRaw.hasPrefix("note ") {
+            return ("Scratchpad", .secondary)
+        }
+        if lowerTrimmed == "dup" || lowerRaw.hasPrefix("dup ") || lowerTrimmed == "duplicate" || lowerRaw.hasPrefix("duplicate ") || lowerTrimmed == "duplicates" || lowerRaw.hasPrefix("duplicates ") {
+            return (L("Trùng lặp", "Duplicates"), .secondary)
+        }
+        if DriveDeepSearchService.shared.parseTokens(from: trimmed).hasFilters {
+            return (L("Lọc nâng cao", "Deep Search"), .secondary)
+        }
         if lowerTrimmed == "a" || lowerRaw.hasPrefix("a ") {
             return (L("Ứng dụng", "Applications"), .secondary)
         }
@@ -1180,6 +1195,192 @@ final class LauncherViewModel: ObservableObject {
             return
         }
 
+        // 3.7. New File Mode (`nf <tên>` or `nfo <tên>`)
+        let lowerRaw = raw.lowercased()
+        let isNfo = lowerRaw.hasPrefix("nfo ") || trimmed.lowercased() == "nfo"
+        let isNf = !isNfo && (lowerRaw.hasPrefix("nf ") || trimmed.lowercased() == "nf")
+
+        if isNf || isNfo {
+            let fileNameArg: String
+            if isNfo {
+                fileNameArg = trimmed.lowercased() == "nfo" ? "" : String(raw.dropFirst(4)).trimmingCharacters(in: .whitespaces)
+            } else {
+                fileNameArg = trimmed.lowercased() == "nf" ? "" : String(raw.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+            }
+
+            let preview = NewFileService.shared.preview(input: fileNameArg)
+            let itemTitle = isNfo
+                ? L("Tạo & Mở tệp: \(preview.fileName)", "Create & Open: \(preview.fileName)")
+                : L("Tạo tệp mới: \(preview.fileName)", "Create new file: \(preview.fileName)")
+            let itemSub = isNfo
+                ? L("Tại \(preview.folderDisplayName)  •  Nhấn ↩ tạo và mở ngay bằng ứng dụng mặc định", "In \(preview.folderDisplayName)  •  Press ↩ to create and open immediately")
+                : L("Tại \(preview.folderDisplayName)  •  Nhấn ↩ tạo tệp và chọn trong Finder (hoặc gõ 'nfo ' để mở luôn)", "In \(preview.folderDisplayName)  •  Press ↩ to create and reveal in Finder (or 'nfo ' to open)")
+
+            let actionItem = SearchResultItem(
+                id: "newfile_\(preview.fileName)_\(isNfo)",
+                title: itemTitle,
+                subtitle: itemSub,
+                path: preview.targetDirectory.path,
+                isDirectory: false,
+                kind: .newFileAction(rawInput: fileNameArg, openAfter: isNfo),
+                badge: isNfo ? "New & Open" : "New File",
+                sfSymbolFallback: preview.sfSymbol
+            )
+
+            searchResults = [actionItem]
+            selectedIndex = 0
+            return
+        }
+
+        // 3.8. Scratchpad / Quick Notes Mode (`n` / `n <nội dung>` or `note` / `note <nội dung>`)
+        let isNotePrefix = lowerRaw.hasPrefix("note ") || trimmed.lowercased() == "note"
+        let isNPrefix = !isNotePrefix && (lowerRaw.hasPrefix("n ") || trimmed.lowercased() == "n")
+
+        if isNotePrefix || isNPrefix {
+            let noteContent: String
+            if isNotePrefix {
+                noteContent = trimmed.lowercased() == "note" ? "" : String(raw.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+            } else {
+                noteContent = trimmed.lowercased() == "n" ? "" : String(raw.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+            }
+
+            var items: [SearchResultItem] = []
+
+            if noteContent.isEmpty {
+                let openItem = SearchResultItem(
+                    id: "scratchpad_open_hud",
+                    title: L("Mở Ghi chú nháp (Scratchpad HUD)", "Open Scratchpad HUD Notes"),
+                    subtitle: L("Khung ghi chép nổi hỗ trợ Markdown, ghim trên cùng, tự động lưu • Nhấn ↩ để mở", "Floating Markdown scratchpad, pin on top, auto-saves • Press ↩ to open"),
+                    path: ScratchpadService.shared.filePathString,
+                    isDirectory: false,
+                    kind: .scratchpadAction(appendQuery: nil),
+                    badge: "Scratchpad",
+                    sfSymbolFallback: "note.text"
+                )
+                items.append(openItem)
+            } else {
+                let appendItem = SearchResultItem(
+                    id: "scratchpad_append_\(noteContent.hashValue)",
+                    title: L("Thêm vào Scratchpad: '\(noteContent)'", "Append to Scratchpad: '\(noteContent)'"),
+                    subtitle: L("Nhấn ↩ để chèn thêm dòng này vào cuối tệp ghi chú nháp", "Press ↩ to append this note to Scratchpad.md"),
+                    path: ScratchpadService.shared.filePathString,
+                    isDirectory: false,
+                    kind: .scratchpadAction(appendQuery: noteContent),
+                    badge: "+ Note",
+                    sfSymbolFallback: "square.and.pencil"
+                )
+                let openItem = SearchResultItem(
+                    id: "scratchpad_open_hud_with_text",
+                    title: L("Mở toàn bộ Ghi chú nháp (Scratchpad HUD)", "Open Full Scratchpad HUD"),
+                    subtitle: L("Xem hoặc chỉnh sửa toàn bộ nội dung ghi chú • Nhấn ⌥↩", "View and edit full notes • Press ⌥↩"),
+                    path: ScratchpadService.shared.filePathString,
+                    isDirectory: false,
+                    kind: .scratchpadAction(appendQuery: nil),
+                    badge: "Scratchpad",
+                    sfSymbolFallback: "note.text"
+                )
+                items.append(appendItem)
+                items.append(openItem)
+            }
+
+            searchResults = items
+            selectedIndex = 0
+            return
+        }
+
+        // 3.9. Duplicate Files Scanner Mode (`dup` / `duplicate`)
+        if trimmed.lowercased() == "dup" || lowerRaw.hasPrefix("dup ") ||
+           trimmed.lowercased() == "duplicate" || lowerRaw.hasPrefix("duplicate ") ||
+           trimmed.lowercased() == "duplicates" || lowerRaw.hasPrefix("duplicates ") {
+
+            let filterTerm: String
+            if lowerRaw.hasPrefix("duplicate ") {
+                filterTerm = String(raw.dropFirst(10)).trimmingCharacters(in: .whitespaces)
+            } else if lowerRaw.hasPrefix("duplicates ") {
+                filterTerm = String(raw.dropFirst(11)).trimmingCharacters(in: .whitespaces)
+            } else if lowerRaw.hasPrefix("dup ") {
+                filterTerm = String(raw.dropFirst(4)).trimmingCharacters(in: .whitespaces)
+            } else {
+                filterTerm = ""
+            }
+
+            // Collect candidate files from file index
+            let allCandidatePaths = drive.fastFileIndex.records.map(\.entry.path)
+            var candidateURLs: [URL] = []
+            for p in allCandidatePaths {
+                if filterTerm.isEmpty || p.localizedCaseInsensitiveContains(filterTerm) {
+                    candidateURLs.append(URL(fileURLWithPath: p))
+                }
+            }
+
+            let duplicateGroups = DriveDeepSearchService.shared.findDuplicates(in: candidateURLs, maxGroups: 25)
+
+            if duplicateGroups.isEmpty {
+                let emptyBanner = SearchResultItem(
+                    id: "dup_empty_banner",
+                    title: L("Không phát hiện tệp trùng lặp nào", "No duplicate files found"),
+                    subtitle: filterTerm.isEmpty
+                        ? L("Các tệp trong Google Drive và thư mục Mac của bạn đang rất gọn gàng", "Indexed Google Drive and Mac files are completely clean")
+                        : L("Không có tệp trùng lặp khớp từ khóa '\(filterTerm)'", "No duplicates matching '\(filterTerm)'"),
+                    path: nil,
+                    isDirectory: false,
+                    kind: .infoBanner,
+                    badge: "Duplicates",
+                    sfSymbolFallback: "checkmark.seal"
+                )
+                searchResults = [emptyBanner]
+                selectedIndex = 0
+                return
+            }
+
+            var dupResultItems: [SearchResultItem] = []
+            var totalWastedBytes: Int64 = 0
+
+            for group in duplicateGroups {
+                totalWastedBytes += group.wastedBytes
+                let sizeFormatted = ByteCountFormatter.string(fromByteCount: group.sizeBytes, countStyle: .file)
+
+                for (idx, itemURL) in group.items.enumerated() {
+                    let isOriginal = (idx == 0)
+                    let pathStr = itemURL.path
+                    let displayDir = ((pathStr as NSString).deletingLastPathComponent as NSString).abbreviatingWithTildeInPath
+                    let copiesCount = group.items.count
+
+                    let subText = isOriginal
+                        ? L("Bản gốc • \(sizeFormatted) • \(displayDir)", "Original copy • \(sizeFormatted) • \(displayDir)")
+                        : L("Bản sao trùng • Tiết kiệm được \(sizeFormatted) nếu xóa • \(displayDir)", "Duplicate copy • Saves \(sizeFormatted) if deleted • \(displayDir)")
+
+                    let item = SearchResultItem(
+                        id: "dup_\(group.id)_\(idx)_\(pathStr)",
+                        title: itemURL.lastPathComponent,
+                        subtitle: subText,
+                        path: pathStr,
+                        isDirectory: false,
+                        kind: .duplicateItem(filePath: pathStr, sizeBytes: group.sizeBytes, copiesCount: copiesCount),
+                        badge: isOriginal ? "Original" : "Duplicate",
+                        sfSymbolFallback: isOriginal ? "doc" : "doc.on.doc.fill"
+                    )
+                    dupResultItems.append(item)
+                }
+            }
+
+            let wastedStr = ByteCountFormatter.string(fromByteCount: totalWastedBytes, countStyle: .file)
+            let summaryHeader = SearchResultItem(
+                id: "dup_summary_header",
+                title: L("Tìm thấy \(duplicateGroups.count) nhóm tệp trùng (Lãng phí ~\(wastedStr))", "Found \(duplicateGroups.count) duplicate groups (Wasting ~\(wastedStr))"),
+                subtitle: L("Nhấn ↩ để mở  •  ⌘↩ xem trong Finder  •  ⇧ Quick Look  •  ⌥⌫ xóa tệp trùng", "Press ↩ to open  •  ⌘↩ reveal in Finder  •  ⇧ Quick Look  •  ⌥⌫ delete duplicate"),
+                path: nil,
+                isDirectory: false,
+                kind: .infoBanner,
+                badge: "\(duplicateGroups.count) Groups",
+                sfSymbolFallback: "archivebox.circle"
+            )
+
+            searchResults = [summaryHeader] + dupResultItems
+            selectedIndex = dupResultItems.isEmpty ? 0 : 1
+            return
+        }
+
         // 4. Parse optional prefixes `f ` or `fs `
         var isSharedMode = false
         var effectiveQuery = trimmed
@@ -1370,22 +1571,52 @@ final class LauncherViewModel: ObservableObject {
                     vm.selectedIndex = 0
                 }
             } else {
-                let hits = GoogleDriveIndexService.evaluateMyDriveSearchHits(
-                    tokens: tokens,
-                    fastIndex: fastFolders,
-                    historySnapshot: histSnap,
-                    maxResults: 45
-                )
-                let shouldIncludeFiles = hasExtToken || (hits.count < 5 && querySnap.count >= 3)
+                let deepTokens = DriveDeepSearchService.shared.parseTokens(from: querySnap)
+                let hits: [(path: String, historyCount: Int)]
+                if deepTokens.hasFilters && deepTokens.rawTextQuery.isEmpty {
+                    hits = []
+                } else {
+                    let searchTokens = deepTokens.hasFilters ? deepTokens.rawTextQuery.split(separator: " ").map(String.init) : tokens
+                    hits = GoogleDriveIndexService.evaluateMyDriveSearchHits(
+                        tokens: searchTokens,
+                        fastIndex: fastFolders,
+                        historySnapshot: histSnap,
+                        maxResults: 45
+                    )
+                }
+
+                let shouldIncludeFiles = hasExtToken || deepTokens.hasFilters || (hits.count < 5 && querySnap.count >= 3)
                 let fileHits: [(entry: DriveFileEntry, historyCount: Int, isPinned: Bool)]
-                if shouldIncludeFiles {
-                    fileHits = GoogleDriveIndexService.evaluateFileSearchHits(
-                        tokens: tokens,
+
+                if deepTokens.hasFilters && deepTokens.rawTextQuery.isEmpty {
+                    var filteredRecords: [(entry: DriveFileEntry, historyCount: Int, isPinned: Bool)] = []
+                    for rec in fastFiles.records {
+                        let u = URL(fileURLWithPath: rec.entry.path)
+                        if DriveDeepSearchService.shared.matches(fileURL: u, ext: rec.entry.ext, tokens: deepTokens) {
+                            let hist = histSnap[rec.entry.path]?.count ?? 0
+                            let isP = pinSet.contains(rec.entry.path)
+                            filteredRecords.append((entry: rec.entry, historyCount: hist, isPinned: isP))
+                            if filteredRecords.count >= 45 { break }
+                        }
+                    }
+                    fileHits = filteredRecords
+                } else if shouldIncludeFiles {
+                    let searchTokens = deepTokens.hasFilters ? deepTokens.rawTextQuery.split(separator: " ").map(String.init) : tokens
+                    let rawHits = GoogleDriveIndexService.evaluateFileSearchHits(
+                        tokens: searchTokens,
                         fastIndex: fastFiles,
                         historySnapshot: histSnap,
                         pinnedSet: pinSet,
-                        maxResults: hasExtToken ? 25 : 12
+                        maxResults: (hasExtToken || deepTokens.hasFilters) ? 35 : 12
                     )
+                    if deepTokens.hasFilters {
+                        fileHits = rawHits.filter {
+                            let u = URL(fileURLWithPath: $0.entry.path)
+                            return DriveDeepSearchService.shared.matches(fileURL: u, ext: $0.entry.ext, tokens: deepTokens)
+                        }
+                    } else {
+                        fileHits = rawHits
+                    }
                 } else {
                     fileHits = []
                 }
@@ -2222,6 +2453,52 @@ final class LauncherViewModel: ObservableObject {
                 subtitle: "\(expr) = \(prettyVal)",
                 symbol: "function"
             )
+
+        case .newFileAction(let rawInput, let openAfter):
+            LauncherPanelController.shared.hide()
+            _ = NewFileService.shared.createNewFile(rawInput: rawInput, openAfter: openAfter)
+            return
+
+        case .scratchpadAction(let appendQuery):
+            LauncherPanelController.shared.hide()
+            if let append = appendQuery, !append.isEmpty {
+                ScratchpadService.shared.appendLine(append)
+            } else {
+                ScratchpadHUDController.shared.show()
+            }
+            return
+
+        case .duplicateItem(let filePath, _, _):
+            let fileURL = URL(fileURLWithPath: filePath)
+            if modifiers.contains(.option) {
+                LauncherPanelController.shared.hide()
+                do {
+                    try FileManager.default.trashItem(at: fileURL, resultingItemURL: nil)
+                    FloatingToastController.shared.showSuccess(
+                        title: L("Đã chuyển tệp trùng vào Thùng rác", "Moved duplicate to Trash"),
+                        subtitle: fileURL.lastPathComponent,
+                        symbol: "trash"
+                    )
+                } catch {
+                    FloatingToastController.shared.showError(
+                        title: L("Không thể xóa tệp", "Could not delete file"),
+                        subtitle: error.localizedDescription
+                    )
+                }
+                return
+            }
+            if modifiers.contains(.command) {
+                LauncherPanelController.shared.hide()
+                NSWorkspace.shared.activateFileViewerSelecting([fileURL])
+                return
+            }
+            if modifiers.contains(.shift) {
+                openUniversalActions(for: .files([fileURL]), directExternalTrigger: false)
+                return
+            }
+            LauncherPanelController.shared.hide()
+            NSWorkspace.shared.open(fileURL)
+            return
 
         case .contactItem(let contactID):
             if modifiers.contains(.command) {

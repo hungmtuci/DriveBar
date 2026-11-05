@@ -340,9 +340,9 @@ private struct SearchResultRowView: View {
 
     private var supportsUniversalActions: Bool {
         switch item.kind {
-        case .systemCommand, .contactItem, .calculatorResult, .infoBanner:
+        case .systemCommand, .contactItem, .calculatorResult, .infoBanner, .newFileAction, .scratchpadAction:
             return false
-        case .clipboardItem, .webURLQuickConvert:
+        case .clipboardItem, .webURLQuickConvert, .duplicateItem:
             return true
         default:
             return item.path != nil
