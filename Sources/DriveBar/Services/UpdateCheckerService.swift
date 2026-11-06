@@ -258,6 +258,8 @@ final class UpdateCheckerService: ObservableObject {
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
                 proc.arguments = ["-x", "-k", zipPath, extractDirPath]
+                proc.standardOutput = FileHandle.nullDevice
+                proc.standardError = FileHandle.nullDevice
                 do {
                     try proc.run()
                     proc.waitUntilExit()
@@ -274,6 +276,27 @@ final class UpdateCheckerService: ObservableObject {
                             NSLocalizedDescriptionKey: "Không tìm thấy DriveBar.app hợp lệ trong gói tải về"
                         ])
                     }
+
+                    guard let candidateBundle = Bundle(url: candidateApp),
+                          candidateBundle.bundleIdentifier == "com.hunglx.DriveBar" else {
+                        throw NSError(domain: "DriveBarUpdate", code: -3, userInfo: [
+                            NSLocalizedDescriptionKey: "CFBundleIdentifier của gói cập nhật không khớp com.hunglx.DriveBar"
+                        ])
+                    }
+
+                    let verifyProc = Process()
+                    verifyProc.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+                    verifyProc.arguments = ["--verify", "--deep", "--strict", candidateApp.path]
+                    verifyProc.standardOutput = FileHandle.nullDevice
+                    verifyProc.standardError = FileHandle.nullDevice
+                    try verifyProc.run()
+                    verifyProc.waitUntilExit()
+                    guard verifyProc.terminationStatus == 0 else {
+                        throw NSError(domain: "DriveBarUpdate", code: -4, userInfo: [
+                            NSLocalizedDescriptionKey: "Chữ ký số của gói cập nhật không hợp lệ (codesign \(verifyProc.terminationStatus))"
+                        ])
+                    }
+
                     continuation.resume(returning: candidateApp)
                 } catch {
                     continuation.resume(throwing: error)
@@ -297,9 +320,19 @@ final class UpdateCheckerService: ObservableObject {
             kill -0 "$OLD_PID" 2>/dev/null || break
             sleep 0.2
         done
-        rm -rf "$DST_APP"
-        /usr/bin/ditto --noextattr "$SRC_APP" "$DST_APP"
-        /usr/bin/xattr -cr "$DST_APP" 2>/dev/null || true
+        DST_PARENT="$(dirname "$DST_APP")"
+        if [ -w "$DST_PARENT" ] && { [ ! -e "$DST_APP" ] || [ -w "$DST_APP" ]; }; then
+            rm -rf "$DST_APP"
+            /usr/bin/ditto --noextattr "$SRC_APP" "$DST_APP"
+            /usr/bin/xattr -cr "$DST_APP" 2>/dev/null || true
+        else
+            export SRC_APP DST_APP
+            /usr/bin/osascript -e '
+                set srcApp to quoted form of (system attribute "SRC_APP")
+                set dstApp to quoted form of (system attribute "DST_APP")
+                do shell script "rm -rf " & dstApp & " && /usr/bin/ditto --noextattr " & srcApp & " " & dstApp & " && /usr/bin/xattr -cr " & dstApp with administrator privileges
+            '
+        fi
         /usr/bin/open "$DST_APP"
         rm -rf "$STAGE_DIR"
         """

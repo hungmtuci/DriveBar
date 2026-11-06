@@ -42,7 +42,7 @@ final class SyncAndLatchingService: ObservableObject {
     private var localSettingsTimestamp: Double = 0
     private var syncEventStream: FSEventStreamRef?
     private let fseventQueue = DispatchQueue(label: "com.hunglx.DriveBar.syncthingWatcher", qos: .utility)
-    private var isWritingSyncFiles: Bool = false
+    private var activeSyncWriteCount: Int = 0
 
     private let homePath = FileManager.default.homeDirectoryForCurrentUser.path
     private var localLatchPath: String { "\(homePath)/.config/alfred-scripts/drivebar_latching.json" }
@@ -223,12 +223,12 @@ final class SyncAndLatchingService: ObservableObject {
             appLanguage: s.appLanguage.rawValue
         )
         let targetFile = "\(expandedSyncDir)/portable_settings.json"
-        isWritingSyncFiles = true
+        activeSyncWriteCount += 1
         Task.detached(priority: .utility) {
             Self.writeAtomicJSON(payload, to: targetFile)
             try? await Task.sleep(nanoseconds: 500_000_000)
             await MainActor.run {
-                SyncAndLatchingService.shared.isWritingSyncFiles = false
+                SyncAndLatchingService.shared.activeSyncWriteCount = max(0, SyncAndLatchingService.shared.activeSyncWriteCount - 1)
                 SyncAndLatchingService.shared.lastSyncDate = Date()
             }
         }
@@ -238,12 +238,12 @@ final class SyncAndLatchingService: ObservableObject {
         guard AppSettings.shared.enableSyncthingSync else { return }
         let targetFile = "\(expandedSyncDir)/portable_history.json"
         syncedRecordCount = portableMap.count
-        isWritingSyncFiles = true
+        activeSyncWriteCount += 1
         Task.detached(priority: .utility) {
             Self.writeAtomicJSON(portableMap, to: targetFile)
             try? await Task.sleep(nanoseconds: 500_000_000)
             await MainActor.run {
-                SyncAndLatchingService.shared.isWritingSyncFiles = false
+                SyncAndLatchingService.shared.activeSyncWriteCount = max(0, SyncAndLatchingService.shared.activeSyncWriteCount - 1)
                 SyncAndLatchingService.shared.lastSyncDate = Date()
             }
         }
@@ -252,12 +252,12 @@ final class SyncAndLatchingService: ObservableObject {
     private func pushLatchingToSyncFolder() {
         let snap = latchMap
         let targetFile = "\(expandedSyncDir)/action_latching.json"
-        isWritingSyncFiles = true
+        activeSyncWriteCount += 1
         Task.detached(priority: .utility) {
             Self.writeAtomicJSON(snap, to: targetFile)
             try? await Task.sleep(nanoseconds: 500_000_000)
             await MainActor.run {
-                SyncAndLatchingService.shared.isWritingSyncFiles = false
+                SyncAndLatchingService.shared.activeSyncWriteCount = max(0, SyncAndLatchingService.shared.activeSyncWriteCount - 1)
             }
         }
     }
@@ -337,7 +337,7 @@ final class SyncAndLatchingService: ObservableObject {
             guard relevant else { return }
 
             Task { @MainActor in
-                guard !SyncAndLatchingService.shared.isWritingSyncFiles else { return }
+                guard SyncAndLatchingService.shared.activeSyncWriteCount == 0 else { return }
                 SyncAndLatchingService.shared.syncNow()
             }
         }
@@ -375,7 +375,7 @@ final class SyncAndLatchingService: ObservableObject {
         let fm = FileManager.default
         let dir = (filePath as NSString).deletingLastPathComponent
         try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        let tmp = "\(filePath).tmp.\(ProcessInfo.processInfo.processIdentifier)"
+        let tmp = "\(filePath).tmp.\(UUID().uuidString)"
         guard let encoder: JSONEncoder = {
             let e = JSONEncoder()
             e.outputFormatting = [.prettyPrinted, .sortedKeys]

@@ -1313,71 +1313,92 @@ final class LauncherViewModel: ObservableObject {
                 }
             }
 
-            let duplicateGroups = DriveDeepSearchService.shared.findDuplicates(in: candidateURLs, maxGroups: 25)
-
-            if duplicateGroups.isEmpty {
-                let emptyBanner = SearchResultItem(
-                    id: "dup_empty_banner",
-                    title: L("Không phát hiện tệp trùng lặp nào", "No duplicate files found"),
-                    subtitle: filterTerm.isEmpty
-                        ? L("Các tệp trong Google Drive và thư mục Mac của bạn đang rất gọn gàng", "Indexed Google Drive and Mac files are completely clean")
-                        : L("Không có tệp trùng lặp khớp từ khóa '\(filterTerm)'", "No duplicates matching '\(filterTerm)'"),
-                    path: nil,
-                    isDirectory: false,
-                    kind: .infoBanner,
-                    badge: "Duplicates",
-                    sfSymbolFallback: "checkmark.seal"
-                )
-                searchResults = [emptyBanner]
-                selectedIndex = 0
-                return
-            }
-
-            var dupResultItems: [SearchResultItem] = []
-            var totalWastedBytes: Int64 = 0
-
-            for group in duplicateGroups {
-                totalWastedBytes += group.wastedBytes
-                let sizeFormatted = ByteCountFormatter.string(fromByteCount: group.sizeBytes, countStyle: .file)
-
-                for (idx, itemURL) in group.items.enumerated() {
-                    let isOriginal = (idx == 0)
-                    let pathStr = itemURL.path
-                    let displayDir = ((pathStr as NSString).deletingLastPathComponent as NSString).abbreviatingWithTildeInPath
-                    let copiesCount = group.items.count
-
-                    let subText = isOriginal
-                        ? L("Bản gốc • \(sizeFormatted) • \(displayDir)", "Original copy • \(sizeFormatted) • \(displayDir)")
-                        : L("Bản sao trùng • Tiết kiệm được \(sizeFormatted) nếu xóa • \(displayDir)", "Duplicate copy • Saves \(sizeFormatted) if deleted • \(displayDir)")
-
-                    let item = SearchResultItem(
-                        id: "dup_\(group.id)_\(idx)_\(pathStr)",
-                        title: itemURL.lastPathComponent,
-                        subtitle: subText,
-                        path: pathStr,
-                        isDirectory: false,
-                        kind: .duplicateItem(filePath: pathStr, sizeBytes: group.sizeBytes, copiesCount: copiesCount),
-                        badge: isOriginal ? "Original" : "Duplicate",
-                        sfSymbolFallback: isOriginal ? "doc" : "doc.on.doc.fill"
-                    )
-                    dupResultItems.append(item)
-                }
-            }
-
-            let wastedStr = ByteCountFormatter.string(fromByteCount: totalWastedBytes, countStyle: .file)
-            let summaryHeader = SearchResultItem(
-                id: "dup_summary_header",
-                title: L("Tìm thấy \(duplicateGroups.count) nhóm tệp trùng (Lãng phí ~\(wastedStr))", "Found \(duplicateGroups.count) duplicate groups (Wasting ~\(wastedStr))"),
-                subtitle: L("Nhấn ↩ để mở  •  ⌘↩ xem trong Finder  •  ⇧ Quick Look  •  ⌥⌫ xóa tệp trùng", "Press ↩ to open  •  ⌘↩ reveal in Finder  •  ⇧ Quick Look  •  ⌥⌫ delete duplicate"),
+            let scanningBanner = SearchResultItem(
+                id: "dup_scanning_banner",
+                title: L("Đang quét tìm tệp trùng lặp...", "Scanning for duplicate files..."),
+                subtitle: L("Đang đối chiếu kích thước và mã băm SHA-256 trên nền", "Comparing file sizes and SHA-256 digests in the background"),
                 path: nil,
                 isDirectory: false,
                 kind: .infoBanner,
-                badge: "\(duplicateGroups.count) Groups",
-                sfSymbolFallback: "archivebox.circle"
+                badge: "Scanning",
+                sfSymbolFallback: "magnifyingglass.circle"
             )
+            searchResults = [scanningBanner]
+            selectedIndex = 0
 
-            searchResults = [summaryHeader] + dupResultItems
-            selectedIndex = dupResultItems.isEmpty ? 0 : 1
+            let capturedCandidates = candidateURLs
+            let capturedFilterTerm = filterTerm
+            Self.searchQueue.async {
+                let duplicateGroups = DriveDeepSearchService.shared.findDuplicates(in: capturedCandidates, maxGroups: 25)
+                Task { @MainActor in
+                    let vm = LauncherViewModel.shared
+                    guard vm.searchGeneration == gen else { return }
+
+                    if duplicateGroups.isEmpty {
+                        let emptyBanner = SearchResultItem(
+                            id: "dup_empty_banner",
+                            title: L("Không phát hiện tệp trùng lặp nào", "No duplicate files found"),
+                            subtitle: capturedFilterTerm.isEmpty
+                                ? L("Các tệp trong Google Drive và thư mục Mac của bạn đang rất gọn gàng", "Indexed Google Drive and Mac files are completely clean")
+                                : L("Không có tệp trùng lặp khớp từ khóa '\(capturedFilterTerm)'", "No duplicates matching '\(capturedFilterTerm)'"),
+                            path: nil,
+                            isDirectory: false,
+                            kind: .infoBanner,
+                            badge: "Duplicates",
+                            sfSymbolFallback: "checkmark.seal"
+                        )
+                        vm.searchResults = [emptyBanner]
+                        vm.selectedIndex = 0
+                        return
+                    }
+
+                    var dupResultItems: [SearchResultItem] = []
+                    var totalWastedBytes: Int64 = 0
+
+                    for group in duplicateGroups {
+                        totalWastedBytes += group.wastedBytes
+                        let sizeFormatted = ByteCountFormatter.string(fromByteCount: group.sizeBytes, countStyle: .file)
+
+                        for (idx, itemURL) in group.items.enumerated() {
+                            let isOriginal = (idx == 0)
+                            let pathStr = itemURL.path
+                            let displayDir = ((pathStr as NSString).deletingLastPathComponent as NSString).abbreviatingWithTildeInPath
+                            let copiesCount = group.items.count
+
+                            let subText = isOriginal
+                                ? L("Bản gốc • \(sizeFormatted) • \(displayDir)", "Original copy • \(sizeFormatted) • \(displayDir)")
+                                : L("Bản sao trùng • Tiết kiệm được \(sizeFormatted) nếu xóa • \(displayDir)", "Duplicate copy • Saves \(sizeFormatted) if deleted • \(displayDir)")
+
+                            let item = SearchResultItem(
+                                id: "dup_\(group.id)_\(idx)_\(pathStr)",
+                                title: itemURL.lastPathComponent,
+                                subtitle: subText,
+                                path: pathStr,
+                                isDirectory: false,
+                                kind: .duplicateItem(filePath: pathStr, sizeBytes: group.sizeBytes, copiesCount: copiesCount),
+                                badge: isOriginal ? "Original" : "Duplicate",
+                                sfSymbolFallback: isOriginal ? "doc" : "doc.on.doc.fill"
+                            )
+                            dupResultItems.append(item)
+                        }
+                    }
+
+                    let wastedStr = ByteCountFormatter.string(fromByteCount: totalWastedBytes, countStyle: .file)
+                    let summaryHeader = SearchResultItem(
+                        id: "dup_summary_header",
+                        title: L("Tìm thấy \(duplicateGroups.count) nhóm tệp trùng (Lãng phí ~\(wastedStr))", "Found \(duplicateGroups.count) duplicate groups (Wasting ~\(wastedStr))"),
+                        subtitle: L("Nhấn ↩ để mở  •  ⌘↩ xem trong Finder  •  ⇧ Quick Look  •  ⌥⌫ xóa tệp trùng", "Press ↩ to open  •  ⌘↩ reveal in Finder  •  ⇧ Quick Look  •  ⌥⌫ delete duplicate"),
+                        path: nil,
+                        isDirectory: false,
+                        kind: .infoBanner,
+                        badge: "\(duplicateGroups.count) Groups",
+                        sfSymbolFallback: "archivebox.circle"
+                    )
+
+                    vm.searchResults = [summaryHeader] + dupResultItems
+                    vm.selectedIndex = dupResultItems.isEmpty ? 0 : 1
+                }
+            }
             return
         }
 
@@ -1513,10 +1534,11 @@ final class LauncherViewModel: ObservableObject {
             return
         }
 
-        // Instant 0ms Math Calculator & Alfred System Commands feedback while background search queue evaluates folders/files
+        // Instant 0ms Recalled History, Math Calculator & Alfred System Commands feedback while background search queue evaluates folders/files
+        let recalledInstant = drive.recallPreviouslyUsedItems(for: effectiveQuery, isSharedMode: isSharedMode)
         let instantSysItems = InstantUtilityService.searchSystemCommands(query: effectiveQuery, isExplicitSystemMode: false)
         let liveMath = InstantUtilityService.evaluateMathExpression(effectiveQuery)
-        if !instantSysItems.isEmpty || liveMath != nil {
+        if !recalledInstant.isEmpty || !instantSysItems.isEmpty || liveMath != nil {
             var current = searchResults.filter {
                 if case .calculatorResult = $0.kind { return false }
                 if case .systemCommand = $0.kind { return false }
@@ -1526,10 +1548,13 @@ final class LauncherViewModel: ObservableObject {
             if !instantSysItems.isEmpty {
                 current.insert(contentsOf: instantSysItems, at: 0)
             }
+            if !recalledInstant.isEmpty {
+                current.insert(contentsOf: recalledInstant, at: 0)
+            }
             if let liveMath {
                 current.insert(Self.makeCalculatorResultItem(liveMath), at: 0)
             }
-            searchResults = current
+            searchResults = Self.deduplicatePreservingOrder(current)
             selectedIndex = 0
         }
 
@@ -1764,9 +1789,16 @@ final class LauncherViewModel: ObservableObject {
             results.insert(contentsOf: inlineUtilities, at: 0)
         }
 
+        let recalled = GoogleDriveIndexService.shared.recallPreviouslyUsedItems(for: effectiveQuery, isSharedMode: isSharedMode)
+        if !recalled.isEmpty {
+            results.insert(contentsOf: recalled, at: 0)
+        }
+
         if let math = InstantUtilityService.evaluateMathExpression(effectiveQuery) {
             results.insert(Self.makeCalculatorResultItem(math), at: 0)
         }
+
+        results = Self.deduplicatePreservingOrder(results)
 
         if results.isEmpty {
             results = [
@@ -1782,6 +1814,49 @@ final class LauncherViewModel: ObservableObject {
                 )
             ]
         }
+    }
+
+    private static func canonicalDedupKey(for item: SearchResultItem) -> String {
+        switch item.kind {
+        case .systemCommand(let id):
+            return "sys:\(id)"
+        case .localApp(let path), .driveFolder(let path), .driveFile(let path), .openInFinder(let path), .parentFolder(let path):
+            return "path:\(path)"
+        default:
+            return "id:\(item.id)"
+        }
+    }
+
+    private static func deduplicatePreservingOrder(_ items: [SearchResultItem]) -> [SearchResultItem] {
+        var seen = Set<String>()
+        var out: [SearchResultItem] = []
+        out.reserveCapacity(items.count)
+        for item in items {
+            let key = canonicalDedupKey(for: item)
+            if seen.insert(key).inserted {
+                out.append(item)
+            }
+        }
+        return out
+    }
+
+    private var currentEffectiveSearchQueryForHistory: String? {
+        let raw = searchText
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed.hasPrefix("/") {
+            return nil
+        }
+        let lower = raw.lowercased()
+        let nonHistoryPrefixes = ["c ", "cb ", "clip ", "nf ", "nfo ", "n ", "note ", "dup ", "duplicate ", "duplicates "]
+        if nonHistoryPrefixes.contains(where: { lower.hasPrefix($0) }) {
+            return nil
+        }
+        let strippedPrefixes = ["fs ", "ff ", "f ", "a ", "s ", "m "]
+        for p in strippedPrefixes where lower.hasPrefix(p) {
+            let sub = String(raw.dropFirst(p.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return sub.isEmpty ? nil : sub
+        }
+        return trimmed
     }
 
     private static func makeCalculatorResultItem(_ math: MathEvaluationResult) -> SearchResultItem {
@@ -2564,6 +2639,9 @@ final class LauncherViewModel: ObservableObject {
             }
 
         case .systemCommand(let cmd):
+            if InstantUtilityService.allSystemCommands.contains(where: { $0.id == cmd }) {
+                GoogleDriveIndexService.shared.recordUsed("sys:\(cmd)", query: currentEffectiveSearchQueryForHistory)
+            }
             if InstantUtilityService.executeSystemUtility(id: cmd, viewModel: self, modifiers: modifiers) {
                 return
             }
@@ -2629,7 +2707,7 @@ final class LauncherViewModel: ObservableObject {
 
         case .openInFinder(let folderPath):
             let folderURL = URL(fileURLWithPath: folderPath, isDirectory: true)
-            GoogleDriveIndexService.shared.recordUsed(folderPath)
+            GoogleDriveIndexService.shared.recordUsed(folderPath, query: currentEffectiveSearchQueryForHistory)
             if modifiers.contains(.shift) {
                 openUniversalActions(for: .files([folderURL]), directExternalTrigger: false)
                 return
@@ -2647,7 +2725,7 @@ final class LauncherViewModel: ObservableObject {
 
         case .localApp(let appPath):
             let appURL = URL(fileURLWithPath: appPath)
-            GoogleDriveIndexService.shared.recordUsed(appPath)
+            GoogleDriveIndexService.shared.recordUsed(appPath, query: currentEffectiveSearchQueryForHistory)
             if modifiers.contains(.shift) {
                 openUniversalActions(for: .files([appURL]), directExternalTrigger: false)
                 return
@@ -2673,7 +2751,7 @@ final class LauncherViewModel: ObservableObject {
 
         case .driveFolder(let path), .driveFile(let path):
             let fileURL = URL(fileURLWithPath: path, isDirectory: item.isDirectory)
-            GoogleDriveIndexService.shared.recordUsed(path)
+            GoogleDriveIndexService.shared.recordUsed(path, query: currentEffectiveSearchQueryForHistory)
 
             if modifiers.contains(.shift) {
                 openUniversalActions(for: .files([fileURL]), directExternalTrigger: false)

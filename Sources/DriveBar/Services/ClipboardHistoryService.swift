@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Carbon
+import CryptoKit
 
 enum ClipboardEntryKind: String, Codable, Sendable {
     case text
@@ -137,6 +138,7 @@ final class ClipboardHistoryService: ObservableObject {
                     ? String(singleLineTitle.prefix(92)) + "…"
                     : singleLineTitle
 
+                let textDigestHex = SHA256.hash(data: Data(capped.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
                 let entry = ClipboardHistoryEntry(
                     id: UUID().uuidString,
                     kind: isWebURL ? .url : .text,
@@ -146,7 +148,7 @@ final class ClipboardHistoryService: ObservableObject {
                     sourceAppName: appName,
                     timestamp: Date().timeIntervalSince1970,
                     charCount: rawText.count,
-                    contentHash: "txt:\(capped.hashValue):\(capped.count)"
+                    contentHash: "txt:\(textDigestHex):\(capped.count)"
                 )
                 insertOrPromote(entry)
                 return
@@ -158,7 +160,8 @@ final class ClipboardHistoryService: ObservableObject {
            let rep = NSBitmapImageRep(data: pngOrTiffData),
            rep.pixelsWide >= 8 && rep.pixelsHigh >= 8,
            let pngData = rep.representation(using: .png, properties: [:]) {
-            let hashKey = "img:\(rep.pixelsWide)x\(rep.pixelsHigh):\(pngData.count)"
+            let imgDigestHex = SHA256.hash(data: pngData).prefix(16).map { String(format: "%02x", $0) }.joined()
+            let hashKey = "img:\(rep.pixelsWide)x\(rep.pixelsHigh):\(pngData.count):\(imgDigestHex)"
             if let existingIdx = entries.firstIndex(where: { $0.contentHash == hashKey }) {
                 var existing = entries.remove(at: existingIdx)
                 existing.timestamp = Date().timeIntervalSince1970
@@ -240,9 +243,23 @@ final class ClipboardHistoryService: ObservableObject {
     }
 
     private func insertOrPromote(_ newEntry: ClipboardHistoryEntry) {
-        if let idx = entries.firstIndex(where: { $0.contentHash == newEntry.contentHash }) {
+        if let idx = entries.firstIndex(where: {
+            $0.contentHash == newEntry.contentHash ||
+            ($0.kind == newEntry.kind && ($0.kind == .text || $0.kind == .url) && $0.textContent == newEntry.textContent)
+        }) {
             var promoted = entries.remove(at: idx)
             promoted.timestamp = newEntry.timestamp
+            promoted = ClipboardHistoryEntry(
+                id: promoted.id,
+                kind: promoted.kind,
+                title: promoted.title,
+                textContent: promoted.textContent,
+                filePaths: promoted.filePaths,
+                sourceAppName: newEntry.sourceAppName ?? promoted.sourceAppName,
+                timestamp: newEntry.timestamp,
+                charCount: promoted.charCount,
+                contentHash: newEntry.contentHash
+            )
             entries.insert(promoted, at: 0)
         } else {
             entries.insert(newEntry, at: 0)

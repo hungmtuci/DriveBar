@@ -127,6 +127,11 @@ struct HistoryRecord: Codable, Sendable {
     var last_used: Double
 }
 
+struct QueryLatchRecord: Codable, Sendable {
+    var count: Int
+    var last_used: Double
+}
+
 enum ResultItemKind: Equatable {
     case driveFolder(path: String)
     case driveFile(path: String)

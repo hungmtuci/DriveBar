@@ -754,7 +754,11 @@ enum InstantUtilityService {
                 let hay = GoogleDriveIndexService.removeAccents(def.bilingualSearchText).lowercased()
                 return tokens.allSatisfy { hay.contains($0) }
             }
-            results.append(contentsOf: matched.map { makeResultItem($0, settings: settings) })
+            let sortedMatched = matched.sorted {
+                GoogleDriveIndexService.shared.systemCommandPriorityScore(for: $0.id, queryNorm: qNorm) >
+                GoogleDriveIndexService.shared.systemCommandPriorityScore(for: $1.id, queryNorm: qNorm)
+            }
+            results.append(contentsOf: sortedMatched.map { makeResultItem($0, settings: settings) })
 
             if results.isEmpty {
                 return [
@@ -779,12 +783,21 @@ enum InstantUtilityService {
                 if def.inlineExactKeywords.contains(qNorm) {
                     return true
                 }
-                if qNorm.count >= 5 {
+                if GoogleDriveIndexService.shared.hasHistoryOrQueryLatch(forSystemCommand: def.id, queryNorm: qNorm) {
+                    return true
+                }
+                if qNorm.count >= 3 {
+                    if def.primaryKeyword.hasPrefix(qNorm) {
+                        return true
+                    }
                     return def.inlinePhrasePrefixes.contains { phrase in
                         phrase.hasPrefix(qNorm) || qNorm == phrase
                     }
                 }
                 return false
+            }.sorted {
+                GoogleDriveIndexService.shared.systemCommandPriorityScore(for: $0.id, queryNorm: qNorm) >
+                GoogleDriveIndexService.shared.systemCommandPriorityScore(for: $1.id, queryNorm: qNorm)
             }
             results.append(contentsOf: matchedStatic.map { makeResultItem($0, settings: settings) })
             return results
@@ -948,7 +961,7 @@ enum InstantUtilityService {
     }
 
     @MainActor
-    private static func makeResultItem(_ def: SystemUtilityDefinition, settings: AppSettings) -> SearchResultItem {
+    static func makeResultItem(_ def: SystemUtilityDefinition, settings: AppSettings) -> SearchResultItem {
         let needsConfirm = def.supportsConfirmation && settings.requiresSystemCommandConfirmation(def.id)
         var sub = def.subtitle
         if def.id == "sys.show_trash" || def.id == "sys.empty_trash" {

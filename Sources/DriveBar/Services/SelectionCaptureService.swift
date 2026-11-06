@@ -211,14 +211,27 @@ final class SelectionCaptureService {
         keyDown?.post(tap: .cghidEventTap)
         keyUp?.post(tap: .cghidEventTap)
 
-        for _ in 0..<6 {
-            try? await Task.sleep(nanoseconds: 15_000_000)
+        for _ in 0..<12 {
+            try? await Task.sleep(nanoseconds: 16_000_000)
             if pb.changeCount != beforeCount {
                 break
             }
         }
 
         guard pb.changeCount != beforeCount else {
+            let fallbackSnapshot = savedItems
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                let currentPB = NSPasteboard.general
+                if currentPB.changeCount != beforeCount {
+                    ClipboardHistoryService.shared.isTemporarilySuspended = true
+                    defer {
+                        ClipboardHistoryService.shared.isTemporarilySuspended = false
+                        ClipboardHistoryService.shared.noteInternalPasteboardWrite()
+                    }
+                    self.restorePasteboard(currentPB, snapshot: fallbackSnapshot)
+                }
+            }
             return nil
         }
 

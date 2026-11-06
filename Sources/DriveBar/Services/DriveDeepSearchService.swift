@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import CryptoKit
 
 struct DeepSearchTokens: Sendable {
     var rawTextQuery: String = ""
@@ -233,11 +234,22 @@ final class DriveDeepSearchService: @unchecked Sendable {
     func findDuplicates(in candidateURLs: [URL], maxGroups: Int = 30) -> [DuplicateGroup] {
         var sizeMap: [Int64: [URL]] = [:]
 
-        // 1. Group by exact file size
+        // 1. Group by exact file size (skipping online-only/dataless cloud files)
         for url in candidateURLs {
-            guard let vals = try? url.resourceValues(forKeys: [.fileSizeKey, .isDirectoryKey]),
+            guard !GoogleDriveIndexService.isCloudDatalessFile(url),
+                  let vals = try? url.resourceValues(forKeys: [
+                      .fileSizeKey,
+                      .isDirectoryKey,
+                      .isUbiquitousItemKey,
+                      .ubiquitousItemDownloadingStatusKey
+                  ]),
                   vals.isDirectory != true,
                   let size = vals.fileSize, size > 1024 else { // Ignore 0-byte or <1KB files
+                continue
+            }
+            if vals.isUbiquitousItem == true,
+               let dlStatus = vals.ubiquitousItemDownloadingStatus,
+               dlStatus != .current {
                 continue
             }
             sizeMap[Int64(size), default: []].append(url)
@@ -248,21 +260,37 @@ final class DriveDeepSearchService: @unchecked Sendable {
         var resultGroups: [DuplicateGroup] = []
 
         for (size, urls) in candidateGroups {
-            // Further partition by partial hash (first 8KB) or file name to be accurate
-            var hashBuckets: [String: [URL]] = [:]
+            // Partition by deterministic SHA256 over (first 16KB + middle 16KB + last 16KB)
+            var sampleBuckets: [String: [URL]] = [:]
             for url in urls {
-                let fingerprint = computeFastFingerprint(url: url)
-                hashBuckets[fingerprint, default: []].append(url)
+                guard let fingerprint = computeFastFingerprint(url: url, fileSize: size) else {
+                    continue
+                }
+                sampleBuckets[fingerprint, default: []].append(url)
             }
 
-            for (fp, matchedURLs) in hashBuckets where matchedURLs.count >= 2 {
-                let group = DuplicateGroup(
-                    id: "\(size)_\(fp)",
-                    fileName: matchedURLs.first?.lastPathComponent ?? "Duplicate",
-                    sizeBytes: size,
-                    items: matchedURLs
-                )
-                resultGroups.append(group)
+            for (_, sampleMatchedURLs) in sampleBuckets where sampleMatchedURLs.count >= 2 {
+                // Full SHA256 verification for candidate matches
+                var fullHashBuckets: [String: [URL]] = [:]
+                for url in sampleMatchedURLs {
+                    guard let fullHash = computeFullSHA256(url: url) else {
+                        continue
+                    }
+                    fullHashBuckets[fullHash, default: []].append(url)
+                }
+
+                for (fullHash, matchedURLs) in fullHashBuckets where matchedURLs.count >= 2 {
+                    let group = DuplicateGroup(
+                        id: "\(size)_\(fullHash)",
+                        fileName: matchedURLs.first?.lastPathComponent ?? "Duplicate",
+                        sizeBytes: size,
+                        items: matchedURLs
+                    )
+                    resultGroups.append(group)
+                    if resultGroups.count >= maxGroups {
+                        break
+                    }
+                }
                 if resultGroups.count >= maxGroups {
                     break
                 }
@@ -277,12 +305,55 @@ final class DriveDeepSearchService: @unchecked Sendable {
         return resultGroups
     }
 
-    private func computeFastFingerprint(url: URL) -> String {
+    private func computeFastFingerprint(url: URL, fileSize: Int64) -> String? {
         guard let handle = try? FileHandle(forReadingFrom: url) else {
-            return url.lastPathComponent.lowercased()
+            return nil
         }
         defer { try? handle.close() }
-        let headerData = handle.readData(ofLength: 8192)
-        return "\(headerData.count)_\(headerData.hashValue)"
+
+        let chunkSize = 16_384
+        var hasher = SHA256()
+
+        guard let firstChunk = try? handle.read(upToCount: chunkSize) else {
+            return nil
+        }
+        hasher.update(data: firstChunk)
+
+        if fileSize > Int64(chunkSize * 2) {
+            let midOffset = UInt64(max(0, (fileSize / 2) - Int64(chunkSize / 2)))
+            try? handle.seek(toOffset: midOffset)
+            if let midChunk = try? handle.read(upToCount: chunkSize) {
+                hasher.update(data: midChunk)
+            }
+        }
+
+        if fileSize > Int64(chunkSize) {
+            let tailOffset = UInt64(max(0, fileSize - Int64(chunkSize)))
+            try? handle.seek(toOffset: tailOffset)
+            if let lastChunk = try? handle.read(upToCount: chunkSize) {
+                hasher.update(data: lastChunk)
+            }
+        }
+
+        let digest = hasher.finalize()
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func computeFullSHA256(url: URL) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else {
+            return nil
+        }
+        defer { try? handle.close() }
+
+        var hasher = SHA256()
+        let bufferSize = 65_536
+        while true {
+            guard let chunk = try? handle.read(upToCount: bufferSize), !chunk.isEmpty else {
+                break
+            }
+            hasher.update(data: chunk)
+        }
+        let digest = hasher.finalize()
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 }

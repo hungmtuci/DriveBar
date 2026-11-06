@@ -893,29 +893,38 @@ final class UniversalActionExecutor {
 
     private func refreshFinderItem(at path: String) {
         Task.detached(priority: .utility) {
-            let escaped = path.replacingOccurrences(of: "\"", with: "\\\"")
+            let script = """
+            on run argv
+                set targetPath to item 1 of argv
+                tell application "Finder" to update (POSIX file targetPath)
+            end run
+            """
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            proc.arguments = ["-e", "tell application \"Finder\" to update (POSIX file \"\(escaped)\")"]
-            proc.standardOutput = Pipe()
-            proc.standardError = Pipe()
+            proc.arguments = ["-e", script, path]
+            proc.standardOutput = FileHandle.nullDevice
+            proc.standardError = FileHandle.nullDevice
             try? proc.run()
         }
     }
 
     private func openFinderGetInfo(for urls: [URL]) {
         Task.detached(priority: .userInitiated) {
-            for u in urls {
-                let escaped = u.path.replacingOccurrences(of: "\"", with: "\\\"")
-                let script = """
+            let script = """
+            on run argv
+                set targetPath to item 1 of argv
                 tell application "Finder"
                     activate
-                    open information window of (POSIX file "\(escaped)" as alias)
+                    open information window of (POSIX file targetPath as alias)
                 end tell
-                """
+            end run
+            """
+            for u in urls {
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-                proc.arguments = ["-e", script]
+                proc.arguments = ["-e", script, u.path]
+                proc.standardOutput = FileHandle.nullDevice
+                proc.standardError = FileHandle.nullDevice
                 try? proc.run()
             }
         }
@@ -962,8 +971,8 @@ final class UniversalActionExecutor {
                 proc.arguments = firstIsDir
                     ? ["-c", "-k", "--sequesterRsrc", "--keepParent", first.path, zipURL.path]
                     : ["-c", "-k", "--sequesterRsrc", first.path, zipURL.path]
-                proc.standardOutput = Pipe()
-                proc.standardError = Pipe()
+                proc.standardOutput = FileHandle.nullDevice
+                proc.standardError = FileHandle.nullDevice
                 if (try? proc.run()) != nil {
                     proc.waitUntilExit()
                     ok = (proc.terminationStatus == 0 && fm.fileExists(atPath: zipURL.path))
@@ -973,8 +982,8 @@ final class UniversalActionExecutor {
                 proc.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
                 proc.currentDirectoryURL = parentDir
                 proc.arguments = ["-r", "-q", "-y", zipURL.path] + urls.map(\.lastPathComponent) + ["-x", "*.DS_Store", "*__MACOSX*"]
-                proc.standardOutput = Pipe()
-                proc.standardError = Pipe()
+                proc.standardOutput = FileHandle.nullDevice
+                proc.standardError = FileHandle.nullDevice
                 if (try? proc.run()) != nil {
                     proc.waitUntilExit()
                     ok = (proc.terminationStatus == 0 && fm.fileExists(atPath: zipURL.path))
@@ -990,8 +999,8 @@ final class UniversalActionExecutor {
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
                 proc.arguments = ["-c", "-k", "--sequesterRsrc", stageDir.path, zipURL.path]
-                proc.standardOutput = Pipe()
-                proc.standardError = Pipe()
+                proc.standardOutput = FileHandle.nullDevice
+                proc.standardError = FileHandle.nullDevice
                 if (try? proc.run()) != nil {
                     proc.waitUntilExit()
                     ok = (proc.terminationStatus == 0 && fm.fileExists(atPath: zipURL.path))
@@ -1052,8 +1061,12 @@ final class UniversalActionExecutor {
                     suffix += 1
                 }
 
+                let stageDir = destDir.deletingLastPathComponent()
+                    .appendingPathComponent(".DriveBarExtract_\(UUID().uuidString)", isDirectory: true)
+                defer { try? fm.removeItem(at: stageDir) }
+
                 do {
-                    try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+                    try fm.createDirectory(at: stageDir, withIntermediateDirectories: true)
                 } catch {
                     lastError = error.localizedDescription
                     continue
@@ -1061,20 +1074,19 @@ final class UniversalActionExecutor {
 
                 let ext = archiveURL.pathExtension.lowercased()
                 let proc = Process()
-                proc.standardOutput = Pipe()
-                proc.standardError = Pipe()
+                proc.standardOutput = FileHandle.nullDevice
+                proc.standardError = FileHandle.nullDevice
 
                 if ext == "zip" {
                     proc.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-                    proc.arguments = ["-x", "-k", archiveURL.path, destDir.path]
+                    proc.arguments = ["-x", "-k", archiveURL.path, stageDir.path]
                 } else if ["tar", "gz", "tgz", "bz2", "tbz2", "xz"].contains(ext) {
                     proc.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
-                    proc.arguments = ["-xf", archiveURL.path, "-C", destDir.path]
+                    proc.arguments = ["-xf", archiveURL.path, "-C", stageDir.path]
                 } else if let unarPath = ["/opt/homebrew/bin/unar", "/usr/local/bin/unar"].first(where: { fm.isExecutableFile(atPath: $0) }) {
                     proc.executableURL = URL(fileURLWithPath: unarPath)
-                    proc.arguments = ["-q", "-o", destDir.path, archiveURL.path]
+                    proc.arguments = ["-q", "-o", stageDir.path, archiveURL.path]
                 } else {
-                    try? fm.removeItem(at: destDir)
                     lastError = L("Định dạng .\(ext) cần cài thêm công cụ 'unar' (brew install unar)", "Format .\(ext) requires 'unar' (brew install unar)")
                     continue
                 }
@@ -1082,14 +1094,60 @@ final class UniversalActionExecutor {
                 if (try? proc.run()) != nil {
                     proc.waitUntilExit()
                     if proc.terminationStatus == 0 {
-                        try? fm.removeItem(at: destDir.appendingPathComponent("__MACOSX"))
-                        extractedDirs.append(destDir)
+                        try? fm.removeItem(at: stageDir.appendingPathComponent("__MACOSX"))
+                        let stageResolvedRoot = stageDir.resolvingSymlinksInPath().standardizedFileURL.path
+                        let stagePrefix = stageResolvedRoot.hasSuffix("/") ? stageResolvedRoot : stageResolvedRoot + "/"
+                        var isSafeArchive = true
+
+                        if let enumerator = fm.enumerator(
+                            at: stageDir,
+                            includingPropertiesForKeys: [.isSymbolicLinkKey],
+                            options: []
+                        ) {
+                            while let entryURL = enumerator.nextObject() as? URL {
+                                let stdPath = entryURL.standardizedFileURL.path
+                                let resolvedPath = entryURL.resolvingSymlinksInPath().standardizedFileURL.path
+                                if !stdPath.hasPrefix(stageDir.standardizedFileURL.path + "/") ||
+                                   (resolvedPath != stageResolvedRoot && !resolvedPath.hasPrefix(stagePrefix)) {
+                                    isSafeArchive = false
+                                    break
+                                }
+                                if (try? entryURL.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true,
+                                   let linkDest = try? fm.destinationOfSymbolicLink(atPath: entryURL.path) {
+                                    let resolvedTarget = URL(fileURLWithPath: linkDest, relativeTo: entryURL.deletingLastPathComponent())
+                                        .standardizedFileURL
+                                        .resolvingSymlinksInPath()
+                                        .standardizedFileURL
+                                        .path
+                                    if resolvedTarget != stageResolvedRoot && !resolvedTarget.hasPrefix(stagePrefix) {
+                                        isSafeArchive = false
+                                        break
+                                    }
+                                }
+                            }
+                        }
+
+                        guard isSafeArchive else {
+                            lastError = L("Từ chối giải nén '\(fileName)' do chứa đường dẫn hoặc liên kết ngoài thư mục đích", "Rejected '\(fileName)' due to unsafe path traversal or external symlink")
+                            continue
+                        }
+
+                        do {
+                            try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+                            let children = (try? fm.contentsOfDirectory(at: stageDir, includingPropertiesForKeys: nil, options: [])) ?? []
+                            for child in children {
+                                let targetURL = destDir.appendingPathComponent(child.lastPathComponent)
+                                try fm.moveItem(at: child, to: targetURL)
+                            }
+                            extractedDirs.append(destDir)
+                        } catch {
+                            try? fm.removeItem(at: destDir)
+                            lastError = error.localizedDescription
+                        }
                     } else {
-                        try? fm.removeItem(at: destDir)
                         lastError = L("Giải nén '\(fileName)' không thành công", "Failed to extract '\(fileName)'")
                     }
                 } else {
-                    try? fm.removeItem(at: destDir)
                     lastError = L("Không thể khởi chạy trình giải nén", "Unable to launch extractor")
                 }
             }

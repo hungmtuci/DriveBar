@@ -6,6 +6,7 @@ import QuickLookUI
 final class QuickLookCoordinator: NSObject, QLPreviewPanelDataSource, QLPreviewPanelDelegate {
     static let shared = QuickLookCoordinator()
 
+    private let previewLock = NSLock()
     nonisolated(unsafe) private var previewURLs: [URL] = []
 
     var isQuickLookVisible: Bool {
@@ -30,7 +31,9 @@ final class QuickLookCoordinator: NSObject, QLPreviewPanelDataSource, QLPreviewP
             NSSound.beep()
             return
         }
+        previewLock.lock()
         previewURLs = valid
+        previewLock.unlock()
         panel.dataSource = self
         panel.delegate = self
         panel.reloadData()
@@ -42,8 +45,13 @@ final class QuickLookCoordinator: NSObject, QLPreviewPanelDataSource, QLPreviewP
         guard isQuickLookVisible, let panel = QLPreviewPanel.shared() else { return }
         let valid = Self.filterValidPreviewURLs(urls)
         guard !valid.isEmpty else { return }
-        if previewURLs != valid {
+        previewLock.lock()
+        let changed = (previewURLs != valid)
+        if changed {
             previewURLs = valid
+        }
+        previewLock.unlock()
+        if changed {
             panel.dataSource = self
             panel.delegate = self
             panel.reloadData()
@@ -67,10 +75,14 @@ final class QuickLookCoordinator: NSObject, QLPreviewPanelDataSource, QLPreviewP
     }
 
     nonisolated func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
-        previewURLs.count
+        previewLock.lock()
+        defer { previewLock.unlock() }
+        return previewURLs.count
     }
 
     nonisolated func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> (any QLPreviewItem)! {
+        previewLock.lock()
+        defer { previewLock.unlock() }
         guard index >= 0 && index < previewURLs.count else { return nil }
         return previewURLs[index] as NSURL
     }

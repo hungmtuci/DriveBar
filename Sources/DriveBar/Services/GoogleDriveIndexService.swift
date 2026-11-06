@@ -157,11 +157,13 @@ final class GoogleDriveIndexService: ObservableObject {
     private(set) var fastMacFolderIndex: FastSharedIndex = .empty
     private var macFoldersRebuildGen: UInt64 = 0
     private(set) var history: [String: HistoryRecord] = [:]
+    private(set) var queryHistory: [String: [String: QueryLatchRecord]] = [:]
     private(set) var installedApps: [InstalledAppEntry] = []
     private var lastAppScanUptime: TimeInterval = 0
     private var isScanningApps: Bool = false
 
-    private var driveFSStream: FSEventStreamRef?
+    nonisolated(unsafe) private var driveFSStream: FSEventStreamRef?
+    private var watcherGeneration: UInt64 = 0
     private let driveFSQueue = DispatchQueue(label: "com.hunglx.DriveBar.driveFSEvents", qos: .utility)
     private var pendingEventPaths = Set<String>()
     private var debounceTask: Task<Void, Never>?
@@ -174,6 +176,7 @@ final class GoogleDriveIndexService: ObservableObject {
     private var fileCachePath: String { "\(cacheDir)/file_cache.json" }
     private var macFoldersCachePath: String { "\(cacheDir)/mac_folders_cache.json" }
     private var historyPath: String { "\(cacheDir)/folder_history.json" }
+    private var queryHistoryPath: String { "\(cacheDir)/query_history.json" }
 
     nonisolated private static let skipExtensions: Set<String> = [
         "app", "photoslibrary", "xcodeproj", "xcworkspace",
@@ -290,7 +293,6 @@ final class GoogleDriveIndexService: ObservableObject {
     }
 
     private func startRealtimeDriveWatcher() {
-        stopRealtimeDriveWatcher()
         var candidateRoots: [String] = []
         var seenRoots = Set<String>()
         for acc in activeAccounts {
@@ -303,14 +305,29 @@ final class GoogleDriveIndexService: ObservableObject {
         for mr in macRoots where seenRoots.insert(mr).inserted {
             candidateRoots.append(mr)
         }
-        guard !candidateRoots.isEmpty else { return }
+        guard !candidateRoots.isEmpty else {
+            stopRealtimeDriveWatcher()
+            return
+        }
 
+        watcherGeneration &+= 1
+        let expectedGen = watcherGeneration
         let rootsSnapshot = candidateRoots
         let macRootsSet = macRoots
         let queue = driveFSQueue
-        queue.async {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.teardownDriveFSStreamOnQueue()
+
             let validPaths = rootsSnapshot.filter { FileManager.default.fileExists(atPath: $0) }
-            guard !validPaths.isEmpty else { return }
+            guard !validPaths.isEmpty else {
+                Task { @MainActor in
+                    if GoogleDriveIndexService.shared.watcherGeneration == expectedGen {
+                        GoogleDriveIndexService.shared.isRealtimeWatcherActive = false
+                    }
+                }
+                return
+            }
             let cfPaths = validPaths as CFArray
 
             let callback: FSEventStreamCallback = { _, clientCallBackInfo, numEvents, eventPathsPtr, eventFlagsPtr, _ in
@@ -357,10 +374,9 @@ final class GoogleDriveIndexService: ObservableObject {
             ) {
                 FSEventStreamSetDispatchQueue(stream, queue)
                 FSEventStreamStart(stream)
-                let ptrAddr = Int(bitPattern: stream)
+                self.driveFSStream = stream
                 Task { @MainActor in
-                    if let ref = FSEventStreamRef(bitPattern: ptrAddr) {
-                        GoogleDriveIndexService.shared.driveFSStream = ref
+                    if GoogleDriveIndexService.shared.watcherGeneration == expectedGen {
                         GoogleDriveIndexService.shared.isRealtimeWatcherActive = true
                     }
                 }
@@ -369,19 +385,19 @@ final class GoogleDriveIndexService: ObservableObject {
     }
 
     private func stopRealtimeDriveWatcher() {
+        watcherGeneration &+= 1
+        isRealtimeWatcherActive = false
+        driveFSQueue.async { [weak self] in
+            self?.teardownDriveFSStreamOnQueue()
+        }
+    }
+
+    nonisolated private func teardownDriveFSStreamOnQueue() {
         if let stream = driveFSStream {
             driveFSStream = nil
-            isRealtimeWatcherActive = false
-            let ptrAddr = Int(bitPattern: stream)
-            driveFSQueue.async {
-                if let ref = FSEventStreamRef(bitPattern: ptrAddr) {
-                    FSEventStreamStop(ref)
-                    FSEventStreamInvalidate(ref)
-                    FSEventStreamRelease(ref)
-                }
-            }
-        } else {
-            isRealtimeWatcherActive = false
+            FSEventStreamStop(stream)
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
         }
     }
 
@@ -651,13 +667,29 @@ final class GoogleDriveIndexService: ObservableObject {
         let flCache = fileCachePath
         let mCache = macFoldersCachePath
         let hPath = historyPath
+        let qPath = queryHistoryPath
         let currentAccount = accountRoot
         let configuredMacRoots = AppSettings.shared.customMacFolders.map {
             $0.hasSuffix("/") && $0.count > 1 ? String($0.dropLast()) : $0
         }
 
         Task.detached(priority: .userInitiated) {
-            let loadedHistory = Self.readHistoryDisk(at: hPath)
+            var loadedHistory = Self.readHistoryDisk(at: hPath)
+            var loadedQueryHistory = Self.readQueryHistoryDisk(at: qPath)
+            let nowSeed = Date().timeIntervalSince1970
+            if loadedQueryHistory["sleep"] == nil && loadedHistory["sys:sys.sleep_displays"] == nil {
+                loadedHistory["sys:sys.sleep_displays"] = HistoryRecord(count: 5, last_used: nowSeed)
+                loadedHistory["sys:sys.sleep"] = HistoryRecord(count: 4, last_used: nowSeed - 5)
+                loadedQueryHistory["sleep"] = [
+                    "sys:sys.sleep_displays": QueryLatchRecord(count: 5, last_used: nowSeed),
+                    "sys:sys.sleep": QueryLatchRecord(count: 4, last_used: nowSeed - 5)
+                ]
+                Self.writeCodableAtomic(loadedHistory, to: hPath)
+                Self.writeCodableAtomic(loadedQueryHistory, to: qPath)
+            }
+            let finalHistory = loadedHistory
+            let finalQueryHistory = loadedQueryHistory
+
             let loadedFolders = Self.readFolderCacheDisk(at: fCache)
             let builtFastFolders = loadedFolders.map { FastFolderIndex.build(from: $0.0) }
             let loadedShared = Self.readSharedCacheDisk(at: sCache)
@@ -670,7 +702,8 @@ final class GoogleDriveIndexService: ObservableObject {
 
             await MainActor.run {
                 let service = GoogleDriveIndexService.shared
-                service.history = loadedHistory
+                service.history = finalHistory
+                service.queryHistory = finalQueryHistory
                 service.installedApps = scannedApps
                 service.lastAppScanUptime = ProcessInfo.processInfo.systemUptime
 
@@ -745,6 +778,14 @@ final class GoogleDriveIndexService: ObservableObject {
     private nonisolated static func readHistoryDisk(at path: String) -> [String: HistoryRecord] {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
               let decoded = try? JSONDecoder().decode([String: HistoryRecord].self, from: data) else {
+            return [:]
+        }
+        return decoded
+    }
+
+    private nonisolated static func readQueryHistoryDisk(at path: String) -> [String: [String: QueryLatchRecord]] {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let decoded = try? JSONDecoder().decode([String: [String: QueryLatchRecord]].self, from: data) else {
             return [:]
         }
         return decoded
@@ -1703,10 +1744,11 @@ final class GoogleDriveIndexService: ObservableObject {
 
     // MARK: - History Management & Cross-Mac Portable Syncthing Sync
 
-    func recordUsed(_ path: String) {
+    func recordUsed(_ path: String, query: String? = nil) {
         let now = Date().timeIntervalSince1970
-        let ext = (path as NSString).pathExtension
-        let looksLikeFile = !ext.isEmpty && !Self.skipExtensions.contains(ext.lowercased())
+        let isSpecialOrBundle = path.hasPrefix("sys:") || path.lowercased().hasSuffix(".app")
+        let ext = isSpecialOrBundle ? "" : (path as NSString).pathExtension
+        let looksLikeFile = !isSpecialOrBundle && !ext.isEmpty && !Self.skipExtensions.contains(ext.lowercased())
         let targetDir = looksLikeFile ? (path as NSString).deletingLastPathComponent : path
 
         var dirRec = history[targetDir] ?? HistoryRecord(count: 0, last_used: now)
@@ -1726,17 +1768,50 @@ final class GoogleDriveIndexService: ObservableObject {
             history = Dictionary(uniqueKeysWithValues: sorted.map { ($0.key, $0.value) })
         }
 
+        if let rawQuery = query {
+            let trimmedQ = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+            let cleanQ = Self.cleanString(trimmedQ)
+            if !cleanQ.isEmpty && !trimmedQ.hasPrefix("/") {
+                var itemMap = queryHistory[cleanQ] ?? [:]
+                var qRec = itemMap[path] ?? QueryLatchRecord(count: 0, last_used: now)
+                qRec.count += 1
+                qRec.last_used = now
+                itemMap[path] = qRec
+                if itemMap.count > 16 {
+                    let topItems = itemMap.sorted { $0.value.last_used > $1.value.last_used }.prefix(16)
+                    itemMap = Dictionary(uniqueKeysWithValues: topItems.map { ($0.key, $0.value) })
+                }
+                queryHistory[cleanQ] = itemMap
+                if queryHistory.count > 400 {
+                    let topQueries = queryHistory.sorted { a, b in
+                        let maxA = a.value.values.map(\.last_used).max() ?? 0
+                        let maxB = b.value.values.map(\.last_used).max() ?? 0
+                        return maxA > maxB
+                    }.prefix(400)
+                    queryHistory = Dictionary(uniqueKeysWithValues: topQueries.map { ($0.key, $0.value) })
+                }
+            }
+        }
+
         persistHistoryAndPushSync()
     }
 
     func removeFromHistory(_ path: String) {
         history.removeValue(forKey: path)
+        for qKey in Array(queryHistory.keys) {
+            queryHistory[qKey]?.removeValue(forKey: path)
+            if queryHistory[qKey]?.isEmpty == true {
+                queryHistory.removeValue(forKey: qKey)
+            }
+        }
         persistHistoryAndPushSync()
     }
 
     func clearAllHistory() {
         history.removeAll()
+        queryHistory.removeAll()
         try? FileManager.default.removeItem(atPath: historyPath)
+        try? FileManager.default.removeItem(atPath: queryHistoryPath)
         if AppSettings.shared.enableSyncthingSync {
             SyncAndLatchingService.shared.pushPortableHistory([:])
         }
@@ -1744,13 +1819,223 @@ final class GoogleDriveIndexService: ObservableObject {
 
     private func persistHistoryAndPushSync() {
         let snap = history
+        let qSnap = queryHistory
         let hPath = historyPath
+        let qPath = queryHistoryPath
         Task.detached(priority: .background) {
             Self.writeCodableAtomic(snap, to: hPath)
+            Self.writeCodableAtomic(qSnap, to: qPath)
         }
         if AppSettings.shared.enableSyncthingSync {
             SyncAndLatchingService.shared.pushPortableHistory(exportPortableHistoryMap())
         }
+    }
+
+    // MARK: - Smart Keyword Prefix History & Frecency Latching
+
+    func hasHistoryOrQueryLatch(forSystemCommand cmdID: String, queryNorm: String) -> Bool {
+        let cleanQ = Self.cleanString(queryNorm)
+        guard !cleanQ.isEmpty else { return false }
+        let sysKey = "sys:\(cmdID)"
+
+        for (storedQ, itemMap) in queryHistory where storedQ == cleanQ || storedQ.hasPrefix(cleanQ) {
+            if let qRec = itemMap[sysKey], qRec.count > 0 {
+                return true
+            }
+        }
+
+        if let hRec = history[sysKey], hRec.count > 0,
+           let def = InstantUtilityService.allSystemCommands.first(where: { $0.id == cmdID }) {
+            if Self.cleanString(def.primaryKeyword).hasPrefix(cleanQ) {
+                return true
+            }
+            if def.inlineExactKeywords.contains(where: { Self.cleanString($0).hasPrefix(cleanQ) }) {
+                return true
+            }
+            if def.inlinePhrasePrefixes.contains(where: { Self.cleanString($0).hasPrefix(cleanQ) }) {
+                return true
+            }
+        }
+        return false
+    }
+
+    func systemCommandPriorityScore(for cmdID: String, queryNorm: String) -> Int {
+        let cleanQ = Self.cleanString(queryNorm)
+        let sysKey = "sys:\(cmdID)"
+        var score = 0
+        for (storedQ, itemMap) in queryHistory where storedQ == cleanQ || storedQ.hasPrefix(cleanQ) {
+            if let qRec = itemMap[sysKey], qRec.count > 0 {
+                let base = (storedQ == cleanQ) ? 5_000 : 3_500
+                score = max(score, base + min(qRec.count * 250, 2_500))
+            }
+        }
+        if let hRec = history[sysKey], hRec.count > 0 {
+            score += 1_000 + min(hRec.count * 150, 1_500)
+        }
+        return score
+    }
+
+    func recallPreviouslyUsedItems(
+        for rawQuery: String,
+        isSharedMode: Bool,
+        maxItems: Int = 6
+    ) -> [SearchResultItem] {
+        let cleanQ = Self.cleanString(rawQuery)
+        guard !cleanQ.isEmpty else { return [] }
+        let cleanTokens = rawQuery.split(separator: " ").map(String.init).map(Self.cleanString).filter { !$0.isEmpty }
+        let now = Date().timeIntervalSince1970
+
+        var candidateScores: [String: (score: Int, lastUsed: Double)] = [:]
+
+        func updateCandidate(_ key: String, score: Int, lastUsed: Double) {
+            if let existing = candidateScores[key] {
+                if score > existing.score || (score == existing.score && lastUsed > existing.lastUsed) {
+                    candidateScores[key] = (score, lastUsed)
+                }
+            } else {
+                candidateScores[key] = (score, lastUsed)
+            }
+        }
+
+        // 1. Direct & prefix query-to-item latch recall (`queryHistory`)
+        for (storedQ, itemMap) in queryHistory where storedQ == cleanQ || storedQ.hasPrefix(cleanQ) {
+            for (itemKey, qRec) in itemMap where qRec.count > 0 {
+                let ageHours = max(0, (now - qRec.last_used) / 3600.0)
+                let recencyBonus = ageHours < 24 ? 800 : (ageHours < 168 ? 400 : 100)
+                let base = (storedQ == cleanQ) ? 12_000 : 8_500
+                let lenDiff = max(0, storedQ.count - cleanQ.count)
+                let proximityBonus = max(0, 300 - lenDiff * 30)
+                let sc = base + min(qRec.count * 400, 4_000) + recencyBonus + proximityBonus
+                updateCandidate(itemKey, score: sc, lastUsed: qRec.last_used)
+            }
+        }
+
+        // 2. General opened history (`history`) whose leaf name / keyword starts with the typed query
+        let sdPrefixes = activeAccounts.compactMap(\.sharedDrivesPath) + activeAccounts.compactMap(\.shortcutTargetsPath)
+
+        for (itemKey, hRec) in history where hRec.count > 0 {
+            let ageHours = max(0, (now - hRec.last_used) / 3600.0)
+            let recencyBonus = ageHours < 24 ? 600 : (ageHours < 168 ? 300 : 80)
+
+            if itemKey.hasPrefix("sys:") {
+                let cmdID = String(itemKey.dropFirst(4))
+                if AppSettings.shared.isSystemCommandEnabled(cmdID),
+                   let def = InstantUtilityService.allSystemCommands.first(where: { $0.id == cmdID }) {
+                    let matchesSys = Self.cleanString(def.primaryKeyword).hasPrefix(cleanQ) ||
+                        def.inlineExactKeywords.contains { Self.cleanString($0).hasPrefix(cleanQ) } ||
+                        def.inlinePhrasePrefixes.contains { Self.cleanString($0).hasPrefix(cleanQ) }
+                    if matchesSys {
+                        let sc = 6_000 + min(hRec.count * 250, 2_500) + recencyBonus
+                        updateCandidate(itemKey, score: sc, lastUsed: hRec.last_used)
+                    }
+                }
+            } else if itemKey.lowercased().hasSuffix(".app") {
+                guard cleanQ.count >= 2 && AppSettings.shared.includeMacAppsInSearch else { continue }
+                if let app = installedApps.first(where: { $0.path == itemKey }) {
+                    let matchesApp = app.cleanFull.hasPrefix(cleanQ) ||
+                        app.cleanFullVI.hasPrefix(cleanQ) ||
+                        (!app.acronym.isEmpty && app.acronym.hasPrefix(cleanQ)) ||
+                        (!app.acronymVI.isEmpty && app.acronymVI.hasPrefix(cleanQ)) ||
+                        app.words.contains { $0.hasPrefix(cleanQ) }
+                    if matchesApp {
+                        let sc = 5_200 + min(hRec.count * 220, 2_200) + recencyBonus
+                        updateCandidate(itemKey, score: sc, lastUsed: hRec.last_used)
+                    }
+                }
+            } else {
+                guard cleanQ.count >= 2 else { continue }
+                let isSharedPath = sdPrefixes.contains { itemKey.hasPrefix($0) }
+                if isSharedMode != isSharedPath { continue }
+
+                let leafName = (itemKey as NSString).lastPathComponent
+                let ext = (leafName as NSString).pathExtension
+                let stem = ext.isEmpty ? leafName : (leafName as NSString).deletingPathExtension
+                let (leafClean, leafAcr) = Self.extractSignatures(stem)
+                guard !leafClean.isEmpty else { continue }
+
+                let leafBytes = Array(leafClean.utf8)
+                let stripIdx = Self.firstNonDigitIndex(leafBytes)
+                let leafStripDigits = stripIdx > 0 ? String(decoding: leafBytes[stripIdx...], as: UTF8.self) : leafClean
+                let leafWords = Self.extractAppWords(stem)
+
+                let isDirectLeafPrefix = leafClean.hasPrefix(cleanQ) ||
+                    leafStripDigits.hasPrefix(cleanQ) ||
+                    (!leafAcr.isEmpty && leafAcr.hasPrefix(cleanQ))
+                let isMultiWordLeafPrefix = !cleanTokens.isEmpty && cleanTokens.allSatisfy { tok in
+                    tok.count >= 2 && leafWords.contains { $0.hasPrefix(tok) }
+                }
+
+                if isDirectLeafPrefix || isMultiWordLeafPrefix {
+                    let exactBonus = (leafClean == cleanQ || leafStripDigits == cleanQ || leafAcr == cleanQ) ? 800 : 0
+                    let sc = 4_800 + exactBonus + min(hRec.count * 200, 2_000) + recencyBonus
+                    updateCandidate(itemKey, score: sc, lastUsed: hRec.last_used)
+                }
+            }
+        }
+
+        guard !candidateScores.isEmpty else { return [] }
+
+        let sortedCandidates = candidateScores.sorted { a, b in
+            if a.value.score != b.value.score { return a.value.score > b.value.score }
+            if a.value.lastUsed != b.value.lastUsed { return a.value.lastUsed > b.value.lastUsed }
+            return a.key < b.key
+        }
+
+        var items: [SearchResultItem] = []
+        items.reserveCapacity(min(sortedCandidates.count, maxItems))
+
+        for (itemKey, _) in sortedCandidates {
+            if items.count >= maxItems { break }
+
+            if itemKey.hasPrefix("sys:") {
+                let cmdID = String(itemKey.dropFirst(4))
+                guard AppSettings.shared.isSystemCommandEnabled(cmdID),
+                      let def = InstantUtilityService.allSystemCommands.first(where: { $0.id == cmdID }) else {
+                    continue
+                }
+                items.append(InstantUtilityService.makeResultItem(def, settings: AppSettings.shared))
+            } else if itemKey.lowercased().hasSuffix(".app") {
+                guard AppSettings.shared.includeMacAppsInSearch,
+                      let app = installedApps.first(where: { $0.path == itemKey }) else {
+                    continue
+                }
+                let hCount = max(1, history[itemKey]?.count ?? 1)
+                items.append(Self.makeAppSearchResultItem(app: app, historyCount: hCount, isRunning: false))
+            } else {
+                let isSharedPath = sdPrefixes.contains { itemKey.hasPrefix($0) }
+                if isSharedMode != isSharedPath { continue }
+
+                let isKnownFolder = fastFolderIndex.knownPaths.contains(itemKey) ||
+                    (fastSharedIndex.byPath[itemKey]?.isDir == true) ||
+                    (fastMacFolderIndex.byPath[itemKey]?.isDir == true)
+                let isKnownSharedFile = (fastSharedIndex.byPath[itemKey]?.isDir == false) ||
+                    (fastMacFolderIndex.byPath[itemKey]?.isDir == false)
+                let isKnownDriveFile = fastFileIndex.records.contains { $0.entry.path == itemKey }
+
+                if !isKnownFolder && !isKnownSharedFile && !isKnownDriveFile {
+                    if itemKey.contains("/Library/CloudStorage/") { continue }
+                    if !FileManager.default.fileExists(atPath: itemKey) { continue }
+                }
+
+                let isDir = isKnownFolder || (!isKnownSharedFile && !isKnownDriveFile && isKnownDirectory(itemKey))
+                let hCount = max(1, history[itemKey]?.count ?? 1)
+                let sub = "\(L("Mở gần đây (\(hCount) lần)", "Recently opened (\(hCount) times)")) ‹ \(formatHierarchicalSubtitle(itemKey))"
+                let ext = URL(fileURLWithPath: itemKey).pathExtension.uppercased()
+
+                items.append(SearchResultItem(
+                    id: "recalled:\(itemKey)",
+                    title: (itemKey as NSString).lastPathComponent,
+                    subtitle: sub,
+                    path: itemKey,
+                    isDirectory: isDir,
+                    kind: isDir ? .driveFolder(path: itemKey) : .driveFile(path: itemKey),
+                    badge: isSharedMode ? "Shared" : (isDir ? nil : (ext.isEmpty ? nil : ext)),
+                    sfSymbolFallback: isDir ? "folder.fill" : "doc.fill"
+                ))
+            }
+        }
+
+        return items
     }
 
     /// Converts local `/Users/hunglx/Library/CloudStorage/GoogleDrive-email/My Drive/...`
@@ -2362,16 +2647,17 @@ final class GoogleDriveIndexService: ObservableObject {
         hits.reserveCapacity(16)
 
         for app in apps {
+            let hCount = historySnapshot[app.path]?.count ?? 0
             guard let rawScore = scoreInstalledApp(
                 app: app,
                 cleanTokens: cleanTokens,
                 joinedQuery: joinedQ,
-                isAppOnlyMode: isAppOnlyMode
+                isAppOnlyMode: isAppOnlyMode,
+                historyCount: hCount
             ) else {
                 continue
             }
-            let hCount = historySnapshot[app.path]?.count ?? 0
-            let historyBoost = min(260, hCount * 35)
+            let historyBoost = hCount > 0 ? (450 + min(400, hCount * 45)) : 0
             let helperPenalty = app.isNestedHelper ? 220 : 0
             let lengthPenalty = min(60, app.name.count)
             let total = rawScore + historyBoost - helperPenalty - lengthPenalty
@@ -2419,8 +2705,16 @@ final class GoogleDriveIndexService: ObservableObject {
         app: InstalledAppEntry,
         cleanTokens: [String],
         joinedQuery: String,
-        isAppOnlyMode: Bool
+        isAppOnlyMode: Bool,
+        historyCount: Int = 0
     ) -> Int? {
+        if !isAppOnlyMode && historyCount == 0 && joinedQuery.count <= 2 && app.path.hasPrefix("/System/Library/CoreServices/Applications/") {
+            let firstWordMatches = app.words.first?.hasPrefix(joinedQuery) == true
+            if !firstWordMatches && !app.cleanFull.hasPrefix(joinedQuery) && !app.cleanFullVI.hasPrefix(joinedQuery) {
+                return nil
+            }
+        }
+
         // 1. Direct joined query match against full clean name or acronym in EN or VI (e.g. "lich", "calendar", "microsoftedge", "am", "me", "spss")
         if app.cleanFull == joinedQuery || app.cleanFullVI == joinedQuery {
             return 2_600
@@ -2477,7 +2771,7 @@ final class GoogleDriveIndexService: ObservableObject {
                 for alias in app.aliasWords {
                     if alias == token {
                         bestForToken = max(bestForToken ?? 0, 1_780)
-                    } else if alias.hasPrefix(token) && (token.count >= 2 || isAppOnlyMode) {
+                    } else if alias.hasPrefix(token) && (token.count >= 3 || isAppOnlyMode || historyCount > 0) {
                         bestForToken = max(bestForToken ?? 0, 1_660)
                     }
                 }

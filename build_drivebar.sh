@@ -7,11 +7,20 @@ cd "$PROJECT_DIR"
 
 APP_NAME="DriveBar"
 BUNDLE_ID="com.hunglx.DriveBar"
-VERSION="1.7.0"
-BUILD_NUMBER="27"
+VERSION="1.7.1"
+BUILD_NUMBER="28"
 APP_BUNDLE="$PROJECT_DIR/$APP_NAME.app"
 ROOT_APP_BUNDLE="$ROOT_WORKSPACE_DIR/$APP_NAME.app"
 DIST_DIR="$PROJECT_DIR/dist"
+INSTALL_APP=0
+for arg in "$@"; do
+    case "$arg" in
+        --install) INSTALL_APP=1 ;;
+    esac
+done
+
+STAGE_ROOT="$(mktemp -d /tmp/DriveBarBuildStage.XXXXXX)"
+trap 'rm -rf "$STAGE_ROOT"' EXIT
 
 echo "==> [1/6] Đang biên dịch $APP_NAME (Universal Binary arm64 + x86_64 Release)..."
 if swift build -c release --product "$APP_NAME" --arch arm64 --arch x86_64 2>/dev/null; then
@@ -22,7 +31,7 @@ else
 fi
 
 echo "==> [2/6] Đang tạo biểu tượng ứng dụng (AppIcon.icns)..."
-ICONSET_DIR="$PROJECT_DIR/.build/AppIcon.iconset"
+ICONSET_DIR="$STAGE_ROOT/AppIcon.iconset"
 rm -rf "$ICONSET_DIR"
 mkdir -p "$ICONSET_DIR"
 
@@ -107,8 +116,6 @@ for (px, name) in sizes {
 SWIFT_ICON
 
 echo "==> [3/6] Đang đóng gói $APP_NAME.app..."
-STAGE_ROOT="$(mktemp -d /tmp/DriveBarBuildStage.XXXXXX)"
-trap 'rm -rf "$STAGE_ROOT"' EXIT
 STAGE_APP="$STAGE_ROOT/$APP_NAME.app"
 STAGE_CONTENTS="$STAGE_APP/Contents"
 STAGE_MACOS="$STAGE_CONTENTS/MacOS"
@@ -122,7 +129,7 @@ fi
 cp -X "$BIN_PATH" "$STAGE_MACOS/$APP_NAME"
 chmod +x "$STAGE_MACOS/$APP_NAME"
 
-iconutil -c icns "$ICONSET_DIR" -o "$STAGE_RESOURCES/AppIcon.icns" || true
+iconutil -c icns "$ICONSET_DIR" -o "$STAGE_RESOURCES/AppIcon.icns"
 
 mkdir -p "$STAGE_RESOURCES/en.lproj" "$STAGE_RESOURCES/vi.lproj"
 cat > "$STAGE_RESOURCES/en.lproj/InfoPlist.strings" <<'EOF_EN'
@@ -273,23 +280,27 @@ hdiutil create -volname "${APP_NAME} Installer" \
 ZIP_PATH="$DIST_DIR/${APP_NAME}-v${VERSION}-macOS.zip"
 ditto -c -k --norsrc --noextattr --keepParent "$STAGE_APP" "$ZIP_PATH"
 
-echo "==> [6/7] Đồng bộ $ROOT_APP_BUNDLE..."
+echo "==> [6/6] Đồng bộ $ROOT_APP_BUNDLE..."
 if [ "$ROOT_WORKSPACE_DIR" != "$PROJECT_DIR" ]; then
     rm -rf "$ROOT_APP_BUNDLE"
     ditto --noextattr "$STAGE_APP" "$ROOT_APP_BUNDLE"
 fi
 
-echo "==> [7/7] Cài đặt trực tiếp vào /Applications và khởi động lại DriveBar..."
-pkill -9 DriveBar 2>/dev/null || true
-sleep 0.5
-rm -rf "/Applications/$APP_NAME.app"
-ditto --noextattr "$STAGE_APP" "/Applications/$APP_NAME.app"
-xattr -cr "/Applications/$APP_NAME.app" 2>/dev/null || true
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/$APP_NAME.app" 2>/dev/null || true
-open "/Applications/$APP_NAME.app"
+if [ "$INSTALL_APP" -eq 1 ]; then
+    echo "==> [7/7] Cài đặt trực tiếp vào /Applications và khởi động lại DriveBar..."
+    pkill -9 DriveBar 2>/dev/null || true
+    sleep 0.5
+    rm -rf "/Applications/$APP_NAME.app"
+    ditto --noextattr "$STAGE_APP" "/Applications/$APP_NAME.app"
+    xattr -cr "/Applications/$APP_NAME.app" 2>/dev/null || true
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/$APP_NAME.app" 2>/dev/null || true
+    open "/Applications/$APP_NAME.app"
+fi
 
 echo "==> Hoàn tất!"
 echo "    - Ứng dụng: $APP_BUNDLE"
-echo "    - Đã cài đặt vào: /Applications/$APP_NAME.app (đang chạy)"
+if [ "$INSTALL_APP" -eq 1 ]; then
+    echo "    - Đã cài đặt vào: /Applications/$APP_NAME.app (đang chạy)"
+fi
 echo "    - Bộ cài DMG: $DMG_PATH"
 echo "    - Bản nén ZIP: $ZIP_PATH"
