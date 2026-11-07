@@ -7,8 +7,8 @@ cd "$PROJECT_DIR"
 
 APP_NAME="DriveBar"
 BUNDLE_ID="com.hunglx.DriveBar"
-VERSION="1.7.1"
-BUILD_NUMBER="28"
+VERSION="1.7.2"
+BUILD_NUMBER="29"
 APP_BUNDLE="$PROJECT_DIR/$APP_NAME.app"
 ROOT_APP_BUNDLE="$ROOT_WORKSPACE_DIR/$APP_NAME.app"
 DIST_DIR="$PROJECT_DIR/dist"
@@ -235,7 +235,9 @@ codesign --force --deep --sign - "$STAGE_APP"
 codesign --verify --deep --strict "$STAGE_APP"
 
 rm -rf "$APP_BUNDLE"
-ditto --noextattr "$STAGE_APP" "$APP_BUNDLE"
+ditto --norsrc --noextattr "$STAGE_APP" "$APP_BUNDLE"
+xattr -cr "$APP_BUNDLE" 2>/dev/null || true
+codesign --verify --deep --strict "$APP_BUNDLE"
 
 echo "==> [5/6] Đang tạo bộ cài đặt .DMG và .ZIP tại thư mục dist/..."
 rm -rf "$DIST_DIR"
@@ -244,7 +246,7 @@ mkdir -p "$DIST_DIR"
 DMG_STAGING="$STAGE_ROOT/dmg_staging"
 mkdir -p "$DMG_STAGING"
 
-ditto --noextattr "$STAGE_APP" "$DMG_STAGING/$APP_NAME.app"
+ditto --norsrc --noextattr "$STAGE_APP" "$DMG_STAGING/$APP_NAME.app"
 ln -s /Applications "$DMG_STAGING/Applications"
 
 cat > "$DMG_STAGING/Cai_Dat_DriveBar.command" << 'INSTALLER_EOF'
@@ -260,7 +262,7 @@ echo "===================================================="
 
 pkill -f DriveBar 2>/dev/null || true
 rm -rf "$APP_DST"
-ditto --noextattr "$APP_SRC" "$APP_DST"
+ditto --norsrc --noextattr "$APP_SRC" "$APP_DST"
 xattr -cr "$APP_DST" 2>/dev/null || true
 
 echo "✓ Đã cài đặt thành công tại: $APP_DST"
@@ -283,7 +285,9 @@ ditto -c -k --norsrc --noextattr --keepParent "$STAGE_APP" "$ZIP_PATH"
 echo "==> [6/6] Đồng bộ $ROOT_APP_BUNDLE..."
 if [ "$ROOT_WORKSPACE_DIR" != "$PROJECT_DIR" ]; then
     rm -rf "$ROOT_APP_BUNDLE"
-    ditto --noextattr "$STAGE_APP" "$ROOT_APP_BUNDLE"
+    ditto --norsrc --noextattr "$STAGE_APP" "$ROOT_APP_BUNDLE"
+    xattr -cr "$ROOT_APP_BUNDLE" 2>/dev/null || true
+    codesign --verify --deep --strict "$ROOT_APP_BUNDLE"
 fi
 
 if [ "$INSTALL_APP" -eq 1 ]; then
@@ -291,7 +295,7 @@ if [ "$INSTALL_APP" -eq 1 ]; then
     pkill -9 DriveBar 2>/dev/null || true
     sleep 0.5
     rm -rf "/Applications/$APP_NAME.app"
-    ditto --noextattr "$STAGE_APP" "/Applications/$APP_NAME.app"
+    ditto --norsrc --noextattr "$STAGE_APP" "/Applications/$APP_NAME.app"
     xattr -cr "/Applications/$APP_NAME.app" 2>/dev/null || true
     /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/$APP_NAME.app" 2>/dev/null || true
     open "/Applications/$APP_NAME.app"
