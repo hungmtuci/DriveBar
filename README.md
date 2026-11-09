@@ -13,7 +13,16 @@
 
 ---
 
-## ✨ Điểm mới trong v1.2.0
+## ✨ Điểm mới trong v1.8.0
+
+- **Đồng bộ 2 chiều Thư mục Ổ cứng Mac ↔ Google Drive từ Menu Chuột phải Finder (`Quick Actions` & `Services`):**
+  - Giải quyết triệt để hạn chế của Google Drive for Desktop trên macOS (vốn từ chối thêm các thư mục con nằm trong `~/Documents` khi `~/Documents` đang bật iCloud Drive).
+  - Bấm chuột phải vào bất kỳ thư mục sản phẩm nào trên ổ cứng Mac (ví dụ `~/Documents/antigravity/TuVanDichVu/Ho_so_San_pham_Nghiem_thu_CNYTCC_YTeSo`) → chọn **Quick Actions (Tác vụ nhanh)** hoặc **Services (Dịch vụ)**:
+    - **Đồng bộ nhanh 1 chạm vào Google Drive**: Tự động tạo cấu trúc tương ứng trong `My Drive/00. Antigravity_Sync/<Dự_án>/<Thư_mục>`, đồng bộ 2 chiều toàn bộ tệp và gắn nhãn xanh **Đồng bộ GDrive** trên Finder.
+    - **Đồng bộ với Google Drive (DriveBar)...**: Mở hộp thoại chọn thư mục đích tùy ý trong `My Drive` và chuyển đổi giữa 2 chế độ: **Đồng bộ 2 chiều thời gian thực (Giữ thư mục thật trên ổ Mac)** hoặc **Di chuyển sang Google Drive & Tạo Symlink (`ln -s`)**.
+  - Tích hợp sẵn trong **Universal Actions (`⌘⇧A`)**, menu **DriveBar** trên thanh Menu Bar và tab **Cài đặt → Google Drive & Đồng bộ**.
+
+## ✨ Điểm mới trong v1.2.0–v1.7.2
 
 - **Real-time `FSEvents` & Đa tài khoản Google Drive:** Tự động cập nhật chỉ mục ngay tức thì khi tạo mới, đổi tên hoặc xóa thư mục trên Finder mà không cần chờ quét lại 90.000 mục; hỗ trợ gộp hoặc chọn riêng từng tài khoản `GoogleDrive-*`.
 - **Convert trực tiếp `.gdoc`, `.gsheet`, `.gslides` & Đường dẫn Web (`URL`) sang Markdown:** Tự trích `doc_id` xuất Markdown / bảng biểu CSV cho file Google Workspace trực tuyến; dán link hoặc bôi đen URL bất kỳ nhấn `⌘⇧A` để lọc sạch bài viết Web / GitHub sang Markdown chuẩn AI.

@@ -133,6 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         _ = GoogleDriveIndexService.shared
         SyncAndLatchingService.shared.start()
+        LocalFolderDriveSyncService.shared.start()
         ClipboardHistoryService.shared.start()
         ContactsSearchService.shared.preloadIfAuthorized()
         StatusBarController.shared.install()
@@ -183,13 +184,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        let valid = urls.filter { $0.path.contains("/Library/CloudStorage/") || FileManager.default.fileExists(atPath: $0.path) }
+        // 1. Handle custom URL scheme `drivebar://sync-folder?mode=dialog|instant&path=/Users/...`
+        let schemeURLs = urls.filter { $0.scheme?.lowercased() == "drivebar" }
+        if !schemeURLs.isEmpty {
+            var folderURLs: [URL] = []
+            var isInstant = false
+            for u in schemeURLs {
+                if let comps = URLComponents(url: u, resolvingAgainstBaseURL: false) {
+                    let mode = comps.queryItems?.first(where: { $0.name == "mode" })?.value ?? "dialog"
+                    if mode == "instant" {
+                        isInstant = true
+                    }
+                    if let pathVal = comps.queryItems?.first(where: { $0.name == "path" })?.value,
+                       !pathVal.isEmpty {
+                        folderURLs.append(URL(fileURLWithPath: pathVal))
+                    }
+                }
+            }
+            if !folderURLs.isEmpty {
+                FolderSyncDialogController.shared.present(forFolderURLs: folderURLs, instantIfSingle: isInstant)
+                return
+            }
+        }
+
+        // 2. Standard file/folder open or Dock drop
+        let valid = urls.filter { $0.isFileURL && ($0.path.contains("/Library/CloudStorage/") || FileManager.default.fileExists(atPath: $0.path)) }
         guard !valid.isEmpty else { return }
         LauncherViewModel.shared.openUniversalActions(
             for: .files(valid, sourceNote: L("Mở trực tiếp / Kéo vào Dock", "Direct open / Dragged to Dock")),
             directExternalTrigger: true
         )
         LauncherPanelController.shared.showAndFocus()
+    }
+
+    @objc func handleSyncFolderWithGoogleDriveService(
+        _ pboard: NSPasteboard,
+        userData: String?,
+        error: AutoreleasingUnsafeMutablePointer<NSString?>
+    ) {
+        if let urls = pboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+           !urls.isEmpty {
+            FolderSyncDialogController.shared.present(forFolderURLs: urls, instantIfSingle: false)
+        }
+    }
+
+    @objc func handleInstantSyncFolderWithGoogleDriveService(
+        _ pboard: NSPasteboard,
+        userData: String?,
+        error: AutoreleasingUnsafeMutablePointer<NSString?>
+    ) {
+        if let urls = pboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+           !urls.isEmpty {
+            FolderSyncDialogController.shared.present(forFolderURLs: urls, instantIfSingle: true)
+        }
     }
 
     @objc func handleUniversalActionService(

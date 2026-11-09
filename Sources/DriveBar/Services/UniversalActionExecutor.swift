@@ -245,6 +245,39 @@ final class UniversalActionExecutor {
             }
 
         // MARK: - 2. Google Drive Actions
+        case "gdrive.sync_local_folder":
+            LauncherPanelController.shared.hide()
+        case "gdrive.sync_local_folder":
+            LauncherPanelController.shared.hide()
+            for url in urls {
+                _ = LocalFolderDriveSyncService.shared.addOrUpdateSyncPair(
+                    localPath: url.path,
+                    driveTargetPath: nil,
+                    mode: .twoWayMirror,
+                    showToast: false
+                )
+            }
+            FolderSyncDialogController.shared.present(forFolderURLs: urls, instantIfSingle: false)
+
+        case "gdrive.sync_local_folder_instant":
+            LauncherPanelController.shared.hide()
+            FolderSyncDialogController.shared.present(forFolderURLs: urls, instantIfSingle: true)
+
+        case "gdrive.share_public_read":
+            LauncherPanelController.shared.hide()
+            guard let first = urls.first else { return }
+            LocalFolderDriveSyncService.shared.setSharePermission(forPath: first.path, level: .reader, showToast: true)
+
+        case "gdrive.share_public_edit":
+            LauncherPanelController.shared.hide()
+            guard let first = urls.first else { return }
+            LocalFolderDriveSyncService.shared.setSharePermission(forPath: first.path, level: .writer, showToast: true)
+
+        case "gdrive.share_lock_restricted":
+            LauncherPanelController.shared.hide()
+            guard let first = urls.first else { return }
+            LocalFolderDriveSyncService.shared.setSharePermission(forPath: first.path, level: .restricted, showToast: true)
+
         case "gdrive.open_web":
             LauncherPanelController.shared.hide()
             guard let first = urls.first else { return }

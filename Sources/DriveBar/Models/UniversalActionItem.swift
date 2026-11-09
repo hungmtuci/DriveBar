@@ -181,6 +181,15 @@ struct UniversalActionDefinition: Identifiable, Equatable, Sendable {
                 copy.sfSymbol = "folder.badge.minus"
                 return copy
             }
+        } else if id == "gdrive.sync_local_folder" {
+            if let first = urls.first,
+               let pair = LocalFolderDriveSyncService.shared.pair(forLocalOrDrivePath: first.path) {
+                var copy = self
+                copy.customTitleOverride = L("Quản lý / Đồng bộ ngay với Google Drive (Đang đồng bộ)", "Manage / Sync Now with Google Drive (Active)")
+                copy.customSubtitleOverride = L("Đích: \(pair.prettyDrivePath) • Chế độ: \(pair.syncMode.localizedShortBadge)", "Target: \(pair.prettyDrivePath) • Mode: \(pair.syncMode.localizedShortBadge)")
+                copy.sfSymbol = "checkmark.icloud.fill"
+                return copy
+            }
         } else if id == "file.toggle_pin" {
             let allPinned = urls.allSatisfy { settings.isPinned($0.path) }
             var copy = self
@@ -209,6 +218,10 @@ struct UniversalActionDefinition: Identifiable, Equatable, Sendable {
             guard !urls.isEmpty else { return false }
             if urls.count > 1 && !acceptsMulti { return false }
             if requiresGoogleDrive && !isInsideGoogleDrive { return false }
+            if id == "gdrive.sync_local_folder" || id == "gdrive.sync_local_folder_instant" {
+                let allDirectCloud = urls.allSatisfy { GoogleDriveIndexService.shared.isDirectGoogleDriveCloudStoragePath($0.path) }
+                if allDirectCloud { return false }
+            }
 
             if id == "file.extract_archive" {
                 let archiveExts: Set<String> = ["zip", "tar", "gz", "tgz", "bz2", "tbz2", "xz", "7z", "rar"]
@@ -494,6 +507,82 @@ enum UniversalActionCatalog {
         ),
 
         // MARK: - 2. Google Drive Actions
+        UniversalActionDefinition(
+            id: "gdrive.sync_local_folder",
+            titleVI: "Đồng bộ với Google Drive",
+            titleEN: "Sync with Google Drive",
+            subtitleVI: "Đồng bộ 2 chiều thời gian thực với Google Drive & mở bảng lấy link chia sẻ Public / Khóa quyền",
+            subtitleEN: "Real-time 2-way sync with Google Drive & open Public Share / Lock permissions dialog",
+            keywords: "sync google drive folder dong bo thu muc mac antigravity gdrive 2 chieu",
+            category: .googleDrive,
+            sfSymbol: "icloud.and.arrow.up.fill",
+            tintHex: "#0EA5E9",
+            acceptsFiles: false,
+            acceptsFolders: true,
+            acceptsMulti: true,
+            acceptsText: false,
+            acceptsURL: false,
+            requiresGoogleDrive: false,
+            requiresBundle: false,
+            priority: 965
+        ),
+        UniversalActionDefinition(
+            id: "gdrive.share_public_read",
+            titleVI: "Lấy link chia sẻ Public — Chỉ xem (Viewer)",
+            titleEN: "Get Public Share Link — View Only (Viewer)",
+            subtitleVI: "Mở quyền 'Bất kỳ ai có liên kết đều có thể xem' trên Google Drive & tự động Copy link vào Clipboard",
+            subtitleEN: "Enable 'Anyone with the link can view' on Google Drive & copy share link to Clipboard",
+            keywords: "public link share view reader google drive chia se cong khai chi xem",
+            category: .googleDrive,
+            sfSymbol: "globe",
+            tintHex: "#10B981",
+            acceptsFiles: true,
+            acceptsFolders: true,
+            acceptsMulti: false,
+            acceptsText: false,
+            acceptsURL: false,
+            requiresGoogleDrive: true,
+            requiresBundle: false,
+            priority: 928
+        ),
+        UniversalActionDefinition(
+            id: "gdrive.share_public_edit",
+            titleVI: "Lấy link chia sẻ Public — Cho phép sửa (Editor)",
+            titleEN: "Get Public Share Link — Can Edit (Editor)",
+            subtitleVI: "Mở quyền 'Bất kỳ ai có liên kết đều có thể chỉnh sửa' trên Google Drive & tự động Copy link",
+            subtitleEN: "Enable 'Anyone with the link can edit' on Google Drive & copy share link to Clipboard",
+            keywords: "public link share edit writer google drive chia se cong khai chinh sua",
+            category: .googleDrive,
+            sfSymbol: "pencil.and.outline",
+            tintHex: "#8B5CF6",
+            acceptsFiles: true,
+            acceptsFolders: true,
+            acceptsMulti: false,
+            acceptsText: false,
+            acceptsURL: false,
+            requiresGoogleDrive: true,
+            requiresBundle: false,
+            priority: 926
+        ),
+        UniversalActionDefinition(
+            id: "gdrive.share_lock_restricted",
+            titleVI: "Khóa link chia sẻ Google Drive (Chỉ mình tôi)",
+            titleEN: "Lock Google Drive Share Link (Restricted)",
+            subtitleVI: "Thu hồi quyền truy cập công khai (anyoneWithLink) để khóa lại chỉ mình chủ sở hữu xem được",
+            subtitleEN: "Revoke public link access (anyoneWithLink) so only the owner can access",
+            keywords: "lock restrict private google drive khoa link han che thu hoi quyen",
+            category: .googleDrive,
+            sfSymbol: "lock.fill",
+            tintHex: "#F59E0B",
+            acceptsFiles: true,
+            acceptsFolders: true,
+            acceptsMulti: false,
+            acceptsText: false,
+            acceptsURL: false,
+            requiresGoogleDrive: true,
+            requiresBundle: false,
+            priority: 924
+        ),
         UniversalActionDefinition(
             id: "gdrive.open_web",
             titleVI: "Mở trên Google Drive Web",

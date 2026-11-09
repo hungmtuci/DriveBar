@@ -1271,6 +1271,7 @@ private struct GoogleDriveSettingsPane: View {
     @ObservedObject var settings: AppSettings
     @ObservedObject var driveService: GoogleDriveIndexService
     @ObservedObject var syncService: SyncAndLatchingService
+    @ObservedObject private var localSyncService = LocalFolderDriveSyncService.shared
 
     private var cleanDriveRootPath: String {
         guard let root = driveService.accountRoot else {
@@ -1294,6 +1295,9 @@ private struct GoogleDriveSettingsPane: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                // 0. Local Mac Folders <-> Google Drive Desktop Sync (Finder Right-Click & Antigravity)
+                localFolderDriveSyncSection
+
                 // 1. Google Drive Index
                 MacSettingsSection(title: L("Chỉ mục Google Drive", "Google Drive Index")) {
                     MacSettingsRow(
@@ -1436,6 +1440,272 @@ private struct GoogleDriveSettingsPane: View {
             }
             .padding(.horizontal, 28)
             .padding(.vertical, 20)
+        }
+    }
+
+    @ViewBuilder
+    private var localFolderDriveSyncSection: some View {
+        MacSettingsSection(
+            title: L("Đồng bộ Thư mục trên ổ cứng Mac ↔ Google Drive (Chuột phải Finder & Antigravity)", "Sync Local Mac Folders ↔ Google Drive (Finder Right-Click & Antigravity)"),
+            footer: L(
+                "Bấm chuột phải vào bất kỳ thư mục nào trong Finder → chọn 'Quick Actions' (Tác vụ nhanh) → 'Đồng bộ với Google Drive (DriveBar)...' hoặc 'Đồng bộ nhanh 1 chạm vào Google Drive'. Mọi thay đổi trong thư mục Antigravity trên ổ Mac sẽ tự động đồng bộ 2 chiều thời gian thực với Google Drive Desktop.",
+                "Right-click any folder in Finder → 'Quick Actions' → 'Đồng bộ với Google Drive (DriveBar)...' or 'Đồng bộ nhanh 1 chạm vào Google Drive'. Changes in local Antigravity folders sync 2-way in real time with Google Drive Desktop."
+            ),
+            headerTrailing: {
+                HStack(spacing: 6) {
+                    Button {
+                        localSyncService.syncAllEnabledPairs(showToast: true)
+                    } label: {
+                        Label(
+                            localSyncService.isGlobalSyncing ? L("Đang đồng bộ...", "Syncing...") : L("Đồng bộ tất cả", "Sync All"),
+                            systemImage: "arrow.triangle.2.circlepath"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(localSyncService.syncedPairs.isEmpty || localSyncService.isGlobalSyncing)
+
+                    Button {
+                        promptAddLocalFolderForDriveSync()
+                    } label: {
+                        Label(L("Thêm thư mục...", "Add Folder..."), systemImage: "plus")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
+            }
+        ) {
+            MacSettingsRow(
+                symbol: "folder.badge.gearshape",
+                title: L("Thư mục đích mặc định trong My Drive", "Default Destination Subfolder in My Drive"),
+                subtitle: L("Khi đồng bộ nhanh từ ~/Documents/antigravity, cấu trúc dự án con sẽ được giữ nguyên trong thư mục này", "When quick-syncing from ~/Documents/antigravity, project subfolder hierarchy is preserved here")
+            ) {
+                HStack(spacing: 6) {
+                    TextField("00. Antigravity_Sync", text: $localSyncService.defaultDriveSyncSubfolder)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .frame(width: 175)
+
+                    Button(L("Mở", "Open")) {
+                        if let myDrive = localSyncService.activeMyDriveRoot() {
+                            let sub = localSyncService.defaultDriveSyncSubfolder.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let target = sub.isEmpty ? myDrive : (myDrive as NSString).appendingPathComponent(sub)
+                            try? FileManager.default.createDirectory(atPath: target, withIntermediateDirectories: true)
+                            NSWorkspace.shared.open(URL(fileURLWithPath: target))
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+
+            MacSettingsRowDivider()
+
+            MacSettingsRow(
+                symbol: "contextualmenu.and.cursorarrow",
+                title: L("Menu Chuột phải Finder (Quick Actions & Services)", "Finder Right-Click Menu (Quick Actions & Services)"),
+                subtitle: L("Đã cài đặt nút 'Đồng bộ với Google Drive' trong ~/Library/Services", "Installed 'Đồng bộ với Google Drive' in ~/Library/Services"),
+                statusDotColor: .green,
+                statusText: L("Đã kích hoạt", "Installed")
+            ) {
+                Button(L("Làm mới Menu Chuột phải", "Refresh Finder Menu")) {
+                    localSyncService.installFinderQuickActionsIfNeeded(force: true)
+                    FloatingToastController.shared.showSuccess(
+                        title: L("Đã làm mới Menu Chuột phải Finder!", "Refreshed Finder Right-Click Menu!"),
+                        subtitle: L("Bấm chuột phải vào thư mục → Quick Actions / Services", "Right-click a folder → Quick Actions / Services"),
+                        symbol: "contextualmenu.and.cursorarrow"
+                    )
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            MacSettingsRowDivider()
+
+            if localSyncService.syncedPairs.isEmpty {
+                HStack {
+                    Spacer()
+                    VStack(spacing: 6) {
+                        Image(systemName: "icloud.and.arrow.up")
+                            .font(.system(size: 24))
+                            .foregroundStyle(.tertiary)
+                        Text(L("Chưa có thư mục ổ cứng Mac nào đang đồng bộ với Google Drive", "No local Mac folders synced with Google Drive yet"))
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        Button(L("Chọn thư mục trên Mac để đồng bộ...", "Choose Mac Folder to Sync...")) {
+                            promptAddLocalFolderForDriveSync()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    }
+                    .padding(.vertical, 14)
+                    Spacer()
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(localSyncService.syncedPairs.enumerated()), id: \.element.id) { idx, pair in
+                        if idx > 0 {
+                            MacSettingsRowDivider(leadingInset: 42)
+                        }
+                        HStack(spacing: 10) {
+                            Image(systemName: pair.isEnabled ? "checkmark.icloud.fill" : "icloud.slash")
+                                .font(.system(size: 15))
+                                .foregroundStyle(pair.isEnabled ? .green : .secondary)
+                                .frame(width: 20, alignment: .center)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text(pair.folderName)
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(.primary)
+
+                                    Text(pair.syncMode.localizedShortBadge)
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundStyle(.blue)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 1.5)
+                                        .background(Color.blue.opacity(0.12), in: Capsule())
+
+                                    let byteStr = ByteCountFormatter.string(fromByteCount: pair.lastSyncTotalBytes, countStyle: .file)
+                                    Text("\(pair.lastSyncFileCount) \(L("tệp", "files")) (\(byteStr))")
+                                        .font(.system(size: 10.5))
+                                        .foregroundStyle(.secondary)
+
+                                    if let level = pair.shareAccessLevel, level != .unknown {
+                                        Text(level.localizedBadge)
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .foregroundStyle(level == .restricted ? .orange : (level == .writer ? .purple : .green))
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 1.5)
+                                            .background(
+                                                (level == .restricted ? Color.orange : (level == .writer ? Color.purple : Color.green)).opacity(0.12),
+                                                in: Capsule()
+                                            )
+                                    }
+                                }
+
+                                Text("\(pair.prettyLocalPath)  ↔  \(pair.prettyDrivePath)")
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+
+                            Spacer()
+
+                            Menu {
+                                Button {
+                                    localSyncService.setSharePermission(forPath: pair.localPath, level: .reader, showToast: true)
+                                } label: {
+                                    Label(L("🌐 Lấy link Public — Chỉ xem (Copy Link)", "🌐 Public Link — View Only (Copy Link)"), systemImage: "globe")
+                                }
+
+                                Button {
+                                    localSyncService.setSharePermission(forPath: pair.localPath, level: .writer, showToast: true)
+                                } label: {
+                                    Label(L("✏️ Lấy link Public — Cho phép sửa (Copy Link)", "✏️ Public Link — Can Edit (Copy Link)"), systemImage: "pencil.and.outline")
+                                }
+
+                                Divider()
+
+                                Button {
+                                    localSyncService.setSharePermission(forPath: pair.localPath, level: .restricted, showToast: true)
+                                } label: {
+                                    Label(L("🔒 Khóa lại — Hạn chế (Chỉ mình tôi)", "🔒 Lock — Restricted (Owner Only)"), systemImage: "lock.fill")
+                                }
+                            } label: {
+                                HStack(spacing: 3) {
+                                    Image(systemName: "link.badge.plus")
+                                        .font(.system(size: 11))
+                                    Text(L("Chia sẻ", "Share"))
+                                        .font(.system(size: 11, weight: .medium))
+                                }
+                            }
+                            .menuStyle(.borderedButton)
+                            .controlSize(.small)
+                            .fixedSize()
+                            .help(L("Lấy link chia sẻ Public (Xem / Sửa) hoặc Khóa lại", "Get Public Share Link (View / Edit) or Lock"))
+
+                            Button {
+                                localSyncService.syncPairNow(id: pair.id, showToast: true)
+                            } label: {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                                    .font(.system(size: 12))
+                            }
+                            .buttonStyle(.plain)
+                            .help(L("Đồng bộ ngay lập tức", "Sync now"))
+
+                            Button {
+                                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: pair.localPath)])
+                            } label: {
+                                Image(systemName: "folder")
+                                    .font(.system(size: 12))
+                            }
+                            .buttonStyle(.plain)
+                            .help(L("Mở thư mục gốc trên ổ Mac", "Reveal local Mac folder in Finder"))
+
+                            Button {
+                                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: pair.driveTargetPath)])
+                            } label: {
+                                Image(systemName: "externaldrive.badge.icloud")
+                                    .font(.system(size: 12))
+                            }
+                            .buttonStyle(.plain)
+                            .help(L("Mở thư mục đích trong Google Drive Finder", "Reveal destination folder in Google Drive"))
+
+                            Button {
+                                if let gd = GoogleDriveIndexService.googleDriveURLs(for: pair.driveTargetPath, isDirectoryHint: true) {
+                                    NSWorkspace.shared.open(gd.webURL)
+                                } else {
+                                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: pair.driveTargetPath)])
+                                }
+                            } label: {
+                                Image(systemName: "globe")
+                                    .font(.system(size: 12))
+                            }
+                            .buttonStyle(.plain)
+                            .help(L("Mở trên trình duyệt Google Drive Web", "Open in Google Drive Web"))
+
+                            Button {
+                                FolderSyncDialogController.shared.presentDialog(forLocalPath: pair.localPath)
+                            } label: {
+                                Image(systemName: "slider.horizontal.3")
+                                    .font(.system(size: 12))
+                            }
+                            .buttonStyle(.plain)
+                            .help(L("Cấu hình đường dẫn đích & chế độ đồng bộ", "Configure destination & sync mode"))
+
+                            Button {
+                                localSyncService.removeSyncPair(id: pair.id, restoreRealFolderIfSymlink: true, showToast: true)
+                            } label: {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .help(L("Ngừng đồng bộ thư mục này", "Stop syncing this folder"))
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                    }
+                }
+            }
+        }
+    }
+
+    private func promptAddLocalFolderForDriveSync() {
+        let panel = NSOpenPanel()
+        panel.title = L("Chọn thư mục trên ổ cứng Mac để đồng bộ với Google Drive", "Choose a Mac folder to sync with Google Drive")
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.prompt = L("Tiếp tục", "Continue")
+        let antigravityPath = (NSHomeDirectory() as NSString).appendingPathComponent("Documents/antigravity")
+        if FileManager.default.fileExists(atPath: antigravityPath) {
+            panel.directoryURL = URL(fileURLWithPath: antigravityPath)
+        }
+        if panel.runModal() == .OK, !panel.urls.isEmpty {
+            FolderSyncDialogController.shared.present(forFolderURLs: panel.urls, instantIfSingle: false)
         }
     }
 }

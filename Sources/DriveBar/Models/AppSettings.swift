@@ -431,12 +431,7 @@ final class AppSettings: ObservableObject {
         if let savedMacFolders = defaults.stringArray(forKey: Keys.customMacFolders) {
             self.customMacFolders = savedMacFolders
         } else {
-            let defaultDirs = [
-                "\(home)/Documents",
-                "\(home)/Downloads",
-                "\(home)/Desktop"
-            ].filter { FileManager.default.fileExists(atPath: $0) }
-            self.customMacFolders = defaultDirs
+            self.customMacFolders = []
         }
         self.enableClipboardHistory = defaults.object(forKey: Keys.enableClipboardHistory) as? Bool ?? true
         self.enableActionLatching = defaults.object(forKey: Keys.enableActionLatching) as? Bool ?? true

@@ -32,7 +32,7 @@ final class UpdateCheckerService: ObservableObject {
     @Published private(set) var state: UpdateState = .idle
 
     var currentVersion: String {
-        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.7.2"
+        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.8.0"
     }
 
     var availableVersion: String? {

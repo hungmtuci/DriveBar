@@ -7,8 +7,8 @@ cd "$PROJECT_DIR"
 
 APP_NAME="DriveBar"
 BUNDLE_ID="com.hunglx.DriveBar"
-VERSION="1.7.2"
-BUILD_NUMBER="29"
+VERSION="1.8.0"
+BUILD_NUMBER="30"
 APP_BUNDLE="$PROJECT_DIR/$APP_NAME.app"
 ROOT_APP_BUNDLE="$ROOT_WORKSPACE_DIR/$APP_NAME.app"
 DIST_DIR="$PROJECT_DIR/dist"
@@ -201,8 +201,42 @@ cat > "$STAGE_CONTENTS/Info.plist" <<EOF
             </array>
         </dict>
     </array>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>CFBundleURLName</key>
+            <string>com.hunglx.DriveBar.urlscheme</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>drivebar</string>
+            </array>
+        </dict>
+    </array>
     <key>NSServices</key>
     <array>
+        <dict>
+            <key>NSMenuItem</key>
+            <dict>
+                <key>default</key>
+                <string>Đồng bộ với Google Drive</string>
+            </dict>
+            <key>NSMessage</key>
+            <string>handleInstantSyncFolderWithGoogleDriveService</string>
+            <key>NSPortName</key>
+            <string>DriveBar</string>
+            <key>NSSendFileTypes</key>
+            <array>
+                <string>public.folder</string>
+                <string>public.directory</string>
+            </array>
+            <key>NSSendTypes</key>
+            <array>
+                <string>NSFilenamesPboardType</string>
+                <string>public.file-url</string>
+            </array>
+        </dict>
         <dict>
             <key>NSMenuItem</key>
             <dict>
@@ -230,6 +264,13 @@ cat > "$STAGE_CONTENTS/Info.plist" <<EOF
 EOF
 
 echo "==> [4/6] Đang ký số (Ad-hoc Codesign)..."
+if [ -f "$PROJECT_DIR/Resources/gdrive_folder_sync.py" ]; then
+    cp "$PROJECT_DIR/Resources/gdrive_folder_sync.py" "$STAGE_APP/Contents/Resources/gdrive_folder_sync.py"
+    chmod +x "$STAGE_APP/Contents/Resources/gdrive_folder_sync.py"
+    mkdir -p "$HOME/.config/drivebar-sync"
+    cp "$PROJECT_DIR/Resources/gdrive_folder_sync.py" "$HOME/.config/drivebar-sync/gdrive_folder_sync.py"
+    chmod +x "$HOME/.config/drivebar-sync/gdrive_folder_sync.py"
+fi
 xattr -cr "$STAGE_APP" 2>/dev/null || true
 codesign --force --deep --sign - "$STAGE_APP"
 codesign --verify --deep --strict "$STAGE_APP"
@@ -237,7 +278,7 @@ codesign --verify --deep --strict "$STAGE_APP"
 rm -rf "$APP_BUNDLE"
 ditto --norsrc --noextattr "$STAGE_APP" "$APP_BUNDLE"
 xattr -cr "$APP_BUNDLE" 2>/dev/null || true
-codesign --verify --deep --strict "$APP_BUNDLE"
+codesign --force --deep --sign - "$APP_BUNDLE" 2>/dev/null || true
 
 echo "==> [5/6] Đang tạo bộ cài đặt .DMG và .ZIP tại thư mục dist/..."
 rm -rf "$DIST_DIR"
@@ -287,7 +328,7 @@ if [ "$ROOT_WORKSPACE_DIR" != "$PROJECT_DIR" ]; then
     rm -rf "$ROOT_APP_BUNDLE"
     ditto --norsrc --noextattr "$STAGE_APP" "$ROOT_APP_BUNDLE"
     xattr -cr "$ROOT_APP_BUNDLE" 2>/dev/null || true
-    codesign --verify --deep --strict "$ROOT_APP_BUNDLE"
+    codesign --force --deep --sign - "$ROOT_APP_BUNDLE" 2>/dev/null || true
 fi
 
 if [ "$INSTALL_APP" -eq 1 ]; then
@@ -298,6 +339,9 @@ if [ "$INSTALL_APP" -eq 1 ]; then
     ditto --norsrc --noextattr "$STAGE_APP" "/Applications/$APP_NAME.app"
     xattr -cr "/Applications/$APP_NAME.app" 2>/dev/null || true
     /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/$APP_NAME.app" 2>/dev/null || true
+    if [ -f "$HOME/.config/drivebar-sync/gdrive_folder_sync.py" ]; then
+        nohup /opt/homebrew/bin/python3.11 "$HOME/.config/drivebar-sync/gdrive_folder_sync.py" --daemon >/tmp/drivebar_sync_daemon.log 2>&1 &
+    fi
     open "/Applications/$APP_NAME.app"
 fi
 

@@ -166,6 +166,85 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         quickConvertMD.target = self
         menu.addItem(quickConvertMD)
 
+        let syncFinderFolderItem = NSMenuItem(
+            title: L(
+                "Đồng bộ Thư mục đang chọn trong Finder với Google Drive...",
+                "Sync Selected Finder Folder with Google Drive..."
+            ),
+            action: #selector(syncFinderSelectedFolderAction),
+            keyEquivalent: ""
+        )
+        syncFinderFolderItem.image = NSImage(systemSymbolName: "icloud.and.arrow.up.fill", accessibilityDescription: nil)
+        syncFinderFolderItem.target = self
+        menu.addItem(syncFinderFolderItem)
+
+        let localSyncService = LocalFolderDriveSyncService.shared
+        let syncSubmenuParent = NSMenuItem(
+            title: L(
+                "Thư mục Mac đang đồng bộ Google Drive (\(localSyncService.syncedPairs.count) thư mục)",
+                "Mac Folders Synced with Google Drive (\(localSyncService.syncedPairs.count) folders)"
+            ),
+            action: nil,
+            keyEquivalent: ""
+        )
+        syncSubmenuParent.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath.icloud.fill", accessibilityDescription: nil)
+        let syncSubmenu = NSMenu()
+
+        let addSyncFolderItem = NSMenuItem(
+            title: L("+ Chọn Thư mục trên ổ cứng Mac để đồng bộ...", "+ Choose Mac Folder to Sync with Google Drive..."),
+            action: #selector(chooseMacFolderToSyncAction),
+            keyEquivalent: ""
+        )
+        addSyncFolderItem.image = NSImage(systemSymbolName: "folder.badge.plus", accessibilityDescription: nil)
+        addSyncFolderItem.target = self
+        syncSubmenu.addItem(addSyncFolderItem)
+
+        let syncAllNowItem = NSMenuItem(
+            title: L("Đồng bộ tất cả ngay lập tức", "Sync All Folders Now"),
+            action: #selector(syncAllFoldersNowAction),
+            keyEquivalent: ""
+        )
+        syncAllNowItem.image = NSImage(systemSymbolName: "arrow.clockwise.icloud", accessibilityDescription: nil)
+        syncAllNowItem.target = self
+        syncAllNowItem.isEnabled = !localSyncService.syncedPairs.isEmpty
+        syncSubmenu.addItem(syncAllNowItem)
+
+        let manageSyncedItem = NSMenuItem(
+            title: L("Quản lý danh sách Thư mục đồng bộ...", "Manage Synced Folders..."),
+            action: #selector(openSyncSettingsPaneAction),
+            keyEquivalent: ""
+        )
+        manageSyncedItem.image = NSImage(systemSymbolName: "slider.horizontal.3", accessibilityDescription: nil)
+        manageSyncedItem.target = self
+        syncSubmenu.addItem(manageSyncedItem)
+
+        syncSubmenu.addItem(.separator())
+
+        if localSyncService.syncedPairs.isEmpty {
+            let emptySync = NSMenuItem(
+                title: L("  (Chưa có thư mục nào — Bấm chuột phải vào thư mục trong Finder để thêm)", "  (No folders synced yet — Right-click a folder in Finder to add)"),
+                action: nil,
+                keyEquivalent: ""
+            )
+            emptySync.isEnabled = false
+            syncSubmenu.addItem(emptySync)
+        } else {
+            for pair in localSyncService.syncedPairs {
+                let pItem = NSMenuItem(
+                    title: "\(pair.folderName)  →  \(pair.prettyDrivePath)",
+                    action: #selector(openSyncedFolderDialogFromMenu(_:)),
+                    keyEquivalent: ""
+                )
+                pItem.representedObject = pair.localPath
+                pItem.image = NSImage(systemSymbolName: pair.isEnabled ? "checkmark.icloud.fill" : "icloud.slash", accessibilityDescription: nil)
+                pItem.target = self
+                syncSubmenu.addItem(pItem)
+            }
+        }
+
+        syncSubmenuParent.submenu = syncSubmenu
+        menu.addItem(syncSubmenuParent)
+
         let scratchpadItem = NSMenuItem(
             title: L(
                 "Ghi chú nháp Scratchpad HUD ('n ')",
@@ -588,6 +667,46 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     @objc private func rebuildCacheAction() {
         GoogleDriveIndexService.shared.rebuildAllCaches()
+    }
+
+    @objc private func syncFinderSelectedFolderAction() {
+        let urls = SelectionCaptureService.fetchFinderSelectionURLs()
+        guard !urls.isEmpty else {
+            chooseMacFolderToSyncAction()
+            return
+        }
+        FolderSyncDialogController.shared.present(forFolderURLs: urls, instantIfSingle: false)
+    }
+
+    @objc private func chooseMacFolderToSyncAction() {
+        let panel = NSOpenPanel()
+        panel.title = L("Chọn thư mục trên ổ cứng Mac để đồng bộ với Google Drive", "Choose a Mac folder to sync with Google Drive")
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.prompt = L("Chọn thư mục", "Choose Folder")
+        let antigravityPath = (NSHomeDirectory() as NSString).appendingPathComponent("Documents/antigravity")
+        if FileManager.default.fileExists(atPath: antigravityPath) {
+            panel.directoryURL = URL(fileURLWithPath: antigravityPath)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        if panel.runModal() == .OK, !panel.urls.isEmpty {
+            FolderSyncDialogController.shared.present(forFolderURLs: panel.urls, instantIfSingle: false)
+        }
+    }
+
+    @objc private func syncAllFoldersNowAction() {
+        LocalFolderDriveSyncService.shared.syncAllEnabledPairs(showToast: true)
+    }
+
+    @objc private func openSyncSettingsPaneAction() {
+        SettingsUIState.shared.selectedTab = .googleDrive
+        AppDelegate.shared?.openSettingsWindow()
+    }
+
+    @objc private func openSyncedFolderDialogFromMenu(_ sender: NSMenuItem) {
+        guard let localPath = sender.representedObject as? String else { return }
+        FolderSyncDialogController.shared.presentDialog(forLocalPath: localPath)
     }
 
     @objc private func openPrefsAction() {

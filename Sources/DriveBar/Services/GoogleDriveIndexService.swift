@@ -251,7 +251,18 @@ final class GoogleDriveIndexService: ObservableObject {
     }
 
     func isPathInGoogleDrive(_ path: String) -> Bool {
+        if availableAccounts.contains(where: { path.hasPrefix($0.rootPath) }) {
+            return true
+        }
+        return LocalFolderDriveSyncService.mappedDrivePath(forLocalPath: path) != nil
+    }
+
+    func isDirectGoogleDriveCloudStoragePath(_ path: String) -> Bool {
         availableAccounts.contains { path.hasPrefix($0.rootPath) }
+    }
+
+    func noteExternalDirectoryCreated(at path: String) {
+        enqueueIncrementalFolderEvents([path])
     }
 
     func accountForPath(_ path: String) -> DriveAccountMount? {
@@ -3029,13 +3040,14 @@ final class GoogleDriveIndexService: ObservableObject {
     }
 
     nonisolated static func googleDriveURLs(for path: String, isDirectoryHint: Bool? = nil) -> (webURL: URL, shareURL: URL)? {
-        guard let itemID = extractGoogleDriveItemID(at: path) else { return nil }
+        let effectivePath = LocalFolderDriveSyncService.mappedDrivePath(forLocalPath: path) ?? path
+        guard let itemID = extractGoogleDriveItemID(at: effectivePath) else { return nil }
         let isDir: Bool
         if let isDirectoryHint {
             isDir = isDirectoryHint
         } else {
             var st = Darwin.stat()
-            isDir = (Darwin.lstat(path, &st) == 0) && ((st.st_mode & S_IFMT) == S_IFDIR)
+            isDir = (Darwin.lstat(effectivePath, &st) == 0) && ((st.st_mode & S_IFMT) == S_IFDIR)
         }
 
         let ext = (path as NSString).pathExtension.lowercased()
