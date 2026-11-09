@@ -67,12 +67,16 @@ def suggested_drive_target(local_path: str, base_subfolder: str = "00. Antigravi
     return os.path.join(base_root, folder_name)
 
 
-def set_finder_tag(folder_path: str, enabled: bool) -> None:
+def set_finder_badge(folder_path: str, state: str) -> None:
+    """state: 'synced' | 'broken' | 'clear'"""
+    if not folder_path or not os.path.exists(folder_path):
+        return
     badge_helper = CONFIG_DIR / "folder_badge_helper"
+    flag = "--set" if state == "synced" else ("--broken" if state == "broken" else "--clear")
     if badge_helper.exists() and os.access(badge_helper, os.X_OK):
         try:
             subprocess.run(
-                [str(badge_helper), "--set" if enabled else "--clear", folder_path],
+                [str(badge_helper), flag, folder_path],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=5,
@@ -81,25 +85,9 @@ def set_finder_tag(folder_path: str, enabled: bool) -> None:
         except Exception:
             pass
 
-    xattr_key = "com.apple.metadata:_kMDItemUserTags"
-    try:
-        if enabled:
-            payload_hex = plistlib.dumps([FINDER_TAG_NAME], fmt=plistlib.FMT_BINARY).hex()
-            subprocess.run(
-                ["/usr/bin/xattr", "-wx", xattr_key, payload_hex, folder_path],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=3,
-            )
-        else:
-            subprocess.run(
-                ["/usr/bin/xattr", "-d", xattr_key, folder_path],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=3,
-            )
-    except Exception:
-        pass
+
+def set_finder_tag(folder_path: str, enabled: bool) -> None:
+    set_finder_badge(folder_path, "synced" if enabled else "clear")
 
 
 def move_to_trash(path: str) -> bool:
@@ -341,6 +329,435 @@ def save_shared_pairs(pairs: list) -> None:
     os.replace(tmp, PAIRS_JSON_PATH)
 
 
+def parse_google_drive_link(url_or_id: str) -> tuple[str | None, str | None]:
+    import re
+    s = (url_or_id or "").strip()
+    if not s:
+        return None, None
+    rk_match = re.search(r"[?&]resourcekey=([a-zA-Z0-9_-]+)", s, re.IGNORECASE)
+    rk = rk_match.group(1) if rk_match else None
+
+    for pat in (
+        r"/folders/([a-zA-Z0-9_-]{15,})",
+        r"/file/d/([a-zA-Z0-9_-]{15,})",
+        r"[?&]id=([a-zA-Z0-9_-]{15,})",
+        r"^([a-zA-Z0-9_-]{15,})$",
+    ):
+        m = re.search(pat, s)
+        if m:
+            return m.group(1), rk
+    return None, rk
+
+
+def parse_rfc3339_epoch(ts_str: str | None) -> float:
+    if not ts_str:
+        return time.time()
+    from datetime import datetime, timezone
+    try:
+        clean = ts_str.replace("Z", "+00:00")
+        return datetime.fromisoformat(clean).timestamp()
+    except Exception:
+        return time.time()
+
+
+def sanitize_filename(name: str) -> str:
+    cleaned = (name or "Untitled").replace("/", "_").replace("\0", "").strip()
+    return cleaned or "Untitled"
+
+
+def inspect_remote_shared_folder(url_or_id: str) -> dict:
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    fid, rk = parse_google_drive_link(url_or_id)
+    if not fid:
+        return {
+            "ok": False,
+            "isBroken": False,
+            "folderId": None,
+            "folderName": None,
+            "ownerName": None,
+            "errorMessage": "Đường dẫn không phải là link thư mục Google Drive hợp lệ.",
+        }
+
+    tok = get_valid_oauth_token("personal") or get_valid_oauth_token("system")
+    if not tok:
+        return {
+            "ok": False,
+            "isBroken": False,
+            "folderId": fid,
+            "folderName": None,
+            "ownerName": None,
+            "errorMessage": "Không tìm thấy token OAuth Google Drive hợp lệ.",
+        }
+
+    headers = {"Authorization": f"Bearer {tok}"}
+    if rk:
+        headers["X-Goog-Drive-Resource-Keys"] = f"{fid}/{rk}"
+
+    meta_url = (
+        f"https://www.googleapis.com/drive/v3/files/{fid}"
+        "?supportsAllDrives=true&fields=id,name,mimeType,trashed,owners(displayName,emailAddress),capabilities(canEdit,canAddChildren,canDownload)"
+    )
+    req = urllib.request.Request(meta_url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            meta = json.loads(resp.read().decode("utf-8"))
+        if meta.get("trashed"):
+            return {
+                "ok": False,
+                "isBroken": True,
+                "folderId": fid,
+                "folderName": meta.get("name"),
+                "ownerName": None,
+                "errorMessage": "Thư mục chia sẻ đã bị chủ sở hữu xóa hoặc đưa vào Thùng rác.",
+            }
+        owners = meta.get("owners") or []
+        owner_str = None
+        if owners:
+            dn = owners[0].get("displayName", "")
+            em = owners[0].get("emailAddress", "")
+            owner_str = f"{dn} ({em})" if (dn and em and dn != em) else (dn or em)
+        folder_name = sanitize_filename(meta.get("name") or f"Shared_{fid[:8]}")
+        sug_local = os.path.abspath(os.path.expanduser(f"~/Documents/antigravity/00. Shared_GDrive/{folder_name}"))
+        sug_drive = os.path.join(find_my_drive_root(), "00. Antigravity_Sync", "00. Shared_GDrive", folder_name)
+        return {
+            "ok": True,
+            "isBroken": False,
+            "folderId": fid,
+            "resourceKey": rk,
+            "folderName": folder_name,
+            "mimeType": meta.get("mimeType"),
+            "ownerName": owner_str,
+            "suggestedLocalPath": sug_local,
+            "suggestedDrivePath": sug_drive,
+            "errorMessage": None,
+        }
+    except urllib.error.HTTPError as he:
+        is_broken = he.code in (401, 403, 404)
+        return {
+            "ok": False,
+            "isBroken": is_broken,
+            "folderId": fid,
+            "folderName": None,
+            "ownerName": None,
+            "errorMessage": (
+                "⚠️ Link Google Drive đã bị khóa hoặc thu hồi quyền truy cập."
+                if is_broken
+                else f"Lỗi kết nối Google Drive API ({he.code})."
+            ),
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "isBroken": False,
+            "folderId": fid,
+            "folderName": None,
+            "ownerName": None,
+            "errorMessage": str(e),
+        }
+
+
+GOOGLE_WORKSPACE_EXPORTS = {
+    "application/vnd.google-apps.document": (
+        ".docx",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ),
+    "application/vnd.google-apps.spreadsheet": (
+        ".xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ),
+    "application/vnd.google-apps.presentation": (
+        ".pptx",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ),
+}
+
+
+def sync_remote_shared_folder(
+    remote_url: str,
+    local_path: str,
+    drive_mirror_path: str | None = None,
+) -> dict:
+    """
+    Additive & Update-Only sync from a shared Google Drive folder URL to local_path (and optional drive_mirror_path).
+    NEVER deletes local files even if removed remotely or if the shared link is locked/revoked.
+    When locked/revoked, marks the folder with the red broken-link badge ('broken').
+    """
+    import urllib.parse
+    import urllib.request
+
+    local_path = os.path.abspath(os.path.expanduser(local_path))
+    os.makedirs(local_path, exist_ok=True)
+    if drive_mirror_path:
+        drive_mirror_path = os.path.abspath(os.path.expanduser(drive_mirror_path))
+
+    info = inspect_remote_shared_folder(remote_url)
+    if not info.get("ok"):
+        _, l_files = scan_tree(local_path, is_cloud=False)
+        total_files = len(l_files)
+        total_bytes = sum(m["size"] for m in l_files.values())
+        is_broken = bool(info.get("isBroken"))
+        if is_broken:
+            set_finder_badge(local_path, "broken")
+            if drive_mirror_path and os.path.exists(drive_mirror_path) and drive_mirror_path != local_path:
+                set_finder_badge(drive_mirror_path, "broken")
+        return {
+            "ok": False,
+            "isBrokenLink": is_broken,
+            "copiedToDrive": 0,
+            "copiedToLocal": 0,
+            "trashedCount": 0,
+            "totalFiles": total_files,
+            "totalBytes": total_bytes,
+            "knownRelativeFiles": sorted(l_files.keys()),
+            "syncedAt": time.time(),
+            "folderName": info.get("folderName"),
+            "ownerName": info.get("ownerName"),
+            "errorMessage": info.get("errorMessage") or "Không thể truy cập link chia sẻ.",
+        }
+
+    fid = info["folderId"]
+    rk = info.get("resourceKey")
+    tok = get_valid_oauth_token("personal") or get_valid_oauth_token("system")
+    headers = {"Authorization": f"Bearer {tok}"}
+    if rk:
+        headers["X-Goog-Drive-Resource-Keys"] = f"{fid}/{rk}"
+
+    downloaded_count = 0
+    copied_to_drive = 0
+
+    def _download_stream(download_url: str, dst_file: str, mtime: float, item_rk: str | None = None, item_id: str | None = None) -> bool:
+        req_headers = dict(headers)
+        if item_rk and item_id:
+            req_headers["X-Goog-Drive-Resource-Keys"] = f"{item_id}/{item_rk}"
+        os.makedirs(os.path.dirname(dst_file), exist_ok=True)
+        tmp_dst = os.path.join(os.path.dirname(dst_file), f".drivebar_sync_tmp_{uuid.uuid4().hex}")
+        try:
+            req = urllib.request.Request(download_url, headers=req_headers, method="GET")
+            with urllib.request.urlopen(req, timeout=60) as resp, open(tmp_dst, "wb") as out_f:
+                shutil.copyfileobj(resp, out_f)
+            os.utime(tmp_dst, (mtime, mtime))
+            os.replace(tmp_dst, dst_file)
+            os.utime(dst_file, (mtime, mtime))
+            return True
+        except Exception:
+            if os.path.exists(tmp_dst):
+                try:
+                    os.remove(tmp_dst)
+                except OSError:
+                    pass
+            return False
+
+    def _sync_folder_recursive(remote_folder_id: str, cur_local_dir: str, folder_rk: str | None = None):
+        nonlocal downloaded_count
+        os.makedirs(cur_local_dir, exist_ok=True)
+        page_token = None
+        while True:
+            q_str = f"'{remote_folder_id}' in parents and trashed = false"
+            params = {
+                "q": q_str,
+                "supportsAllDrives": "true",
+                "includeItemsFromAllDrives": "true",
+                "pageSize": "500",
+                "fields": "nextPageToken,files(id,name,mimeType,size,modifiedTime,resourceKey)",
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            list_url = "https://www.googleapis.com/drive/v3/files?" + urllib.parse.urlencode(params)
+            req_headers = dict(headers)
+            if folder_rk:
+                req_headers["X-Goog-Drive-Resource-Keys"] = f"{remote_folder_id}/{folder_rk}"
+            req = urllib.request.Request(list_url, headers=req_headers, method="GET")
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+
+            for item in data.get("files", []):
+                item_id = item.get("id")
+                raw_name = sanitize_filename(item.get("name") or item_id)
+                mime = item.get("mimeType") or ""
+                item_rk = item.get("resourceKey")
+                remote_mtime = parse_rfc3339_epoch(item.get("modifiedTime"))
+
+                if mime == "application/vnd.google-apps.folder":
+                    sub_local = os.path.join(cur_local_dir, raw_name)
+                    _sync_folder_recursive(item_id, sub_local, item_rk)
+                elif mime in GOOGLE_WORKSPACE_EXPORTS:
+                    ext, export_mime = GOOGLE_WORKSPACE_EXPORTS[mime]
+                    fname = raw_name if raw_name.lower().endswith(ext) else (raw_name + ext)
+                    dst_file = os.path.join(cur_local_dir, fname)
+                    need_dl = True
+                    if os.path.exists(dst_file):
+                        st = os.stat(dst_file)
+                        if st.st_mtime >= remote_mtime - 2.0 and st.st_size > 0:
+                            need_dl = False
+                    if need_dl:
+                        exp_url = (
+                            f"https://www.googleapis.com/drive/v3/files/{item_id}/export?"
+                            + urllib.parse.urlencode({"mimeType": export_mime})
+                        )
+                        if _download_stream(exp_url, dst_file, remote_mtime, item_rk, item_id):
+                            downloaded_count += 1
+                elif not mime.startswith("application/vnd.google-apps."):
+                    dst_file = os.path.join(cur_local_dir, raw_name)
+                    remote_size = int(item.get("size") or 0)
+                    need_dl = True
+                    if os.path.exists(dst_file):
+                        st = os.stat(dst_file)
+                        if abs(st.st_mtime - remote_mtime) <= 2.0 and (remote_size == 0 or st.st_size == remote_size):
+                            need_dl = False
+                    if need_dl:
+                        dl_url = f"https://www.googleapis.com/drive/v3/files/{item_id}?alt=media&supportsAllDrives=true"
+                        if _download_stream(dl_url, dst_file, remote_mtime, item_rk, item_id):
+                            downloaded_count += 1
+
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+
+    try:
+        if info.get("mimeType") == "application/vnd.google-apps.folder":
+            _sync_folder_recursive(fid, local_path, rk)
+        else:
+            # Single shared file link
+            fname = info.get("folderName") or f"Shared_{fid[:8]}"
+            dst_file = os.path.join(local_path, fname)
+            dl_url = f"https://www.googleapis.com/drive/v3/files/{fid}?alt=media&supportsAllDrives=true"
+            if _download_stream(dl_url, dst_file, time.time(), rk, fid):
+                downloaded_count += 1
+    except Exception as e:
+        _, l_files = scan_tree(local_path, is_cloud=False)
+        return {
+            "ok": False,
+            "isBrokenLink": False,
+            "copiedToDrive": 0,
+            "copiedToLocal": downloaded_count,
+            "trashedCount": 0,
+            "totalFiles": len(l_files),
+            "totalBytes": sum(m["size"] for m in l_files.values()),
+            "knownRelativeFiles": sorted(l_files.keys()),
+            "syncedAt": time.time(),
+            "folderName": info.get("folderName"),
+            "ownerName": info.get("ownerName"),
+            "errorMessage": str(e),
+        }
+
+    # Optional additive mirror from local_path into user's own Google Drive (drive_mirror_path)
+    l_dirs, l_files = scan_tree(local_path, is_cloud=False)
+    if drive_mirror_path and drive_mirror_path != local_path:
+        os.makedirs(drive_mirror_path, exist_ok=True)
+        for d in sorted(l_dirs):
+            os.makedirs(os.path.join(drive_mirror_path, d), exist_ok=True)
+        _, d_files = scan_tree(drive_mirror_path, is_cloud=True)
+        for rel_f, lm in l_files.items():
+            dm = d_files.get(rel_f)
+            if not dm or lm["mtime"] > dm["mtime"] + 2.0 or lm["size"] != dm["size"]:
+                if copy_atomic(
+                    os.path.join(local_path, rel_f),
+                    os.path.join(drive_mirror_path, rel_f),
+                    lm["mtime"],
+                ):
+                    copied_to_drive += 1
+        set_finder_badge(drive_mirror_path, "synced")
+
+    set_finder_badge(local_path, "synced")
+    total_files = len(l_files)
+    total_bytes = sum(m["size"] for m in l_files.values())
+    return {
+        "ok": True,
+        "isBrokenLink": False,
+        "copiedToDrive": copied_to_drive,
+        "copiedToLocal": downloaded_count,
+        "trashedCount": 0,
+        "totalFiles": total_files,
+        "totalBytes": total_bytes,
+        "knownRelativeFiles": sorted(l_files.keys()),
+        "syncedAt": time.time(),
+        "folderId": fid,
+        "folderName": info.get("folderName"),
+        "ownerName": info.get("ownerName"),
+        "errorMessage": None,
+    }
+
+
+def upsert_and_sync_shared_url(
+    remote_url: str,
+    local_path: str | None = None,
+    drive_path: str | None = None,
+) -> dict:
+    info = inspect_remote_shared_folder(remote_url)
+    fid, _ = parse_google_drive_link(remote_url)
+    folder_name = info.get("folderName") or (f"Shared_{fid[:8]}" if fid else "Shared_Folder")
+    std_local = (
+        os.path.abspath(os.path.expanduser(local_path))
+        if local_path
+        else (info.get("suggestedLocalPath") or os.path.abspath(os.path.expanduser(f"~/Documents/antigravity/00. Shared_GDrive/{folder_name}")))
+    )
+    std_drive = (
+        os.path.abspath(os.path.expanduser(drive_path))
+        if drive_path
+        else (info.get("suggestedDrivePath") or suggested_drive_target(std_local))
+    )
+
+    pairs = load_shared_pairs()
+    target_pair = None
+    for p in pairs:
+        if (
+            (fid and p.get("remoteFolderID") == fid)
+            or os.path.abspath(os.path.expanduser(p.get("localPath", ""))) == std_local
+        ):
+            target_pair = p
+            break
+
+    now_ts = time.time()
+    if target_pair is None:
+        target_pair = {
+            "id": str(uuid.uuid4()).upper(),
+            "localPath": std_local,
+            "driveTargetPath": std_drive,
+            "syncMode": "remote_shared_link",
+            "isEnabled": True,
+            "createdAt": now_ts,
+            "lastSyncedAt": None,
+            "lastSyncFileCount": 0,
+            "lastSyncTotalBytes": 0,
+            "lastError": None,
+            "knownRelativeFiles": [],
+            "remoteSharedURL": remote_url.strip(),
+            "remoteFolderID": fid,
+            "remoteOwnerName": info.get("ownerName"),
+            "isRemoteLinkBroken": False,
+        }
+        pairs.insert(0, target_pair)
+    else:
+        target_pair["localPath"] = std_local
+        target_pair["driveTargetPath"] = std_drive
+        target_pair["syncMode"] = "remote_shared_link"
+        target_pair["remoteSharedURL"] = remote_url.strip()
+        target_pair["remoteFolderID"] = fid
+        if info.get("ownerName"):
+            target_pair["remoteOwnerName"] = info.get("ownerName")
+        target_pair["isEnabled"] = True
+
+    rep = sync_remote_shared_folder(remote_url, std_local, std_drive)
+    target_pair["lastSyncedAt"] = rep["syncedAt"]
+    target_pair["lastSyncFileCount"] = rep["totalFiles"]
+    target_pair["lastSyncTotalBytes"] = rep["totalBytes"]
+    target_pair["knownRelativeFiles"] = rep["knownRelativeFiles"]
+    target_pair["lastError"] = rep["errorMessage"]
+    target_pair["isRemoteLinkBroken"] = bool(rep.get("isBrokenLink", False))
+    if rep.get("ownerName"):
+        target_pair["remoteOwnerName"] = rep.get("ownerName")
+
+    save_shared_pairs(pairs)
+    STATUS_JSON_PATH.write_text(
+        json.dumps({"completedAt": time.time(), "results": {target_pair["id"]: rep}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return rep
+
+
 def run_sync_all() -> dict:
     pairs = load_shared_pairs()
     updated_pairs = []
@@ -354,8 +771,9 @@ def run_sync_all() -> dict:
         mode = p.get("syncMode", "two_way_mirror")
         known = p.get("knownRelativeFiles", [])
         last_ts = p.get("lastSyncedAt")
+        remote_url = p.get("remoteSharedURL")
 
-        if not l_path or not d_path:
+        if not l_path:
             updated_pairs.append(p)
             continue
 
@@ -363,13 +781,22 @@ def run_sync_all() -> dict:
         if p.get("pendingRemove"):
             if p.get("restoreSymlink", True) and os.path.islink(l_path):
                 os.remove(l_path)
-                if os.path.exists(d_path):
+                if d_path and os.path.exists(d_path):
                     shutil.copytree(d_path, l_path, dirs_exist_ok=True)
-            set_finder_tag(l_path, False)
+            set_finder_badge(l_path, "clear")
+            if d_path and os.path.exists(d_path):
+                set_finder_badge(d_path, "clear")
             continue
 
         try:
-            rep = sync_single_pair(l_path, d_path, mode=mode, known_files=known, last_synced_at=last_ts)
+            if mode == "remote_shared_link" and remote_url:
+                rep = sync_remote_shared_folder(remote_url, l_path, d_path)
+                p["isRemoteLinkBroken"] = bool(rep.get("isBrokenLink", False))
+                if rep.get("ownerName"):
+                    p["remoteOwnerName"] = rep.get("ownerName")
+            else:
+                rep = sync_single_pair(l_path, d_path, mode=mode, known_files=known, last_synced_at=last_ts)
+                p["isRemoteLinkBroken"] = False
             p["lastSyncedAt"] = rep["syncedAt"]
             p["lastSyncFileCount"] = rep["totalFiles"]
             p["lastSyncTotalBytes"] = rep["totalBytes"]
@@ -731,10 +1158,23 @@ def main():
     parser.add_argument("--restore-symlink", nargs=2, metavar=("LOCAL_PATH", "DRIVE_PATH"), help="Restore symlink to real folder")
     parser.add_argument("--share-status", help="Check current Google Drive share permission for local/Drive path")
     parser.add_argument("--share-set", nargs=2, metavar=("ROLE", "PATH"), help="Set Google Drive share permission: reader | writer | restricted")
+    parser.add_argument("--inspect-shared-url", help="Inspect metadata and suggested destination for a shared Google Drive URL")
+    parser.add_argument("--sync-shared-url", help="Download and subscribe to a shared Google Drive folder URL")
     args = parser.parse_args()
 
     if args.daemon:
         run_daemon()
+        return
+
+    if args.inspect_shared_url:
+        res = inspect_remote_shared_folder(args.inspect_shared_url)
+        print(json.dumps(res, ensure_ascii=False))
+        return
+
+    if args.sync_shared_url:
+        ensure_daemon_started()
+        res = upsert_and_sync_shared_url(args.sync_shared_url, local_path=args.local, drive_path=args.drive)
+        print(json.dumps(res, ensure_ascii=False))
         return
 
     if args.share_status:

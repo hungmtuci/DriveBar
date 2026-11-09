@@ -245,8 +245,17 @@ final class UniversalActionExecutor {
             }
 
         // MARK: - 2. Google Drive Actions
-        case "gdrive.sync_local_folder":
+        case "gdrive.subscribe_shared_folder_link":
             LauncherPanelController.shared.hide()
+            let candidate: String? = {
+                switch target {
+                case .url(let u, _): return u.absoluteString
+                case .text(let s, _): return s.trimmingCharacters(in: .whitespacesAndNewlines)
+                default: return nil
+                }
+            }()
+            FolderSyncDialogController.shared.presentSharedLinkDialog(initialURL: candidate)
+
         case "gdrive.sync_local_folder":
             LauncherPanelController.shared.hide()
             for url in urls {

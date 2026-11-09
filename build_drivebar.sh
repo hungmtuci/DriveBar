@@ -7,8 +7,8 @@ cd "$PROJECT_DIR"
 
 APP_NAME="DriveBar"
 BUNDLE_ID="com.hunglx.DriveBar"
-VERSION="1.8.0"
-BUILD_NUMBER="30"
+VERSION="1.8.1"
+BUILD_NUMBER="31"
 APP_BUNDLE="$PROJECT_DIR/$APP_NAME.app"
 ROOT_APP_BUNDLE="$ROOT_WORKSPACE_DIR/$APP_NAME.app"
 DIST_DIR="$PROJECT_DIR/dist"
@@ -264,12 +264,18 @@ cat > "$STAGE_CONTENTS/Info.plist" <<EOF
 EOF
 
 echo "==> [4/6] Đang ký số (Ad-hoc Codesign)..."
+mkdir -p "$HOME/.config/drivebar-sync"
 if [ -f "$PROJECT_DIR/Resources/gdrive_folder_sync.py" ]; then
     cp "$PROJECT_DIR/Resources/gdrive_folder_sync.py" "$STAGE_APP/Contents/Resources/gdrive_folder_sync.py"
     chmod +x "$STAGE_APP/Contents/Resources/gdrive_folder_sync.py"
-    mkdir -p "$HOME/.config/drivebar-sync"
     cp "$PROJECT_DIR/Resources/gdrive_folder_sync.py" "$HOME/.config/drivebar-sync/gdrive_folder_sync.py"
     chmod +x "$HOME/.config/drivebar-sync/gdrive_folder_sync.py"
+fi
+if [ -f "$PROJECT_DIR/Resources/folder_badge_helper.swift" ]; then
+    cp "$PROJECT_DIR/Resources/folder_badge_helper.swift" "$STAGE_APP/Contents/Resources/folder_badge_helper.swift"
+    cp "$PROJECT_DIR/Resources/folder_badge_helper.swift" "$HOME/.config/drivebar-sync/folder_badge_helper.swift"
+    swiftc -O "$HOME/.config/drivebar-sync/folder_badge_helper.swift" -o "$HOME/.config/drivebar-sync/folder_badge_helper" 2>/dev/null || true
+    chmod +x "$HOME/.config/drivebar-sync/folder_badge_helper" 2>/dev/null || true
 fi
 xattr -cr "$STAGE_APP" 2>/dev/null || true
 codesign --force --deep --sign - "$STAGE_APP"
@@ -340,6 +346,8 @@ if [ "$INSTALL_APP" -eq 1 ]; then
     xattr -cr "/Applications/$APP_NAME.app" 2>/dev/null || true
     /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/$APP_NAME.app" 2>/dev/null || true
     if [ -f "$HOME/.config/drivebar-sync/gdrive_folder_sync.py" ]; then
+        pkill -f "gdrive_folder_sync.py --daemon" 2>/dev/null || true
+        rm -f "$HOME/.config/drivebar-sync/daemon.pid" 2>/dev/null || true
         nohup /opt/homebrew/bin/python3.11 "$HOME/.config/drivebar-sync/gdrive_folder_sync.py" --daemon >/tmp/drivebar_sync_daemon.log 2>&1 &
     fi
     open "/Applications/$APP_NAME.app"

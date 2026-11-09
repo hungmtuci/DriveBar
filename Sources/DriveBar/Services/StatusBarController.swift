@@ -199,6 +199,15 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         addSyncFolderItem.target = self
         syncSubmenu.addItem(addSyncFolderItem)
 
+        let pasteSharedLinkItem = NSMenuItem(
+            title: L("🔗 Dán Link Thư mục Google Drive được chia sẻ...", "🔗 Paste Shared Google Drive Folder Link..."),
+            action: #selector(pasteSharedDriveLinkToSyncAction),
+            keyEquivalent: ""
+        )
+        pasteSharedLinkItem.image = NSImage(systemSymbolName: "link.icloud.fill", accessibilityDescription: nil)
+        pasteSharedLinkItem.target = self
+        syncSubmenu.addItem(pasteSharedLinkItem)
+
         let syncAllNowItem = NSMenuItem(
             title: L("Đồng bộ tất cả ngay lập tức", "Sync All Folders Now"),
             action: #selector(syncAllFoldersNowAction),
@@ -230,13 +239,19 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             syncSubmenu.addItem(emptySync)
         } else {
             for pair in localSyncService.syncedPairs {
+                let statusPrefix = pair.isRemoteLinkBroken == true ? "⚠️ [Link đã bị khóa] " : ""
                 let pItem = NSMenuItem(
-                    title: "\(pair.folderName)  →  \(pair.prettyDrivePath)",
+                    title: "\(statusPrefix)\(pair.folderName)  →  \(pair.prettyDrivePath)",
                     action: #selector(openSyncedFolderDialogFromMenu(_:)),
                     keyEquivalent: ""
                 )
                 pItem.representedObject = pair.localPath
-                pItem.image = NSImage(systemSymbolName: pair.isEnabled ? "checkmark.icloud.fill" : "icloud.slash", accessibilityDescription: nil)
+                pItem.image = NSImage(
+                    systemSymbolName: pair.isRemoteLinkBroken == true
+                        ? "exclamationmark.icloud.fill"
+                        : (pair.isEnabled ? "checkmark.icloud.fill" : "icloud.slash"),
+                    accessibilityDescription: nil
+                )
                 pItem.target = self
                 syncSubmenu.addItem(pItem)
             }
@@ -693,6 +708,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         if panel.runModal() == .OK, !panel.urls.isEmpty {
             FolderSyncDialogController.shared.present(forFolderURLs: panel.urls, instantIfSingle: false)
         }
+    }
+
+    @objc private func pasteSharedDriveLinkToSyncAction() {
+        FolderSyncDialogController.shared.presentSharedLinkDialog()
     }
 
     @objc private func syncAllFoldersNowAction() {

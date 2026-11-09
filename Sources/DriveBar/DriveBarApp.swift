@@ -184,12 +184,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        // 1. Handle custom URL scheme `drivebar://sync-folder?mode=dialog|instant&path=/Users/...`
+        // 1. Handle custom URL scheme `drivebar://sync-folder?mode=dialog|instant&path=/Users/...` or `drivebar://sync-shared-url?url=...`
         let schemeURLs = urls.filter { $0.scheme?.lowercased() == "drivebar" }
         if !schemeURLs.isEmpty {
             var folderURLs: [URL] = []
             var isInstant = false
             for u in schemeURLs {
+                if u.host?.lowercased() == "sync-shared-url",
+                   let comps = URLComponents(url: u, resolvingAgainstBaseURL: false) {
+                    let sharedURL = comps.queryItems?.first(where: { $0.name == "url" })?.value
+                    FolderSyncDialogController.shared.presentSharedLinkDialog(initialURL: sharedURL)
+                    return
+                }
                 if let comps = URLComponents(url: u, resolvingAgainstBaseURL: false) {
                     let mode = comps.queryItems?.first(where: { $0.name == "mode" })?.value ?? "dialog"
                     if mode == "instant" {

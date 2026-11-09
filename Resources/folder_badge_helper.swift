@@ -2,10 +2,17 @@ import AppKit
 import Foundation
 
 // Usage:
-//   folder_badge_helper --set <folder_path>
-//   folder_badge_helper --clear <folder_path>
+//   folder_badge_helper --set <folder_path>      (Synced / Active: Emerald Green Cloud Checkmark)
+//   folder_badge_helper --broken <folder_path>   (Broken / Locked Shared Link: Red-Orange Cloud Slash Warning)
+//   folder_badge_helper --clear <folder_path>    (Clear custom icon & tags)
 
-func makeBadgedFolderIcon() -> NSImage {
+enum BadgeState {
+    case synced
+    case broken
+    case clear
+}
+
+func makeBadgedFolderIcon(state: BadgeState) -> NSImage {
     let baseIcon = NSWorkspace.shared.icon(forFileType: NSFileTypeForHFSTypeCode(OSType(kGenericFolderIcon)))
     let targetSize = NSSize(width: 512, height: 512)
     baseIcon.size = targetSize
@@ -21,27 +28,34 @@ func makeBadgedFolderIcon() -> NSImage {
         fraction: 1.0
     )
 
-    // Draw a subtle dark-glass pill + green checkmark cloud badge in the lower-right / center-right of the folder
-    let badgeRect = NSRect(x: 276, y: 56, width: 196, height: 196)
+    let badgeRect = NSRect(x: 272, y: 52, width: 204, height: 204)
     let shadow = NSShadow()
-    shadow.shadowColor = NSColor.black.withAlphaComponent(0.35)
+    shadow.shadowColor = NSColor.black.withAlphaComponent(0.38)
     shadow.shadowBlurRadius = 14
     shadow.shadowOffset = NSSize(width: 0, height: -4)
 
     NSGraphicsContext.saveGraphicsState()
     shadow.set()
     let circlePath = NSBezierPath(ovalIn: badgeRect)
-    NSColor(calibratedRed: 0.06, green: 0.72, blue: 0.50, alpha: 1.0).setFill() // Emerald green #10B981
+    switch state {
+    case .synced:
+        NSColor(calibratedRed: 0.06, green: 0.72, blue: 0.50, alpha: 1.0).setFill() // Emerald #10B981
+    case .broken:
+        NSColor(calibratedRed: 0.90, green: 0.22, blue: 0.21, alpha: 1.0).setFill() // Crimson Red #E53935
+    case .clear:
+        break
+    }
     circlePath.fill()
     NSGraphicsContext.restoreGraphicsState()
 
     let borderPath = NSBezierPath(ovalIn: badgeRect.insetBy(dx: 4, dy: 4))
     borderPath.lineWidth = 8
-    NSColor.white.withAlphaComponent(0.95).setStroke()
+    NSColor.white.withAlphaComponent(0.96).setStroke()
     borderPath.stroke()
 
-    if let symbol = NSImage(systemSymbolName: "checkmark.icloud.fill", accessibilityDescription: nil) {
-        let config = NSImage.SymbolConfiguration(pointSize: 102, weight: .bold)
+    let symbolName: String = (state == .broken) ? "icloud.slash.fill" : "checkmark.icloud.fill"
+    if let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil) {
+        let config = NSImage.SymbolConfiguration(pointSize: 100, weight: .bold)
             .applying(NSImage.SymbolConfiguration(paletteColors: [.white]))
         if let configured = symbol.withSymbolConfiguration(config) {
             let symSize = configured.size
@@ -58,10 +72,11 @@ func makeBadgedFolderIcon() -> NSImage {
     return result
 }
 
-func setFolderVisualSyncState(path: String, synced: Bool) {
+func setFolderVisualSyncState(path: String, state: BadgeState) {
     let url = URL(fileURLWithPath: path)
     let nsURL = url as NSURL
-    let tagName = "Đồng bộ GDrive"
+    let syncTag = "Đồng bộ GDrive"
+    let brokenTag = "⚠️ Link GDrive bị khóa"
 
     var existingTags: [String] = []
     if let vals = try? url.resourceValues(forKeys: [.tagNamesKey]),
@@ -69,16 +84,29 @@ func setFolderVisualSyncState(path: String, synced: Bool) {
         existingTags = tags
     }
 
-    if synced {
-        var newTags = existingTags.filter { !$0.hasPrefix(tagName) }
-        newTags.append(tagName)
+    let cleaned = existingTags.filter {
+        !$0.hasPrefix(syncTag) && !$0.hasPrefix(brokenTag) && !$0.hasPrefix("Link GDrive")
+    }
+
+    switch state {
+    case .synced:
+        var newTags = cleaned
+        newTags.append(syncTag)
         try? nsURL.setResourceValue(newTags, forKey: .tagNamesKey)
-        try? nsURL.setResourceValue(NSNumber(value: 2), forKey: .labelNumberKey) // 2 = Green Finder label
-        let icon = makeBadgedFolderIcon()
+        try? nsURL.setResourceValue(NSNumber(value: 2), forKey: .labelNumberKey) // 2 = Green
+        let icon = makeBadgedFolderIcon(state: .synced)
         _ = NSWorkspace.shared.setIcon(icon, forFile: path, options: [])
-    } else {
-        let newTags = existingTags.filter { !$0.hasPrefix(tagName) }
+
+    case .broken:
+        var newTags = cleaned
+        newTags.append(brokenTag)
         try? nsURL.setResourceValue(newTags, forKey: .tagNamesKey)
+        try? nsURL.setResourceValue(NSNumber(value: 6), forKey: .labelNumberKey) // 6 = Red
+        let icon = makeBadgedFolderIcon(state: .broken)
+        _ = NSWorkspace.shared.setIcon(icon, forFile: path, options: [])
+
+    case .clear:
+        try? nsURL.setResourceValue(cleaned, forKey: .tagNamesKey)
         try? nsURL.setResourceValue(NSNumber(value: 0), forKey: .labelNumberKey)
         _ = NSWorkspace.shared.setIcon(nil, forFile: path, options: [])
     }
@@ -87,9 +115,17 @@ func setFolderVisualSyncState(path: String, synced: Bool) {
 
 let args = CommandLine.arguments
 if args.count >= 3 {
-    let mode = args[1]
+    let flag = args[1]
+    let state: BadgeState
+    if flag == "--set" {
+        state = .synced
+    } else if flag == "--broken" {
+        state = .broken
+    } else {
+        state = .clear
+    }
     for rawPath in args.dropFirst(2) {
         let std = (rawPath as NSString).standardizingPath
-        setFolderVisualSyncState(path: std, synced: mode == "--set")
+        setFolderVisualSyncState(path: std, state: state)
     }
 }

@@ -6,8 +6,13 @@ import Darwin
 enum FolderSyncMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case twoWayMirror = "two_way_mirror"
     case symlinkToDrive = "symlink_to_drive"
+    case remoteSharedLink = "remote_shared_link"
 
     var id: String { rawValue }
+
+    static var localFolderModes: [FolderSyncMode] {
+        [.twoWayMirror, .symlinkToDrive]
+    }
 
     var localizedTitle: String {
         switch self {
@@ -21,6 +26,11 @@ enum FolderSyncMode: String, Codable, CaseIterable, Identifiable, Sendable {
                 "Di chuyển sang Google Drive & Tạo Symlink tại ổ Mac",
                 "Move to Google Drive & Create Symlink on Mac disk"
             )
+        case .remoteSharedLink:
+            return L(
+                "Theo dõi & Tải tự động Link Google Drive được chia sẻ",
+                "Auto-Pull & Monitor Shared Google Drive Link"
+            )
         }
     }
 
@@ -30,6 +40,8 @@ enum FolderSyncMode: String, Codable, CaseIterable, Identifiable, Sendable {
             return L("2 Chiều (FSEvents)", "2-Way (FSEvents)")
         case .symlinkToDrive:
             return L("Symlink", "Symlink")
+        case .remoteSharedLink:
+            return L("Link Chia sẻ (Auto-Pull)", "Shared Link (Auto-Pull)")
         }
     }
 
@@ -44,6 +56,11 @@ enum FolderSyncMode: String, Codable, CaseIterable, Identifiable, Sendable {
             return L(
                 "Chuyển dữ liệu vật lý vào Google Drive và đặt liên kết tượng trưng (ln -s) ở vị trí cũ để tiết kiệm dung lượng ổ cứng.",
                 "Moves physical files into Google Drive and leaves a symbolic link (ln -s) at the original Mac path to save disk space."
+            )
+        case .remoteSharedLink:
+            return L(
+                "Tự động tải nội dung thư mục chia sẻ về máy và liên tục kiểm tra cập nhật mới. Nếu link bị khóa lại, hiện cảnh báo đứt gãy nhưng không xóa dữ liệu đã tải.",
+                "Automatically downloads shared folder contents and checks for updates. If locked/revoked, shows a broken-link warning without deleting downloaded files."
             )
         }
     }
@@ -92,6 +109,19 @@ struct DriveSharePermissionResult: Codable, Sendable {
     }
 }
 
+struct SharedFolderInspectResult: Codable, Sendable {
+    let ok: Bool
+    let isBroken: Bool?
+    let folderId: String?
+    let resourceKey: String?
+    let folderName: String?
+    let mimeType: String?
+    let ownerName: String?
+    let suggestedLocalPath: String?
+    let suggestedDrivePath: String?
+    let errorMessage: String?
+}
+
 struct SyncedFolderPair: Identifiable, Codable, Equatable, Sendable {
     var id: UUID
     var localPath: String
@@ -106,6 +136,10 @@ struct SyncedFolderPair: Identifiable, Codable, Equatable, Sendable {
     var knownRelativeFiles: Set<String>
     var shareAccessLevel: DriveShareAccessLevel?
     var shareURLString: String?
+    var remoteSharedURL: String?
+    var remoteFolderID: String?
+    var remoteOwnerName: String?
+    var isRemoteLinkBroken: Bool?
 
     var folderName: String {
         (localPath as NSString).lastPathComponent
@@ -226,9 +260,19 @@ final class LocalFolderDriveSyncService: ObservableObject {
             return
         }
         if decoded != syncedPairs {
+            let oldBrokenIDs = Set(syncedPairs.filter { $0.isRemoteLinkBroken == true }.map(\.id))
             syncedPairs = decoded
             if let encoded = try? Self.makeJSONEncoder().encode(decoded) {
                 UserDefaults.standard.set(encoded, forKey: Self.pairsStorageKey)
+            }
+            for pair in decoded where pair.isRemoteLinkBroken == true && !oldBrokenIDs.contains(pair.id) {
+                FloatingToastController.shared.showError(
+                    title: L("⚠️ Link Google Drive chia sẻ đã bị khóa!", "⚠️ Shared Google Drive Link Locked!"),
+                    subtitle: L(
+                        "'\(pair.folderName)' • Đã giữ nguyên toàn bộ \(pair.lastSyncFileCount) tệp trên máy Mac của bạn",
+                        "'\(pair.folderName)' • Kept all \(pair.lastSyncFileCount) downloaded files intact on your Mac"
+                    )
+                )
             }
         }
     }
@@ -570,6 +614,118 @@ final class LocalFolderDriveSyncService: ObservableObject {
         return DriveSharePermissionResult(ok: false, fileId: nil, accessLevel: nil, shareUrl: nil, errorMessage: "Invalid response from helper")
     }
 
+    // MARK: - Subscribe & Auto-Pull Shared Google Drive Folder Link
+
+    func inspectSharedDriveURL(
+        _ urlOrID: String,
+        completion: @escaping @MainActor (SharedFolderInspectResult) -> Void
+    ) {
+        let trimmed = urlOrID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            completion(SharedFolderInspectResult(
+                ok: false, isBroken: false, folderId: nil, resourceKey: nil,
+                folderName: nil, mimeType: nil, ownerName: nil,
+                suggestedLocalPath: nil, suggestedDrivePath: nil,
+                errorMessage: L("Vui lòng nhập hoặc dán link Google Drive", "Please paste a Google Drive link")
+            ))
+            return
+        }
+        syncQueue.async {
+            let script = Self.helperScriptPath()
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: Self.pythonExecutablePath())
+            proc.arguments = [script, "--inspect-shared-url", trimmed]
+            let outPipe = Pipe()
+            proc.standardOutput = outPipe
+            proc.standardError = FileHandle.nullDevice
+            var result = SharedFolderInspectResult(
+                ok: false, isBroken: false, folderId: nil, resourceKey: nil,
+                folderName: nil, mimeType: nil, ownerName: nil,
+                suggestedLocalPath: nil, suggestedDrivePath: nil,
+                errorMessage: L("Không thể kiểm tra link Google Drive", "Unable to inspect Google Drive link")
+            )
+            do {
+                try proc.run()
+                let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+                proc.waitUntilExit()
+                if let decoded = try? JSONDecoder().decode(SharedFolderInspectResult.self, from: data) {
+                    result = decoded
+                }
+            } catch {
+                result = SharedFolderInspectResult(
+                    ok: false, isBroken: false, folderId: nil, resourceKey: nil,
+                    folderName: nil, mimeType: nil, ownerName: nil,
+                    suggestedLocalPath: nil, suggestedDrivePath: nil,
+                    errorMessage: error.localizedDescription
+                )
+            }
+            Task { @MainActor in
+                completion(result)
+            }
+        }
+    }
+
+    @discardableResult
+    func addOrUpdateSharedURLSync(
+        remoteURL: String,
+        localPath: String,
+        driveTargetPath: String? = nil,
+        folderID: String? = nil,
+        ownerName: String? = nil,
+        showToast: Bool = true
+    ) -> SyncedFolderPair? {
+        let stdLocal = (localPath as NSString).standardizingPath
+        let cleanURL = remoteURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stdLocal.isEmpty, !cleanURL.isEmpty else { return nil }
+        let targetDrive = ((driveTargetPath ?? suggestedDriveTargetPath(for: stdLocal)) as NSString).standardizingPath
+
+        let pair: SyncedFolderPair
+        if let idx = syncedPairs.firstIndex(where: {
+            ($0.localPath as NSString).standardizingPath == stdLocal ||
+            (folderID != nil && $0.remoteFolderID == folderID)
+        }) {
+            var existing = syncedPairs[idx]
+            existing.localPath = stdLocal
+            existing.driveTargetPath = targetDrive
+            existing.syncMode = .remoteSharedLink
+            existing.remoteSharedURL = cleanURL
+            if let folderID { existing.remoteFolderID = folderID }
+            if let ownerName { existing.remoteOwnerName = ownerName }
+            existing.isEnabled = true
+            existing.lastError = nil
+            existing.isRemoteLinkBroken = false
+            syncedPairs[idx] = existing
+            pair = existing
+        } else {
+            let newPair = SyncedFolderPair(
+                id: UUID(),
+                localPath: stdLocal,
+                driveTargetPath: targetDrive,
+                syncMode: .remoteSharedLink,
+                isEnabled: true,
+                createdAt: Date(),
+                lastSyncedAt: nil,
+                lastSyncFileCount: 0,
+                lastSyncTotalBytes: 0,
+                lastError: nil,
+                knownRelativeFiles: [],
+                shareAccessLevel: nil,
+                shareURLString: cleanURL,
+                remoteSharedURL: cleanURL,
+                remoteFolderID: folderID,
+                remoteOwnerName: ownerName,
+                isRemoteLinkBroken: false
+            )
+            syncedPairs.insert(newPair, at: 0)
+            pair = newPair
+        }
+
+        savePairs()
+        restartFSEventsMonitor()
+        syncPairNow(id: pair.id, showToast: showToast)
+        return pair
+    }
+
     // MARK: - Sync Execution
 
     func syncAllEnabledPairs(showToast: Bool = false) {
@@ -612,7 +768,15 @@ final class LocalFolderDriveSyncService: ObservableObject {
                 // Refresh DriveBar index so the new Google Drive folder is immediately searchable
                 GoogleDriveIndexService.shared.noteExternalDirectoryCreated(at: updatedPair.driveTargetPath)
 
-                if showToast {
+                if updatedPair.isRemoteLinkBroken == true {
+                    FloatingToastController.shared.showError(
+                        title: L("⚠️ Link Google Drive chia sẻ đã bị khóa!", "⚠️ Shared Google Drive Link Locked!"),
+                        subtitle: L(
+                            "'\(updatedPair.folderName)' • Đã giữ nguyên toàn bộ \(updatedPair.lastSyncFileCount) tệp trên máy Mac của bạn",
+                            "'\(updatedPair.folderName)' • Kept all \(updatedPair.lastSyncFileCount) downloaded files intact on your Mac"
+                        )
+                    )
+                } else if showToast {
                     if let err = report.errorMessage {
                         FloatingToastController.shared.showError(
                             title: L("Lỗi đồng bộ Google Drive", "Google Drive sync error"),
@@ -638,6 +802,7 @@ final class LocalFolderDriveSyncService: ObservableObject {
 
     private struct HelperSyncResponse: Decodable {
         let ok: Bool
+        let isBrokenLink: Bool?
         let copiedToDrive: Int
         let copiedToLocal: Int
         let trashedCount: Int
@@ -645,6 +810,8 @@ final class LocalFolderDriveSyncService: ObservableObject {
         let totalBytes: Int64
         let knownRelativeFiles: [String]
         let syncedAt: Double?
+        let folderName: String?
+        let ownerName: String?
         let errorMessage: String?
     }
 
@@ -715,7 +882,7 @@ final class LocalFolderDriveSyncService: ObservableObject {
             let startTime = Date().timeIntervalSince1970
             try? "sync".write(toFile: triggerPath, atomically: true, encoding: .utf8)
 
-            let deadline = Date().addingTimeInterval(8.0)
+            let deadline = Date().addingTimeInterval(25.0)
             while Date() < deadline {
                 Thread.sleep(forTimeInterval: 0.12)
                 if let statusData = try? Data(contentsOf: URL(fileURLWithPath: statusPath)),
@@ -759,13 +926,22 @@ final class LocalFolderDriveSyncService: ObservableObject {
 
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: pythonExecutablePath())
-            proc.arguments = [
-                script,
-                "--local", pair.localPath,
-                "--drive", pair.driveTargetPath,
-                "--mode", pair.syncMode.rawValue,
-                "--state-file", statePath
-            ]
+            if pair.syncMode == .remoteSharedLink, let remoteURL = pair.remoteSharedURL, !remoteURL.isEmpty {
+                proc.arguments = [
+                    script,
+                    "--sync-shared-url", remoteURL,
+                    "--local", pair.localPath,
+                    "--drive", pair.driveTargetPath
+                ]
+            } else {
+                proc.arguments = [
+                    script,
+                    "--local", pair.localPath,
+                    "--drive", pair.driveTargetPath,
+                    "--mode", pair.syncMode.rawValue,
+                    "--state-file", statePath
+                ]
+            }
             let outPipe = Pipe()
             proc.standardOutput = outPipe
             proc.standardError = FileHandle.nullDevice
@@ -774,6 +950,10 @@ final class LocalFolderDriveSyncService: ObservableObject {
                 let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
                 proc.waitUntilExit()
                 if let resp = try? JSONDecoder().decode(HelperSyncResponse.self, from: outData) {
+                    updated.isRemoteLinkBroken = resp.isBrokenLink ?? false
+                    if let owner = resp.ownerName, !owner.isEmpty {
+                        updated.remoteOwnerName = owner
+                    }
                     if resp.ok {
                         updated.lastSyncedAt = Date()
                         updated.lastSyncFileCount = resp.totalFiles
@@ -793,6 +973,8 @@ final class LocalFolderDriveSyncService: ObservableObject {
                     } else {
                         let errMsg = resp.errorMessage ?? "Sync helper failed"
                         updated.lastError = errMsg
+                        updated.lastSyncFileCount = resp.totalFiles > 0 ? resp.totalFiles : updated.lastSyncFileCount
+                        updated.lastSyncTotalBytes = resp.totalBytes > 0 ? resp.totalBytes : updated.lastSyncTotalBytes
                         let report = SyncExecutionReport(
                             pairID: pair.id,
                             copiedToDrive: 0,

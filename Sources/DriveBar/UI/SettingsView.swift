@@ -1466,6 +1466,14 @@ private struct GoogleDriveSettingsPane: View {
                     .disabled(localSyncService.syncedPairs.isEmpty || localSyncService.isGlobalSyncing)
 
                     Button {
+                        FolderSyncDialogController.shared.presentSharedLinkDialog()
+                    } label: {
+                        Label(L("Dán Link được chia sẻ...", "Paste Shared Link..."), systemImage: "link.icloud.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button {
                         promptAddLocalFolderForDriveSync()
                     } label: {
                         Label(L("Thêm thư mục...", "Add Folder..."), systemImage: "plus")
@@ -1548,10 +1556,23 @@ private struct GoogleDriveSettingsPane: View {
                             MacSettingsRowDivider(leadingInset: 42)
                         }
                         HStack(spacing: 10) {
-                            Image(systemName: pair.isEnabled ? "checkmark.icloud.fill" : "icloud.slash")
-                                .font(.system(size: 15))
-                                .foregroundStyle(pair.isEnabled ? .green : .secondary)
-                                .frame(width: 20, alignment: .center)
+                            Image(
+                                systemName: pair.isRemoteLinkBroken == true
+                                    ? "exclamationmark.icloud.fill"
+                                    : (pair.isEnabled ? "checkmark.icloud.fill" : "icloud.slash")
+                            )
+                            .font(.system(size: 15))
+                            .foregroundStyle(
+                                pair.isRemoteLinkBroken == true
+                                    ? .red
+                                    : (pair.isEnabled ? .green : .secondary)
+                            )
+                            .frame(width: 20, alignment: .center)
+                            .help(
+                                pair.isRemoteLinkBroken == true
+                                    ? L("⚠️ Link Google Drive được chia sẻ đã bị khóa/thu hồi quyền truy cập. Toàn bộ file đã tải về máy được giữ nguyên 100%.", "⚠️ Shared Google Drive link was locked/revoked. All downloaded local files remain 100% intact.")
+                                    : L("Đang đồng bộ hoạt động", "Active sync")
+                            )
 
                             VStack(alignment: .leading, spacing: 2) {
                                 HStack(spacing: 6) {
@@ -1561,17 +1582,32 @@ private struct GoogleDriveSettingsPane: View {
 
                                     Text(pair.syncMode.localizedShortBadge)
                                         .font(.system(size: 10, weight: .semibold))
-                                        .foregroundStyle(.blue)
+                                        .foregroundStyle(pair.syncMode == .remoteSharedLink ? .indigo : .blue)
                                         .padding(.horizontal, 6)
                                         .padding(.vertical, 1.5)
-                                        .background(Color.blue.opacity(0.12), in: Capsule())
+                                        .background((pair.syncMode == .remoteSharedLink ? Color.indigo : Color.blue).opacity(0.12), in: Capsule())
+
+                                    if pair.isRemoteLinkBroken == true {
+                                        Text(L("⚠️ Link bị khóa (Giữ nguyên file)", "⚠️ Link Locked (Files Preserved)"))
+                                            .font(.system(size: 10, weight: .bold))
+                                            .foregroundStyle(.red)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 1.5)
+                                            .background(Color.red.opacity(0.14), in: Capsule())
+                                    }
 
                                     let byteStr = ByteCountFormatter.string(fromByteCount: pair.lastSyncTotalBytes, countStyle: .file)
                                     Text("\(pair.lastSyncFileCount) \(L("tệp", "files")) (\(byteStr))")
                                         .font(.system(size: 10.5))
                                         .foregroundStyle(.secondary)
 
-                                    if let level = pair.shareAccessLevel, level != .unknown {
+                                    if let owner = pair.remoteOwnerName, !owner.isEmpty {
+                                        Text("• \(owner)")
+                                            .font(.system(size: 10.5))
+                                            .foregroundStyle(.secondary)
+                                    }
+
+                                    if let level = pair.shareAccessLevel, level != .unknown, pair.syncMode != .remoteSharedLink {
                                         Text(level.localizedBadge)
                                             .font(.system(size: 10, weight: .semibold))
                                             .foregroundStyle(level == .restricted ? .orange : (level == .writer ? .purple : .green))

@@ -1390,6 +1390,25 @@ enum UniversalActionCatalog {
             requiresGoogleDrive: false,
             requiresBundle: false,
             priority: 810
+        ),
+        UniversalActionDefinition(
+            id: "gdrive.subscribe_shared_folder_link",
+            titleVI: "Tải về máy & Theo dõi Đồng bộ Link Thư mục Google Drive được chia sẻ...",
+            titleEN: "Download & Subscribe to Shared Google Drive Folder Link...",
+            subtitleVI: "Tự động copy nội dung về máy, kiểm tra cập nhật mới định kỳ và bảo toàn 100% file nếu link bị khóa",
+            subtitleEN: "Auto-copy shared folder to Mac, poll for updates, and preserve 100% of local files if link is locked",
+            keywords: "google drive shared folder link download sync copy subscribe dan link thu muc chia se",
+            category: .googleDrive,
+            sfSymbol: "icloud.and.arrow.down.fill",
+            tintHex: "#4F46E5",
+            acceptsFiles: false,
+            acceptsFolders: false,
+            acceptsMulti: false,
+            acceptsText: true,
+            acceptsURL: true,
+            requiresGoogleDrive: false,
+            requiresBundle: false,
+            priority: 995
         )
     ]
 }
