@@ -1462,14 +1462,25 @@ final class LocalFolderDriveSyncService: ObservableObject {
             }
         }
 
-        // Single clean Quick Action: "Đồng bộ với Google Drive.workflow"
+        // 1. Quick Action: "Đồng bộ với Google Drive.workflow"
         let singleWorkflowDir = (servicesDir as NSString).appendingPathComponent("Đồng bộ với Google Drive.workflow")
         installSingleWorkflow(
             at: singleWorkflowDir,
             bundleID: "com.hunglx.DriveBar.FinderQuickAction.SyncFolder",
             menuTitle: "Đồng bộ với Google Drive",
-            mode: "instant",
+            cliFlag: "--quick-action",
             symbolName: "icloud.and.arrow.up.fill",
+            force: force
+        )
+
+        // 2. Quick Action: "Dán Link Copy.workflow" (Paste Shared Google Drive Link & Copy to Folder)
+        let pasteLinkWorkflowDir = (servicesDir as NSString).appendingPathComponent("Dán Link Copy.workflow")
+        installSingleWorkflow(
+            at: pasteLinkWorkflowDir,
+            bundleID: "com.hunglx.DriveBar.FinderQuickAction.PasteLinkCopy",
+            menuTitle: "Dán Link Copy",
+            cliFlag: "--quick-action-paste-link",
+            symbolName: "icloud.and.arrow.down.fill",
             force: force
         )
 
@@ -1489,7 +1500,7 @@ final class LocalFolderDriveSyncService: ObservableObject {
         at workflowDir: String,
         bundleID: String,
         menuTitle: String,
-        mode: String,
+        cliFlag: String,
         symbolName: String,
         force: Bool
     ) {
@@ -1557,7 +1568,7 @@ final class LocalFolderDriveSyncService: ObservableObject {
             cp "$BUNDLED" "$HELPER"
             chmod +x "$HELPER"
         fi
-        /opt/homebrew/bin/python3.11 "$HELPER" --quick-action "$@"
+        /opt/homebrew/bin/python3.11 "$HELPER" \(cliFlag) "$@"
         """
         let shellCommand = rawShellCommand
             .replacingOccurrences(of: "&", with: "&amp;")

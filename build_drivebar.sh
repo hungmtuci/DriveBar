@@ -7,8 +7,8 @@ cd "$PROJECT_DIR"
 
 APP_NAME="DriveBar"
 BUNDLE_ID="com.hunglx.DriveBar"
-VERSION="1.8.1"
-BUILD_NUMBER="31"
+VERSION="1.8.2"
+BUILD_NUMBER="32"
 APP_BUNDLE="$PROJECT_DIR/$APP_NAME.app"
 ROOT_APP_BUNDLE="$ROOT_WORKSPACE_DIR/$APP_NAME.app"
 DIST_DIR="$PROJECT_DIR/dist"
@@ -230,6 +230,28 @@ cat > "$STAGE_CONTENTS/Info.plist" <<EOF
             <array>
                 <string>public.folder</string>
                 <string>public.directory</string>
+            </array>
+            <key>NSSendTypes</key>
+            <array>
+                <string>NSFilenamesPboardType</string>
+                <string>public.file-url</string>
+            </array>
+        </dict>
+        <dict>
+            <key>NSMenuItem</key>
+            <dict>
+                <key>default</key>
+                <string>Dán Link Copy</string>
+            </dict>
+            <key>NSMessage</key>
+            <string>handlePasteSharedLinkCopyService</string>
+            <key>NSPortName</key>
+            <string>DriveBar</string>
+            <key>NSSendFileTypes</key>
+            <array>
+                <string>public.folder</string>
+                <string>public.directory</string>
+                <string>public.item</string>
             </array>
             <key>NSSendTypes</key>
             <array>

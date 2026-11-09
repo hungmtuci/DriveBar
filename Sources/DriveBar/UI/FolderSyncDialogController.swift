@@ -18,8 +18,11 @@ final class FolderSyncDialogController: NSObject, ObservableObject, NSWindowDele
     @Published var sharedURLInput: String = ""
     @Published var sharedInspectResult: SharedFolderInspectResult? = nil
     @Published var isInspectingSharedURL: Bool = false
+    @Published var isStartingSharedCopy: Bool = false
     @Published var sharedLocalTargetPath: String = ""
     @Published var sharedDriveMirrorPath: String = ""
+    @Published var customSharedParentDir: String? = nil
+    @Published var copyIntoSubfolder: Bool = true
 
     private override init() {
         super.init()
@@ -122,11 +125,20 @@ final class FolderSyncDialogController: NSObject, ObservableObject, NSWindowDele
         showDialogWindow(extraFolderCount: extraFolderCount)
     }
 
-    func presentSharedLinkDialog(initialURL: String? = nil) {
+    func presentSharedLinkDialog(initialURL: String? = nil, targetParentDir: String? = nil) {
         LauncherPanelController.shared.hide()
         LocalFolderDriveSyncService.shared.reloadPairsFromSharedFileIfAvailable()
         self.isSharedLinkMode = true
         self.sharedInspectResult = nil
+
+        if let targetParentDir, !targetParentDir.isEmpty {
+            let stdParent = (targetParentDir as NSString).standardizingPath
+            self.customSharedParentDir = stdParent
+            self.currentLocalPath = stdParent
+        } else {
+            self.customSharedParentDir = nil
+        }
+        self.copyIntoSubfolder = true
 
         var candidateURL = (initialURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if candidateURL.isEmpty,
@@ -136,19 +148,39 @@ final class FolderSyncDialogController: NSObject, ObservableObject, NSWindowDele
         }
 
         self.sharedURLInput = candidateURL
-        if self.sharedLocalTargetPath.isEmpty {
-            let home = FileManager.default.homeDirectoryForCurrentUser.path
-            self.sharedLocalTargetPath = "\(home)/Documents/antigravity/00. Shared_GDrive/Shared_Folder"
-        }
-        if self.sharedDriveMirrorPath.isEmpty {
-            self.sharedDriveMirrorPath = LocalFolderDriveSyncService.shared.suggestedDriveTargetPath(for: self.sharedLocalTargetPath)
-        }
+        recomputeSharedTargetPaths(folderNameHint: nil)
 
         if !candidateURL.isEmpty {
             inspectCurrentSharedURL(keepExistingPaths: false)
         }
 
         showDialogWindow(extraFolderCount: 0)
+    }
+
+    func recomputeSharedTargetPaths(folderNameHint: String? = nil) {
+        let resolvedName = (folderNameHint ?? sharedInspectResult?.folderName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallbackName = resolvedName.isEmpty ? "Shared_GDrive_Folder" : resolvedName
+
+        if let parent = customSharedParentDir, !parent.isEmpty {
+            if copyIntoSubfolder {
+                self.sharedLocalTargetPath = (parent as NSString).appendingPathComponent(fallbackName)
+            } else {
+                self.sharedLocalTargetPath = parent
+            }
+            self.sharedDriveMirrorPath = LocalFolderDriveSyncService.shared.suggestedDriveTargetPath(for: self.sharedLocalTargetPath)
+        } else {
+            if let sugLocal = sharedInspectResult?.suggestedLocalPath, !sugLocal.isEmpty {
+                self.sharedLocalTargetPath = sugLocal
+            } else {
+                let home = FileManager.default.homeDirectoryForCurrentUser.path
+                self.sharedLocalTargetPath = "\(home)/Documents/antigravity/00. Shared_GDrive/\(fallbackName)"
+            }
+            if let sugDrive = sharedInspectResult?.suggestedDrivePath, !sugDrive.isEmpty {
+                self.sharedDriveMirrorPath = sugDrive
+            } else {
+                self.sharedDriveMirrorPath = LocalFolderDriveSyncService.shared.suggestedDriveTargetPath(for: self.sharedLocalTargetPath)
+            }
+        }
     }
 
     func inspectCurrentSharedURL(keepExistingPaths: Bool = false) {
@@ -160,12 +192,7 @@ final class FolderSyncDialogController: NSObject, ObservableObject, NSWindowDele
             self.isInspectingSharedURL = false
             self.sharedInspectResult = res
             if !keepExistingPaths {
-                if let sugLocal = res.suggestedLocalPath, !sugLocal.isEmpty {
-                    self.sharedLocalTargetPath = sugLocal
-                }
-                if let sugDrive = res.suggestedDrivePath, !sugDrive.isEmpty {
-                    self.sharedDriveMirrorPath = sugDrive
-                }
+                self.recomputeSharedTargetPaths(folderNameHint: res.folderName)
             }
         }
     }
@@ -216,6 +243,7 @@ private struct FolderSyncDialogView: View {
 
     @ObservedObject private var syncService = LocalFolderDriveSyncService.shared
     @ObservedObject private var dialog = FolderSyncDialogController.shared
+    @FocusState private var isURLFieldFocused: Bool
 
     private var existingPair: SyncedFolderPair? {
         if dialog.isSharedLinkMode {
@@ -356,15 +384,17 @@ private struct FolderSyncDialogView: View {
 
                 Button {
                     dialog.isSharedLinkMode = true
-                    if dialog.sharedLocalTargetPath.isEmpty {
-                        let home = FileManager.default.homeDirectoryForCurrentUser.path
-                        dialog.sharedLocalTargetPath = "\(home)/Documents/antigravity/00. Shared_GDrive/Shared_Folder"
-                        dialog.sharedDriveMirrorPath = syncService.suggestedDriveTargetPath(for: dialog.sharedLocalTargetPath)
+                    if dialog.customSharedParentDir == nil, !localPath.isEmpty {
+                        dialog.customSharedParentDir = localPath
+                    }
+                    dialog.recomputeSharedTargetPaths(folderNameHint: dialog.sharedInspectResult?.folderName)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        isURLFieldFocused = true
                     }
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "link.icloud.fill")
-                        Text(L("Dán Link GDrive được chia sẻ", "Paste Shared GDrive Link"))
+                        Text(L("Dán Link Copy (từ GDrive)", "Paste Shared GDrive Link"))
                             .font(.system(size: 12, weight: .semibold))
                     }
                     .frame(maxWidth: .infinity)
@@ -453,23 +483,7 @@ private struct FolderSyncDialogView: View {
 
                 Button {
                     if dialog.isSharedLinkMode {
-                        let trimmedURL = dialog.sharedURLInput.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !trimmedURL.isEmpty else {
-                            FloatingToastController.shared.showError(
-                                title: L("Chưa nhập Link Google Drive", "Missing Google Drive Link"),
-                                subtitle: L("Hãy dán liên kết thư mục Google Drive được chia sẻ", "Please paste a shared Google Drive folder link")
-                            )
-                            return
-                        }
-                        _ = syncService.addOrUpdateSharedURLSync(
-                            remoteURL: trimmedURL,
-                            localPath: dialog.sharedLocalTargetPath,
-                            driveTargetPath: dialog.sharedDriveMirrorPath,
-                            folderID: dialog.sharedInspectResult?.folderId,
-                            ownerName: dialog.sharedInspectResult?.ownerName,
-                            showToast: true
-                        )
-                        onClose()
+                        startSharedLinkCopyAndClose()
                     } else {
                         _ = syncService.addOrUpdateSyncPair(
                             localPath: localPath,
@@ -483,8 +497,10 @@ private struct FolderSyncDialogView: View {
                     Label(
                         dialog.isSharedLinkMode
                             ? (existingPair != nil
-                                ? L("Kiểm tra & Đồng bộ Link ngay", "Check & Sync Shared Link Now")
-                                : L("Tải về máy & Bắt đầu Theo dõi Đồng bộ", "Download to Mac & Start Watching"))
+                                ? L("Kiểm tra & Copy Cập nhật ngay", "Check & Copy Updates Now")
+                                : (dialog.customSharedParentDir != nil
+                                    ? L("Copy về Thư mục này & Đồng bộ", "Copy Here & Watch Updates")
+                                    : L("Copy về máy & Theo dõi Đồng bộ", "Copy to Mac & Start Watching")))
                             : (existingPair != nil
                                 ? L("Cập nhật & Đồng bộ ngay", "Update & Sync Now")
                                 : L("Bắt đầu Đồng bộ với Google Drive", "Start Syncing with Google Drive")),
@@ -494,11 +510,53 @@ private struct FolderSyncDialogView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
+                .disabled(dialog.isStartingSharedCopy)
             }
         }
         .padding(.horizontal, 22)
         .padding(.vertical, 18)
         .frame(width: 620)
+    }
+
+    private func startSharedLinkCopyAndClose() {
+        let trimmedURL = dialog.sharedURLInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedURL.isEmpty else {
+            FloatingToastController.shared.showError(
+                title: L("Chưa nhập Link Google Drive", "Missing Google Drive Link"),
+                subtitle: L("Hãy dán liên kết thư mục Google Drive được chia sẻ", "Please paste a shared Google Drive folder link")
+            )
+            return
+        }
+
+        // If user pasted link and immediately hit Copy before folderName inspection completed, fetch folderName first
+        if dialog.copyIntoSubfolder, (dialog.sharedInspectResult?.folderName ?? "").isEmpty {
+            dialog.isStartingSharedCopy = true
+            syncService.inspectSharedDriveURL(trimmedURL) { res in
+                dialog.isStartingSharedCopy = false
+                dialog.sharedInspectResult = res
+                dialog.recomputeSharedTargetPaths(folderNameHint: res.folderName)
+                _ = syncService.addOrUpdateSharedURLSync(
+                    remoteURL: trimmedURL,
+                    localPath: dialog.sharedLocalTargetPath,
+                    driveTargetPath: dialog.sharedDriveMirrorPath,
+                    folderID: res.folderId,
+                    ownerName: res.ownerName,
+                    showToast: true
+                )
+                onClose()
+            }
+        } else {
+            dialog.recomputeSharedTargetPaths(folderNameHint: dialog.sharedInspectResult?.folderName)
+            _ = syncService.addOrUpdateSharedURLSync(
+                remoteURL: trimmedURL,
+                localPath: dialog.sharedLocalTargetPath,
+                driveTargetPath: dialog.sharedDriveMirrorPath,
+                folderID: dialog.sharedInspectResult?.folderId,
+                ownerName: dialog.sharedInspectResult?.ownerName,
+                showToast: true
+            )
+            onClose()
+        }
     }
 
     @ViewBuilder
@@ -507,11 +565,11 @@ private struct FolderSyncDialogView: View {
             // 1. Shared URL Input Card
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text(L("LINK THƯ MỤC GOOGLE DRIVE ĐƯỢC CHIA SẺ", "SHARED GOOGLE DRIVE FOLDER LINK"))
+                    Text(L("1. DÁN LINK THƯ MỤC GOOGLE DRIVE ĐƯỢC CHIA SẺ", "1. PASTE SHARED GOOGLE DRIVE FOLDER LINK"))
                         .font(.system(size: 10.5, weight: .semibold))
                         .foregroundStyle(.secondary)
                     Spacer()
-                    if dialog.isInspectingSharedURL {
+                    if dialog.isInspectingSharedURL || dialog.isStartingSharedCopy {
                         HStack(spacing: 4) {
                             ProgressView()
                                 .controlSize(.small)
@@ -525,13 +583,20 @@ private struct FolderSyncDialogView: View {
 
                 HStack(spacing: 8) {
                     TextField(
-                        L("Dán link https://drive.google.com/drive/folders/...", "Paste https://drive.google.com/drive/folders/..."),
+                        L("Dán link https://drive.google.com/drive/folders/... (⌘V)", "Paste https://drive.google.com/drive/folders/... (⌘V)"),
                         text: $dialog.sharedURLInput
                     )
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 12, design: .monospaced))
+                    .focused($isURLFieldFocused)
+                    .onChange(of: dialog.sharedURLInput) { _, newValue in
+                        let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if trimmed.contains("drive.google.com") || trimmed.contains("docs.google.com") {
+                            dialog.inspectCurrentSharedURL(keepExistingPaths: false)
+                        }
+                    }
                     .onSubmit {
-                        dialog.inspectCurrentSharedURL(keepExistingPaths: false)
+                        startSharedLinkCopyAndClose()
                     }
 
                     Button {
@@ -543,7 +608,8 @@ private struct FolderSyncDialogView: View {
                     } label: {
                         Label(L("Dán Link", "Paste"), systemImage: "doc.on.clipboard")
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.indigo)
                     .controlSize(.regular)
 
                     Button {
@@ -551,9 +617,14 @@ private struct FolderSyncDialogView: View {
                     } label: {
                         Label(L("Kiểm tra", "Check"), systemImage: "magnifyingglass")
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.bordered)
                     .controlSize(.regular)
                     .disabled(dialog.sharedURLInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || dialog.isInspectingSharedURL)
+                }
+                .onAppear {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                        isURLFieldFocused = true
+                    }
                 }
 
                 // Inspection Status Banner
@@ -577,9 +648,13 @@ private struct FolderSyncDialogView: View {
                         .frame(width: 24)
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(L("THƯ MỤC LƯU TRÊN Ổ CỨNG MAC (TỰ ĐỘNG COPY VỀ MÁY)", "LOCAL MAC FOLDER (AUTO-DOWNLOADED COPY)"))
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(.secondary)
+                        Text(
+                            dialog.customSharedParentDir != nil
+                                ? L("2. THƯ MỤC ĐÍCH TRÊN FINDER (SẼ TỰ ĐỘNG COPY VỀ ĐÂY)", "2. TARGET FINDER FOLDER (AUTO-COPIED HERE)")
+                                : L("2. THƯ MỤC LƯU TRÊN Ổ CỨNG MAC (TỰ ĐỘNG COPY VỀ MÁY)", "2. LOCAL MAC FOLDER (AUTO-DOWNLOADED COPY)")
+                        )
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
                         Text((dialog.sharedLocalTargetPath as NSString).abbreviatingWithTildeInPath)
                             .font(.system(size: 12, weight: .medium, design: .monospaced))
                             .lineLimit(2)
@@ -588,11 +663,30 @@ private struct FolderSyncDialogView: View {
                     Spacer()
                 }
 
+                if let parent = dialog.customSharedParentDir, !parent.isEmpty {
+                    let parentName = (parent as NSString).lastPathComponent
+                    Toggle(isOn: Binding(
+                        get: { dialog.copyIntoSubfolder },
+                        set: { newVal in
+                            dialog.copyIntoSubfolder = newVal
+                            dialog.recomputeSharedTargetPaths(folderNameHint: dialog.sharedInspectResult?.folderName)
+                        }
+                    )) {
+                        Text(
+                            dialog.copyIntoSubfolder
+                                ? L("Tạo thư mục con theo tên GDrive bên trong '\(parentName)' (Khuyên dùng)", "Create subfolder named after GDrive folder inside '\(parentName)' (Recommended)")
+                                : L("Copy thẳng toàn bộ tệp trực tiếp vào trong '\(parentName)'", "Copy all files directly inside '\(parentName)'")
+                        )
+                        .font(.system(size: 11.5))
+                    }
+                    .toggleStyle(.checkbox)
+                }
+
                 HStack(spacing: 8) {
                     Button {
                         chooseCustomSharedLocalDestination()
                     } label: {
-                        Label(L("Chọn nơi lưu khác trên máy Mac...", "Choose Local Mac Folder..."), systemImage: "folder")
+                        Label(L("Chọn thư mục khác trên Mac...", "Choose Another Mac Folder..."), systemImage: "folder")
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -977,13 +1071,8 @@ private struct FolderSyncDialogView: View {
 
         if panel.runModal() == .OK, let pickedURL = panel.url {
             let pickedPath = (pickedURL.path as NSString).standardizingPath
-            let targetName = folderName
-            if (pickedPath as NSString).lastPathComponent == targetName {
-                dialog.sharedLocalTargetPath = pickedPath
-            } else {
-                dialog.sharedLocalTargetPath = (pickedPath as NSString).appendingPathComponent(targetName)
-            }
-            dialog.sharedDriveMirrorPath = syncService.suggestedDriveTargetPath(for: dialog.sharedLocalTargetPath)
+            dialog.customSharedParentDir = pickedPath
+            dialog.recomputeSharedTargetPaths(folderNameHint: dialog.sharedInspectResult?.folderName)
         }
     }
 

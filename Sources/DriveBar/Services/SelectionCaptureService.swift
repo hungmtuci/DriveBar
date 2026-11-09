@@ -66,6 +66,18 @@ final class SelectionCaptureService {
         fetchFinderSelectionInternal(includeOpenWindowFallback: false).urls
     }
 
+    nonisolated static func fetchFinderSelectionOrWindowDirectory() -> URL? {
+        guard let first = fetchFinderSelectionInternal(includeOpenWindowFallback: true).urls.first else {
+            return nil
+        }
+        var isDir: ObjCBool = false
+        let p = (first.path as NSString).standardizingPath
+        if FileManager.default.fileExists(atPath: p, isDirectory: &isDir), !isDir.boolValue {
+            return URL(fileURLWithPath: (p as NSString).deletingLastPathComponent)
+        }
+        return URL(fileURLWithPath: p)
+    }
+
     private nonisolated static func fetchFinderSelectionInternal(includeOpenWindowFallback: Bool) -> (urls: [URL], note: String, scriptSucceeded: Bool) {
         let fallbackClause = includeOpenWindowFallback ? """
             if outList is "" then

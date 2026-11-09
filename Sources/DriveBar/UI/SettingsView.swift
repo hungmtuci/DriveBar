@@ -1512,7 +1512,7 @@ private struct GoogleDriveSettingsPane: View {
             MacSettingsRow(
                 symbol: "contextualmenu.and.cursorarrow",
                 title: L("Menu Chuột phải Finder (Quick Actions & Services)", "Finder Right-Click Menu (Quick Actions & Services)"),
-                subtitle: L("Đã cài đặt nút 'Đồng bộ với Google Drive' trong ~/Library/Services", "Installed 'Đồng bộ với Google Drive' in ~/Library/Services"),
+                subtitle: L("Đã cài đặt 'Đồng bộ với Google Drive' & 'Dán Link Copy' trong ~/Library/Services", "Installed 'Đồng bộ với Google Drive' & 'Dán Link Copy' in ~/Library/Services"),
                 statusDotColor: .green,
                 statusText: L("Đã kích hoạt", "Installed")
             ) {

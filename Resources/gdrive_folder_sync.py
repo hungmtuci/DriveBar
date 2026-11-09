@@ -1150,6 +1150,7 @@ def main():
     parser.add_argument("--daemon", action="store_true", help="Run continuous real-time sync daemon")
     parser.add_argument("--sync-all", action="store_true", help="Sync all enabled pairs in ~/.config/drivebar-sync/sync_pairs.json")
     parser.add_argument("--quick-action", nargs="+", help="Finder Quick Action entry point for selected folders")
+    parser.add_argument("--quick-action-paste-link", nargs="*", help="Finder Quick Action entry point to paste shared Google Drive link and copy into folder")
     parser.add_argument("--local", help="Local Mac folder path")
     parser.add_argument("--drive", help="Google Drive target folder path")
     parser.add_argument("--mode", default="two_way_mirror", choices=["two_way_mirror", "symlink_to_drive"])
@@ -1186,6 +1187,40 @@ def main():
         role, target_p = args.share_set
         res = manage_drive_share_permission(target_p, action=role)
         print(json.dumps(res, ensure_ascii=False))
+        return
+
+    if args.quick_action_paste_link is not None:
+        import urllib.parse
+        ensure_daemon_started()
+        parent_dir = ""
+        if args.quick_action_paste_link:
+            first_raw = args.quick_action_paste_link[0]
+            abs_p = os.path.abspath(os.path.expanduser(first_raw))
+            if not os.path.isdir(abs_p) and not os.path.islink(abs_p):
+                abs_p = os.path.dirname(abs_p)
+            parent_dir = abs_p
+        if not parent_dir:
+            try:
+                out = subprocess.check_output(
+                    ["/usr/bin/osascript", "-e", 'tell application "Finder" to if (count of Finder windows) > 0 then get POSIX path of (target of front Finder window as alias)'],
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    timeout=2,
+                ).strip()
+                if out and os.path.isdir(out):
+                    parent_dir = os.path.abspath(out)
+            except Exception:
+                pass
+        enc_parent = urllib.parse.quote(parent_dir) if parent_dir else ""
+        try:
+            subprocess.run(
+                ["/usr/bin/open", f"drivebar://sync-shared-url?parent={enc_parent}"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=3,
+            )
+        except Exception:
+            pass
         return
 
     if args.quick_action:

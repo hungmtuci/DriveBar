@@ -193,7 +193,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if u.host?.lowercased() == "sync-shared-url",
                    let comps = URLComponents(url: u, resolvingAgainstBaseURL: false) {
                     let sharedURL = comps.queryItems?.first(where: { $0.name == "url" })?.value
-                    FolderSyncDialogController.shared.presentSharedLinkDialog(initialURL: sharedURL)
+                    let parentDir = comps.queryItems?.first(where: { $0.name == "parent" })?.value
+                    FolderSyncDialogController.shared.presentSharedLinkDialog(
+                        initialURL: sharedURL,
+                        targetParentDir: (parentDir?.isEmpty == false) ? parentDir : nil
+                    )
                     return
                 }
                 if let comps = URLComponents(url: u, resolvingAgainstBaseURL: false) {
@@ -243,6 +247,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
            !urls.isEmpty {
             FolderSyncDialogController.shared.present(forFolderURLs: urls, instantIfSingle: true)
         }
+    }
+
+    @objc func handlePasteSharedLinkCopyService(
+        _ pboard: NSPasteboard,
+        userData: String?,
+        error: AutoreleasingUnsafeMutablePointer<NSString?>
+    ) {
+        var resolvedDir: String?
+        if let urls = pboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+           let first = urls.first {
+            var isDir: ObjCBool = false
+            let p = (first.path as NSString).standardizingPath
+            if FileManager.default.fileExists(atPath: p, isDirectory: &isDir), !isDir.boolValue {
+                resolvedDir = (p as NSString).deletingLastPathComponent
+            } else {
+                resolvedDir = p
+            }
+        }
+        if resolvedDir == nil {
+            resolvedDir = SelectionCaptureService.fetchFinderSelectionOrWindowDirectory()?.path
+        }
+        FolderSyncDialogController.shared.presentSharedLinkDialog(
+            initialURL: nil,
+            targetParentDir: resolvedDir
+        )
     }
 
     @objc func handleUniversalActionService(
