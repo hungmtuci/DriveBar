@@ -343,10 +343,10 @@ final class LocalFolderDriveSyncService: ObservableObject {
     }
 
     private let syncQueue = DispatchQueue(label: "com.hunglx.DriveBar.LocalFolderDriveSyncQueue", qos: .utility)
+    private let fsEventQueue = DispatchQueue(label: "com.hunglx.DriveBar.LocalFolderSyncFSEvents", qos: .utility)
     private var fsEventStream: FSEventStreamRef?
-    private var debounceWorkItem: DispatchWorkItem?
+    private var perPairDebounceWorkItems: [UUID: DispatchWorkItem] = [:]
     private var periodicTimer: Timer?
-    private var lastInternalWriteTimestamp: [UUID: TimeInterval] = [:]
 
     nonisolated private static let ignoredDirectoryNames: Set<String> = [
         ".git", "node_modules", "__pycache__", ".build", ".swiftpm",
@@ -1182,8 +1182,6 @@ final class LocalFolderDriveSyncService: ObservableObject {
             )
         }
 
-        lastInternalWriteTimestamp[id] = Date().timeIntervalSince1970
-
         var cmdPayload: [String: Any] = [
             "localPath": pair.localPath,
             "driveTargetPath": pair.driveTargetPath,
@@ -1224,8 +1222,6 @@ final class LocalFolderDriveSyncService: ObservableObject {
             )
         }
 
-        lastInternalWriteTimestamp[id] = Date().timeIntervalSince1970
-
         syncQueue.async { [weak self] in
             let (updatedPair, report) = Self.performSyncOnBackgroundQueue(pair: pair)
             Task { @MainActor [weak self] in
@@ -1240,7 +1236,6 @@ final class LocalFolderDriveSyncService: ObservableObject {
         report: SyncExecutionReport,
         showToast: Bool
     ) {
-        lastInternalWriteTimestamp[id] = Date().timeIntervalSince1970
         activeSyncingIDs.remove(id)
         isGlobalSyncing = !activeSyncingIDs.isEmpty
 
@@ -1779,11 +1774,23 @@ final class LocalFolderDriveSyncService: ObservableObject {
         return (st.st_mode & S_IFMT) == S_IFLNK
     }
 
-    // MARK: - Real-time FSEvents Monitor & Periodic Timer
+    // MARK: - Real-time FSEvents Monitor & Periodic Timer (§4.1)
+
+    nonisolated private static func isPairCurrentlyRunningInEngine(_ pairID: UUID) -> Bool {
+        let statusFile = ((sharedConfigDirPath() as NSString).appendingPathComponent("status") as NSString)
+            .appendingPathComponent("\(pairID.uuidString.uppercased()).json")
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: statusFile),
+              let mtime = attrs[.modificationDate] as? Date else {
+            return false
+        }
+        // Treat status lock older than 180s as stale
+        return Date().timeIntervalSince(mtime) < 180.0
+    }
 
     private func startPeriodicTimer() {
         periodicTimer?.invalidate()
-        periodicTimer = Timer.scheduledTimer(withTimeInterval: 6.0, repeats: true) { [weak self] _ in
+        // 300s (5-minute) periodic safety-net timer instead of 6s polling (§4.1)
+        periodicTimer = Timer.scheduledTimer(withTimeInterval: 300.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.reloadPairsFromSharedFileIfAvailable()
@@ -1804,8 +1811,13 @@ final class LocalFolderDriveSyncService: ObservableObject {
 
         let enabledPairs = syncedPairs.filter { $0.isEnabled && $0.syncMode == .twoWayMirror }
         var watchedPaths: [String] = []
+        var seenWatched = Set<String>()
+        let fm = FileManager.default
         for pair in enabledPairs {
-            if FileManager.default.fileExists(atPath: pair.driveTargetPath) {
+            if fm.fileExists(atPath: pair.localPath) && seenWatched.insert(pair.localPath).inserted {
+                watchedPaths.append(pair.localPath)
+            }
+            if fm.fileExists(atPath: pair.driveTargetPath) && seenWatched.insert(pair.driveTargetPath).inserted {
                 watchedPaths.append(pair.driveTargetPath)
             }
         }
@@ -1844,14 +1856,13 @@ final class LocalFolderDriveSyncService: ObservableObject {
             1.0,
             flags
         ) {
-            FSEventStreamSetDispatchQueue(stream, DispatchQueue.main)
+            FSEventStreamSetDispatchQueue(stream, fsEventQueue)
             FSEventStreamStart(stream)
             fsEventStream = stream
         }
     }
 
     private func handleFSEvents(changedPaths: [String]) {
-        let now = Date().timeIntervalSince1970
         var triggeredPairIDs = Set<UUID>()
 
         for rawPath in changedPaths {
@@ -1859,30 +1870,36 @@ final class LocalFolderDriveSyncService: ObservableObject {
             if Self.ignoredFileNames.contains(name) ||
                name.hasPrefix(".drivebar_sync_tmp_") ||
                name.hasPrefix("~$") ||
+               name.hasPrefix(".~") ||
                name.hasPrefix(".tmp") {
                 continue
             }
-            if let pair = enclosingPair(forPath: rawPath), pair.syncMode == .twoWayMirror, !pair.needsConfirmation {
-                if let lastInternal = lastInternalWriteTimestamp[pair.id], now - lastInternal < 2.2 {
-                    continue
-                }
+            if let pair = enclosingPair(forPath: rawPath),
+               pair.syncMode == .twoWayMirror,
+               !pair.needsConfirmation,
+               !activeSyncingIDs.contains(pair.id),
+               !Self.isPairCurrentlyRunningInEngine(pair.id) {
                 triggeredPairIDs.insert(pair.id)
             }
         }
 
         guard !triggeredPairIDs.isEmpty else { return }
 
-        debounceWorkItem?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                for id in triggeredPairIDs {
-                    self.syncPairNow(id: id, showToast: false)
+        // Coalesce and debounce 1.5s per pairId (§4.1)
+        for pairID in triggeredPairIDs {
+            perPairDebounceWorkItems[pairID]?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.perPairDebounceWorkItems.removeValue(forKey: pairID)
+                    if !Self.isPairCurrentlyRunningInEngine(pairID) {
+                        self.syncPairNow(id: pairID, showToast: false)
+                    }
                 }
             }
+            perPairDebounceWorkItems[pairID] = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
         }
-        debounceWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
     }
 
     // MARK: - Install Finder Right-Click Quick Actions (.workflow in ~/Library/Services, §3.4)

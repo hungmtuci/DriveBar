@@ -41,6 +41,14 @@ enum DriveBarMain {
     @MainActor private static var retainedDelegate: AppDelegate?
 
     static func main() {
+        if CommandLine.arguments.contains("--bench-index") {
+            Task {
+                await GoogleDriveIndexService.runIndexBenchmarkCLI()
+                Darwin.exit(0)
+            }
+            RunLoop.main.run()
+            return
+        }
         let app = DriveBarApplication.shared
         MainActor.assumeIsolated {
             let delegate = AppDelegate()

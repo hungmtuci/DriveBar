@@ -170,11 +170,26 @@ final class GoogleDriveIndexService: ObservableObject {
     private var watcherGeneration: UInt64 = 0
     private let driveFSQueue = DispatchQueue(label: "com.hunglx.DriveBar.driveFSEvents", qos: .utility)
     private var pendingEventPaths = Set<String>()
+    private var isProcessingFSEvents: Bool = false
     private var debounceTask: Task<Void, Never>?
     private var cachePersistTask: Task<Void, Never>?
     private var sharedCachePersistTask: Task<Void, Never>?
     private var macCachePersistTask: Task<Void, Never>?
     nonisolated private static let fileWriteQueuesLock = OSAllocatedUnfairLock(initialState: [String: DispatchQueue]())
+
+    private struct FolderPrefixRefineCache: Sendable {
+        let queryKey: String
+        let indexIdentityCount: Int
+        let candidateIndices: [Int]
+    }
+    private struct FilePrefixRefineCache: Sendable {
+        let queryKey: String
+        let indexIdentityCount: Int
+        let candidateIndices: [Int]
+    }
+    nonisolated private static let folderRefineLock = OSAllocatedUnfairLock(initialState: FolderPrefixRefineCache?.none)
+    nonisolated private static let sharedRefineLock = OSAllocatedUnfairLock(initialState: FolderPrefixRefineCache?.none)
+    nonisolated private static let fileRefineLock = OSAllocatedUnfairLock(initialState: FilePrefixRefineCache?.none)
 
     private let homePath = FileManager.default.homeDirectoryForCurrentUser.path
     private var cacheDir: String { "\(homePath)/.config/alfred-scripts" }
@@ -435,7 +450,13 @@ final class GoogleDriveIndexService: ObservableObject {
     }
 
     private func processPendingFSEvents() {
-        guard !pendingEventPaths.isEmpty, !isRebuildingFolders else { return }
+        guard !pendingEventPaths.isEmpty,
+              !isRebuildingFolders,
+              !isRebuildingShared,
+              !isRebuildingMacFolders,
+              !isProcessingFSEvents else { return }
+
+        isProcessingFSEvents = true
         let batch = Array(pendingEventPaths)
         pendingEventPaths.removeAll()
 
@@ -450,12 +471,13 @@ final class GoogleDriveIndexService: ObservableObject {
 
         Task.detached(priority: .utility) {
             let fm = FileManager.default
-            var folderMap = Dictionary(uniqueKeysWithValues: currentFolders.map { ($0.path, $0) })
-            var sharedMap = Dictionary(uniqueKeysWithValues: currentShared.map { ($0.path, $0) })
-            var macMap = Dictionary(uniqueKeysWithValues: currentMacEntries.map { ($0.path, $0) })
+            var sortedFolders = currentFolders.sorted { $0.path < $1.path }
+            var sortedShared = currentShared.sorted { $0.path < $1.path }
+            var sortedMac = currentMacEntries.sorted { $0.path < $1.path }
             var didMutateFolders = false
             var didMutateShared = false
             var didMutateMac = false
+            var shouldScheduleFullSharedRebuild = false
 
             for eventPath in batch {
                 // 1. Check Custom Mac Folders incremental updates (files & subfolders)
@@ -473,21 +495,15 @@ final class GoogleDriveIndexService: ObservableObject {
                                 maxLimit: 5_000,
                                 into: &freshMac
                             )
-                            let prefix = eventPath + "/"
-                            macMap = macMap.filter { key, _ in key != eventPath && !key.hasPrefix(prefix) }
-                            for entry in freshMac {
-                                macMap[entry.path] = entry
-                            }
+                            _ = Self.removePathAndDescendants(from: &sortedMac, rootPath: eventPath, pathOf: \.path)
+                            Self.upsertSortedEntries(into: &sortedMac, newItems: freshMac, pathOf: \.path)
                             didMutateMac = true
                         } else if let fileEntry = Self.makeSingleMacEntry(path: eventPath, isDir: false, rootDir: matchedMacRoot, homePath: homeSnap) {
-                            macMap[eventPath] = fileEntry
+                            Self.upsertSortedEntries(into: &sortedMac, newItems: [fileEntry], pathOf: \.path)
                             didMutateMac = true
                         }
                     } else {
-                        let prefix = eventPath + "/"
-                        let beforeCount = macMap.count
-                        macMap = macMap.filter { key, _ in key != eventPath && !key.hasPrefix(prefix) }
-                        if macMap.count != beforeCount {
+                        if Self.removePathAndDescendants(from: &sortedMac, rootPath: eventPath, pathOf: \.path) {
                             didMutateMac = true
                         }
                     }
@@ -502,17 +518,11 @@ final class GoogleDriveIndexService: ObservableObject {
                 if let md = acc.myDrivePath, eventPath.hasPrefix(md + "/") {
                     if existsAsDir {
                         let newSubtree = Self.scanFolderSubtree(at: eventPath, myDriveRoot: md, maxSubDepth: 4)
-                        for entry in newSubtree {
-                            if folderMap[entry.path]?.cleanSegs != entry.cleanSegs {
-                                folderMap[entry.path] = entry
-                                didMutateFolders = true
-                            }
-                        }
+                        _ = Self.removePathAndDescendants(from: &sortedFolders, rootPath: eventPath, pathOf: \.path)
+                        Self.upsertSortedEntries(into: &sortedFolders, newItems: newSubtree, pathOf: \.path)
+                        didMutateFolders = true
                     } else {
-                        let prefix = eventPath + "/"
-                        let beforeCount = folderMap.count
-                        folderMap = folderMap.filter { key, _ in key != eventPath && !key.hasPrefix(prefix) }
-                        if folderMap.count != beforeCount {
+                        if Self.removePathAndDescendants(from: &sortedFolders, rootPath: eventPath, pathOf: \.path) {
                             didMutateFolders = true
                         }
                     }
@@ -530,42 +540,37 @@ final class GoogleDriveIndexService: ObservableObject {
                             cleanSegs: ["bonhodungchungshareddrives"] + sigs.map(\.clean),
                             acrSegs: [""] + sigs.map(\.acronym)
                         ))
-                        Self.walkSharedTree(
+                        let hitCap = Self.walkSharedTree(
                             rootDir: eventPath,
                             baseStripPath: sd,
                             prefixDisplay: sharedPrefix,
                             prefixClean: "bonhodungchungshareddrives",
+                            maxDepth: 4,
+                            maxItems: 5_000,
                             into: &fresh
                         )
-                        for item in fresh {
-                            sharedMap[item.path] = item
-                            didMutateShared = true
+                        if hitCap {
+                            shouldScheduleFullSharedRebuild = true
                         }
+                        _ = Self.removePathAndDescendants(from: &sortedShared, rootPath: eventPath, pathOf: \.path)
+                        Self.upsertSortedEntries(into: &sortedShared, newItems: fresh, pathOf: \.path)
+                        didMutateShared = true
                     } else {
-                        let prefix = eventPath + "/"
-                        let beforeCount = sharedMap.count
-                        sharedMap = sharedMap.filter { key, _ in key != eventPath && !key.hasPrefix(prefix) }
-                        if sharedMap.count != beforeCount {
+                        if Self.removePathAndDescendants(from: &sortedShared, rootPath: eventPath, pathOf: \.path) {
                             didMutateShared = true
                         }
                     }
                 }
             }
 
-            guard didMutateFolders || didMutateShared || didMutateMac else { return }
-
-            let updatedFolders = didMutateFolders
-                ? folderMap.values.sorted { $0.path < $1.path }
-                : nil
+            let updatedFolders = didMutateFolders ? sortedFolders : nil
             let updatedFastFolders = updatedFolders.map { FastFolderIndex.build(from: $0) }
-            let updatedShared = didMutateShared
-                ? sharedMap.values.sorted { $0.path < $1.path }
-                : nil
+            let updatedShared = didMutateShared ? sortedShared : nil
             let updatedFastShared = updatedShared.map { FastSharedIndex.build(from: $0) }
-            let updatedMac = didMutateMac
-                ? macMap.values.sorted { $0.path < $1.path }
-                : nil
+            let updatedMac = didMutateMac ? sortedMac : nil
             let updatedFastMac = updatedMac.map { FastSharedIndex.build(from: $0) }
+            let needSharedRebuild = shouldScheduleFullSharedRebuild
+            let mutatedAny = didMutateFolders || didMutateShared || didMutateMac
 
             await MainActor.run {
                 let svc = GoogleDriveIndexService.shared
@@ -574,12 +579,14 @@ final class GoogleDriveIndexService: ObservableObject {
                     svc.fastFolderIndex = updatedFastFolders
                     svc.folderCount = updatedFolders.count
                     svc.lastCacheUpdate = Date()
+                    Self.folderRefineLock.withLock { $0 = nil }
                     svc.scheduleFolderCachePersist()
                 }
                 if let updatedShared, let updatedFastShared {
                     svc.sharedEntries = updatedShared
                     svc.fastSharedIndex = updatedFastShared
                     svc.sharedCount = updatedShared.count
+                    Self.sharedRefineLock.withLock { $0 = nil }
                     svc.scheduleSharedCachePersist()
                 }
                 if let updatedMac, let updatedFastMac {
@@ -588,9 +595,75 @@ final class GoogleDriveIndexService: ObservableObject {
                     svc.macFolderItemCount = updatedMac.count
                     svc.scheduleMacFoldersCachePersist()
                 }
-                if LauncherPanelController.shared.isVisible {
+                svc.isProcessingFSEvents = false
+                if needSharedRebuild {
+                    svc.rebuildSharedCacheInBackground()
+                } else if !svc.pendingEventPaths.isEmpty {
+                    svc.processPendingFSEvents()
+                }
+                if mutatedAny && LauncherPanelController.shared.isVisible {
                     LauncherViewModel.shared.refreshSearchResults()
                 }
+            }
+        }
+    }
+
+    /// Removes `rootPath` and all descendants with prefix `rootPath + "/"` from a path-sorted array in O(log N) binary search + single subrange removal (§4.3).
+    private nonisolated static func removePathAndDescendants<T>(
+        from sortedArray: inout [T],
+        rootPath: String,
+        pathOf: (T) -> String
+    ) -> Bool {
+        var didRemove = false
+        // 1. Remove exact `rootPath` if present
+        let exactIdx = lowerBoundIndex(in: sortedArray, target: rootPath, pathOf: pathOf)
+        if exactIdx < sortedArray.count && pathOf(sortedArray[exactIdx]) == rootPath {
+            sortedArray.remove(at: exactIdx)
+            didRemove = true
+        }
+        // 2. Remove range `[rootPath + "/", rootPath + "0")` (`'0'` is ASCII 48, immediately after `'/'` ASCII 47)
+        let lowerPrefix = rootPath + "/"
+        let upperPrefix = rootPath + "0"
+        let startIdx = lowerBoundIndex(in: sortedArray, target: lowerPrefix, pathOf: pathOf)
+        let endIdx = lowerBoundIndex(in: sortedArray, target: upperPrefix, pathOf: pathOf)
+        if startIdx < endIdx {
+            sortedArray.removeSubrange(startIdx..<endIdx)
+            didRemove = true
+        }
+        return didRemove
+    }
+
+    private nonisolated static func lowerBoundIndex<T>(
+        in sortedArray: [T],
+        target: String,
+        pathOf: (T) -> String
+    ) -> Int {
+        var low = 0
+        var high = sortedArray.count
+        while low < high {
+            let mid = (low + high) >> 1
+            if pathOf(sortedArray[mid]) < target {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        return low
+    }
+
+    private nonisolated static func upsertSortedEntries<T>(
+        into sortedArray: inout [T],
+        newItems: [T],
+        pathOf: (T) -> String
+    ) {
+        guard !newItems.isEmpty else { return }
+        for item in newItems {
+            let p = pathOf(item)
+            let idx = lowerBoundIndex(in: sortedArray, target: p, pathOf: pathOf)
+            if idx < sortedArray.count && pathOf(sortedArray[idx]) == p {
+                sortedArray[idx] = item
+            } else {
+                sortedArray.insert(item, at: idx)
             }
         }
     }
@@ -1195,13 +1268,617 @@ final class GoogleDriveIndexService: ObservableObject {
 
     // MARK: - Background Cache Builders (Multi-Account Capable)
 
+    // MARK: - Single-Pass Parallel Index Rebuild (§4.2)
+
     func rebuildAllCaches() {
         refreshAccountPaths()
         refreshInstalledAppsIfNeeded(force: true)
-        rebuildFolderCacheInBackground()
+        rebuildUnifiedDriveAndLocalIndexInBackground()
         rebuildSharedCacheInBackground()
-        rebuildFileCacheInBackground()
         rebuildMacFoldersCacheInBackground()
+    }
+
+    func rebuildFolderCacheInBackground() {
+        rebuildUnifiedDriveAndLocalIndexInBackground()
+    }
+
+    func rebuildFileCacheInBackground() {
+        if !isRebuildingFolders {
+            rebuildUnifiedDriveAndLocalIndexInBackground()
+        }
+    }
+
+    private struct SubtreeScanChunk: Sendable {
+        var folders: [DriveFolderEntry] = []
+        var files: [DriveFileEntry] = []
+    }
+
+    private nonisolated static let unifiedSkippedDirNames: Set<String> = [
+        "node_modules", ".git", ".svn", ".venv", "venv", "__pycache__",
+        ".build", "build", "deriveddata", "pods", "library"
+    ]
+
+    /// Traverses a directory tree in a single POSIX `opendir`/`readdir` (`d_type`) pass,
+    /// carrying parent `(cleanSegs, acrSegs, cleanParent)` down the stack so `extractSignatures`
+    /// is computed exactly ONCE per directory/file name (§4.2).
+    private nonisolated static func scanSubtreeSinglePassPOSIX(
+        startDir: String,
+        initialDepth: Int,
+        maxDepth: Int,
+        collectFolders: Bool,
+        initialCleanSegs: [String],
+        initialAcrSegs: [String],
+        initialCleanParent: String,
+        maxFiles: Int,
+        progressPing: (@Sendable (Int) -> Void)? = nil
+    ) -> SubtreeScanChunk {
+        var chunk = SubtreeScanChunk()
+        if collectFolders && !initialCleanSegs.isEmpty {
+            chunk.folders.append(DriveFolderEntry(
+                path: startDir,
+                cleanSegs: initialCleanSegs,
+                acrSegs: initialAcrSegs
+            ))
+        }
+
+        struct StackFrame {
+            let dir: String
+            let depth: Int
+            let cleanSegs: [String]
+            let acrSegs: [String]
+            let cleanParent: String
+        }
+
+        var stack: [StackFrame] = [
+            StackFrame(
+                dir: startDir,
+                depth: initialDepth,
+                cleanSegs: initialCleanSegs,
+                acrSegs: initialAcrSegs,
+                cleanParent: initialCleanParent
+            )
+        ]
+
+        while let frame = stack.popLast() {
+            if chunk.files.count >= maxFiles { break }
+            guard let dirPtr = Darwin.opendir(frame.dir) else { continue }
+            var childFrames: [StackFrame] = []
+
+            while let ent = Darwin.readdir(dirPtr) {
+                let nameLen = Int(ent.pointee.d_namlen)
+                guard nameLen > 0 else { continue }
+                let dType = ent.pointee.d_type
+
+                let name: String = withUnsafePointer(to: ent.pointee.d_name) { ptr in
+                    ptr.withMemoryRebound(to: UInt8.self, capacity: nameLen) { utf8Ptr in
+                        String(decoding: UnsafeBufferPointer(start: utf8Ptr, count: nameLen), as: UTF8.self)
+                    }
+                }
+                if name.isEmpty || name.hasPrefix(".") || name == "Icon\r" { continue }
+
+                let fullPath = "\(frame.dir)/\(name)"
+                let isDirectory: Bool
+                if dType == DT_DIR {
+                    isDirectory = true
+                } else if dType == DT_REG || dType == DT_LNK {
+                    isDirectory = false
+                } else {
+                    if fullPath.contains("/Library/CloudStorage/") {
+                        isDirectory = (name as NSString).pathExtension.isEmpty
+                    } else {
+                        var st = Darwin.stat()
+                        isDirectory = (Darwin.lstat(fullPath, &st) == 0) && ((st.st_mode & S_IFMT) == S_IFDIR)
+                    }
+                }
+
+                if isDirectory {
+                    let lowerName = name.lowercased()
+                    if unifiedSkippedDirNames.contains(lowerName) || shouldSkip(name) { continue }
+                    let (cSeg, aSeg) = extractSignatures(name)
+                    let nextCleanSegs = frame.cleanSegs + [cSeg]
+                    let nextAcrSegs = frame.acrSegs + [aSeg]
+                    let nextCleanParent = frame.cleanParent.isEmpty ? cSeg : (frame.cleanParent + cSeg)
+
+                    if collectFolders {
+                        chunk.folders.append(DriveFolderEntry(
+                            path: fullPath,
+                            cleanSegs: nextCleanSegs,
+                            acrSegs: nextAcrSegs
+                        ))
+                        if chunk.folders.count % 2500 == 0 {
+                            progressPing?(chunk.folders.count)
+                        }
+                    }
+
+                    if frame.depth < maxDepth {
+                        childFrames.append(StackFrame(
+                            dir: fullPath,
+                            depth: frame.depth + 1,
+                            cleanSegs: nextCleanSegs,
+                            acrSegs: nextAcrSegs,
+                            cleanParent: nextCleanParent
+                        ))
+                    }
+                } else {
+                    let ext = (name as NSString).pathExtension.lowercased()
+                    if ext == "tmp" || ext == "part" || ext == "crdownload" || ext == "ds_store" { continue }
+                    let stem = ext.isEmpty ? name : (name as NSString).deletingPathExtension
+                    let (cStem, acr) = extractSignatures(stem)
+                    let cFull = ext.isEmpty ? cStem : "\(cStem)\(ext)"
+                    chunk.files.append(DriveFileEntry(
+                        path: fullPath,
+                        ext: ext,
+                        cleanName: cFull,
+                        acronym: acr,
+                        cleanParent: frame.cleanParent
+                    ))
+                    if chunk.files.count >= maxFiles { break }
+                }
+            }
+            Darwin.closedir(dirPtr)
+
+            childFrames.sort { $0.dir < $1.dir }
+            for cf in childFrames.reversed() {
+                stack.append(cf)
+            }
+        }
+        return chunk
+    }
+
+    /// Single-pass parallel index builder across My Drive, Shared drives, and local folders (§4.2).
+    func rebuildUnifiedDriveAndLocalIndexInBackground() {
+        guard !isRebuildingFolders && !isRebuildingFiles else { return }
+        refreshAccountPaths()
+
+        isRebuildingFolders = true
+        isRebuildingFiles = true
+        rebuildProgressText = L("Đang quét nhanh chỉ mục Google Drive...", "Fast-scanning Google Drive index...")
+
+        let myDriveRoots = activeAccounts.compactMap(\.myDrivePath)
+        let sharedDriveRoots = activeAccounts.compactMap(\.sharedDrivesPath)
+        let home = homePath
+        let customMac = AppSettings.shared.customMacFolders.map {
+            $0.hasSuffix("/") && $0.count > 1 ? String($0.dropLast()) : $0
+        }.filter { !$0.isEmpty }
+        let primaryMyDrive = myDrivePath
+        let targetFolderCache = folderCachePath
+        let targetFileCache = fileCachePath
+
+        Task.detached(priority: .utility) {
+            let startTime = CFAbsoluteTimeGetCurrent()
+            let (allFolders, allFiles) = await Self.performParallelUnifiedScan(
+                myDriveRoots: myDriveRoots,
+                sharedDriveRoots: sharedDriveRoots,
+                homePath: home,
+                customMacFolders: customMac,
+                reportProgress: true
+            )
+            let elapsedMs = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
+            let now = Date().timeIntervalSince1970
+
+            let folderPayload = FolderCachePayload(timestamp: now, root: primaryMyDrive, items: allFolders, folders: nil)
+            Self.writeCodableAtomic(folderPayload, to: targetFolderCache)
+
+            let filePayload = FileCachePayload(timestamp: now, items: allFiles)
+            Self.writeCodableAtomic(filePayload, to: targetFileCache)
+
+            let builtFastFolders = FastFolderIndex.build(from: allFolders)
+            let builtFastFiles = FastFileIndex.build(from: allFiles)
+            _ = elapsedMs
+
+            await MainActor.run {
+                let svc = GoogleDriveIndexService.shared
+                svc.folderEntries = allFolders
+                svc.fastFolderIndex = builtFastFolders
+                svc.folderCount = allFolders.count
+                svc.fileEntries = allFiles
+                svc.fastFileIndex = builtFastFiles
+                svc.fileCount = allFiles.count
+                svc.lastCacheUpdate = Date(timeIntervalSince1970: now)
+                svc.isRebuildingFolders = false
+                svc.isRebuildingFiles = false
+                svc.rebuildProgressText = nil
+                Self.folderRefineLock.withLock { $0 = nil }
+                Self.fileRefineLock.withLock { $0 = nil }
+                if !svc.pendingEventPaths.isEmpty {
+                    svc.processPendingFSEvents()
+                }
+                if LauncherPanelController.shared.isVisible {
+                    LauncherViewModel.shared.refreshSearchResults()
+                }
+            }
+        }
+    }
+
+    nonisolated static func performParallelUnifiedScan(
+        myDriveRoots: [String],
+        sharedDriveRoots: [String],
+        homePath: String,
+        customMacFolders: [String],
+        reportProgress: Bool
+    ) async -> (folders: [DriveFolderEntry], files: [DriveFileEntry]) {
+        struct WorkUnit: Sendable {
+            let startDir: String
+            let initialDepth: Int
+            let maxDepth: Int
+            let collectFolders: Bool
+            let initialCleanSegs: [String]
+            let initialAcrSegs: [String]
+            let initialCleanParent: String
+        }
+
+        var workUnits: [WorkUnit] = []
+        var rootLevelFiles: [DriveFileEntry] = []
+
+        // 1. Expand top-level children of My Drive roots so `withTaskGroup` scans subtrees in parallel
+        for mdRoot in myDriveRoots {
+            guard let dirPtr = Darwin.opendir(mdRoot) else { continue }
+            while let ent = Darwin.readdir(dirPtr) {
+                let nameLen = Int(ent.pointee.d_namlen)
+                guard nameLen > 0 else { continue }
+                let dType = ent.pointee.d_type
+                let name: String = withUnsafePointer(to: ent.pointee.d_name) { ptr in
+                    ptr.withMemoryRebound(to: UInt8.self, capacity: nameLen) { utf8Ptr in
+                        String(decoding: UnsafeBufferPointer(start: utf8Ptr, count: nameLen), as: UTF8.self)
+                    }
+                }
+                if name.isEmpty || name.hasPrefix(".") || name == "Icon\r" { continue }
+                let fullPath = "\(mdRoot)/\(name)"
+                let isDir: Bool
+                if dType == DT_DIR {
+                    isDir = true
+                } else if dType == DT_REG || dType == DT_LNK {
+                    isDir = false
+                } else {
+                    isDir = (name as NSString).pathExtension.isEmpty
+                }
+                if isDir {
+                    if unifiedSkippedDirNames.contains(name.lowercased()) || shouldSkip(name) { continue }
+                    let (c, a) = extractSignatures(name)
+                    workUnits.append(WorkUnit(
+                        startDir: fullPath,
+                        initialDepth: 1,
+                        maxDepth: 10,
+                        collectFolders: true,
+                        initialCleanSegs: [c],
+                        initialAcrSegs: [a],
+                        initialCleanParent: c
+                    ))
+                } else {
+                    let ext = (name as NSString).pathExtension.lowercased()
+                    if ext == "tmp" || ext == "part" || ext == "crdownload" || ext == "ds_store" { continue }
+                    let stem = ext.isEmpty ? name : (name as NSString).deletingPathExtension
+                    let (cStem, acr) = extractSignatures(stem)
+                    let cFull = ext.isEmpty ? cStem : "\(cStem)\(ext)"
+                    rootLevelFiles.append(DriveFileEntry(
+                        path: fullPath,
+                        ext: ext,
+                        cleanName: cFull,
+                        acronym: acr,
+                        cleanParent: ""
+                    ))
+                }
+            }
+            Darwin.closedir(dirPtr)
+        }
+
+        // 2. Shared drives & Local roots (file collection only, folders handled by Shared/Mac indexers)
+        var seenFileRoots = Set<String>(myDriveRoots)
+        for sd in sharedDriveRoots where seenFileRoots.insert(sd).inserted {
+            workUnits.append(WorkUnit(
+                startDir: sd,
+                initialDepth: 0,
+                maxDepth: 8,
+                collectFolders: false,
+                initialCleanSegs: [],
+                initialAcrSegs: [],
+                initialCleanParent: ""
+            ))
+        }
+        for sub in ["Desktop", "Downloads", "Documents"] {
+            let p = "\(homePath)/\(sub)"
+            if seenFileRoots.insert(p).inserted {
+                workUnits.append(WorkUnit(
+                    startDir: p,
+                    initialDepth: 0,
+                    maxDepth: 4,
+                    collectFolders: false,
+                    initialCleanSegs: [],
+                    initialAcrSegs: [],
+                    initialCleanParent: ""
+                ))
+            }
+        }
+        for custom in customMacFolders where seenFileRoots.insert(custom).inserted {
+            workUnits.append(WorkUnit(
+                startDir: custom,
+                initialDepth: 0,
+                maxDepth: 6,
+                collectFolders: false,
+                initialCleanSegs: [],
+                initialAcrSegs: [],
+                initialCleanParent: ""
+            ))
+        }
+
+        let maxConcurrent = max(2, min(ProcessInfo.processInfo.activeProcessorCount, 6))
+        let progressLock = OSAllocatedUnfairLock(initialState: (totalFolders: 0, lastUptime: 0.0))
+
+        let pingHandler: (@Sendable (Int) -> Void)?
+        if reportProgress {
+            pingHandler = { (_: Int) in
+                let nowUp = ProcessInfo.processInfo.systemUptime
+                let shouldPost: Int? = progressLock.withLock { state -> Int? in
+                    state.totalFolders += 2500
+                    // Throttle UI progress updates to <= 4/sec (every 0.25s, §4.2)
+                    if nowUp - state.lastUptime >= 0.25 {
+                        state.lastUptime = nowUp
+                        return state.totalFolders
+                    }
+                    return nil
+                }
+                if let countSnap = shouldPost {
+                    Task { @MainActor in
+                        GoogleDriveIndexService.shared.rebuildProgressText = L(
+                            "Đang quét: \(countSnap.formatted()) thư mục...",
+                            "Scanning: \(countSnap.formatted()) folders..."
+                        )
+                    }
+                }
+            }
+        } else {
+            pingHandler = nil
+        }
+
+        var mergedFolders: [DriveFolderEntry] = []
+        mergedFolders.reserveCapacity(60_000)
+        var mergedFiles: [DriveFileEntry] = rootLevelFiles
+        mergedFiles.reserveCapacity(60_000)
+
+        let unitsSnap = workUnits
+        await withTaskGroup(of: SubtreeScanChunk.self) { group in
+            var nextIdx = 0
+            let initialBatch = min(maxConcurrent, unitsSnap.count)
+            while nextIdx < initialBatch {
+                let u = unitsSnap[nextIdx]
+                nextIdx += 1
+                group.addTask {
+                    Self.scanSubtreeSinglePassPOSIX(
+                        startDir: u.startDir,
+                        initialDepth: u.initialDepth,
+                        maxDepth: u.maxDepth,
+                        collectFolders: u.collectFolders,
+                        initialCleanSegs: u.initialCleanSegs,
+                        initialAcrSegs: u.initialAcrSegs,
+                        initialCleanParent: u.initialCleanParent,
+                        maxFiles: 80_000,
+                        progressPing: pingHandler
+                    )
+                }
+            }
+
+            while let chunk = await group.next() {
+                mergedFolders.append(contentsOf: chunk.folders)
+                if mergedFiles.count < 200_000 {
+                    mergedFiles.append(contentsOf: chunk.files)
+                }
+                if nextIdx < unitsSnap.count {
+                    let u = unitsSnap[nextIdx]
+                    nextIdx += 1
+                    group.addTask {
+                        Self.scanSubtreeSinglePassPOSIX(
+                            startDir: u.startDir,
+                            initialDepth: u.initialDepth,
+                            maxDepth: u.maxDepth,
+                            collectFolders: u.collectFolders,
+                            initialCleanSegs: u.initialCleanSegs,
+                            initialAcrSegs: u.initialAcrSegs,
+                            initialCleanParent: u.initialCleanParent,
+                            maxFiles: 80_000,
+                            progressPing: pingHandler
+                        )
+                    }
+                }
+            }
+        }
+
+        mergedFolders.sort { $0.path < $1.path }
+        return (mergedFolders, mergedFiles)
+    }
+
+    func rebuildSharedCacheInBackground() {
+        guard !isRebuildingShared else { return }
+        let mounts = activeAccounts
+        guard mounts.contains(where: { $0.sharedDrivesPath != nil || $0.shortcutTargetsPath != nil }) else { return }
+
+        isRebuildingShared = true
+        let targetCachePath = sharedCachePath
+        let primaryAcc = accountRoot
+
+        Task.detached(priority: .utility) {
+            let fm = FileManager.default
+            var items: [SharedDriveEntry] = []
+
+            for mount in mounts {
+                if let sdPath = mount.sharedDrivesPath, let drives = try? fm.contentsOfDirectory(atPath: sdPath) {
+                    for d in drives where !d.hasPrefix(".") {
+                        let drivePath = "\(sdPath)/\(d)"
+                        var isDir: ObjCBool = false
+                        guard fm.fileExists(atPath: drivePath, isDirectory: &isDir), isDir.boolValue else { continue }
+                        let (c, a) = Self.extractSignatures(d)
+                        let sharedPrefix = L("Bộ nhớ dùng chung", "Shared Drives")
+                        items.append(SharedDriveEntry(
+                            path: drivePath,
+                            isDir: true,
+                            displaySub: "\(sharedPrefix)/\(d)",
+                            cleanSegs: ["bonhodungchungshareddrives", c],
+                            acrSegs: ["", a]
+                        ))
+                        _ = Self.walkSharedTree(
+                            rootDir: drivePath,
+                            baseStripPath: sdPath,
+                            prefixDisplay: sharedPrefix,
+                            prefixClean: "bonhodungchungshareddrives",
+                            maxDepth: 8,
+                            maxItems: 80_000,
+                            into: &items
+                        )
+                    }
+                }
+
+                if let stPath = mount.shortcutTargetsPath, let targetIDs = try? fm.contentsOfDirectory(atPath: stPath) {
+                    for tid in targetIDs where !tid.hasPrefix(".") {
+                        let idDir = "\(stPath)/\(tid)"
+                        guard let names = try? fm.contentsOfDirectory(atPath: idDir) else { continue }
+                        for name in names where !name.hasPrefix(".") {
+                            let itemPath = "\(idDir)/\(name)"
+                            var isDir: ObjCBool = false
+                            guard fm.fileExists(atPath: itemPath, isDirectory: &isDir) else { continue }
+                            let (c, a) = Self.extractSignatures(name)
+                            let sharedWithMePrefix = L("Được chia sẻ", "Shared With Me")
+                            items.append(SharedDriveEntry(
+                                path: itemPath,
+                                isDir: isDir.boolValue,
+                                displaySub: "\(sharedWithMePrefix)/\(name)",
+                                cleanSegs: ["duocchiase", c],
+                                acrSegs: ["", a]
+                            ))
+                            if isDir.boolValue {
+                                _ = Self.walkSharedTree(
+                                    rootDir: itemPath,
+                                    baseStripPath: idDir,
+                                    prefixDisplay: sharedWithMePrefix,
+                                    prefixClean: "duocchiase",
+                                    maxDepth: 8,
+                                    maxItems: 80_000,
+                                    into: &items
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            items.sort { $0.path < $1.path }
+            let now = Date().timeIntervalSince1970
+            let payload = SharedCachePayload(timestamp: now, root: primaryAcc, items: items)
+            Self.writeCodableAtomic(payload, to: targetCachePath)
+
+            let finalItems = items
+            let finalFastShared = FastSharedIndex.build(from: finalItems)
+            await MainActor.run {
+                let service = GoogleDriveIndexService.shared
+                service.sharedEntries = finalItems
+                service.fastSharedIndex = finalFastShared
+                service.sharedCount = finalItems.count
+                service.isRebuildingShared = false
+                Self.sharedRefineLock.withLock { $0 = nil }
+                if !service.pendingEventPaths.isEmpty {
+                    service.processPendingFSEvents()
+                }
+            }
+        }
+    }
+
+    @discardableResult
+    private nonisolated static func walkSharedTree(
+        rootDir: String,
+        baseStripPath: String,
+        prefixDisplay: String,
+        prefixClean: String,
+        maxDepth: Int = 8,
+        maxItems: Int = 80_000,
+        into items: inout [SharedDriveEntry]
+    ) -> Bool {
+        let baseLen = baseStripPath.count + 1
+        let rootRel = rootDir.hasPrefix(baseStripPath + "/") ? String(rootDir.dropFirst(baseLen)) : (rootDir as NSString).lastPathComponent
+        let rootSegs = rootRel.split(separator: "/").map(String.init)
+        let rootSigs = rootSegs.map { extractSignatures($0) }
+
+        struct SharedFrame {
+            let dir: String
+            let depth: Int
+            let relDisplay: String
+            let cleanSegs: [String]
+            let acrSegs: [String]
+        }
+
+        var stack: [SharedFrame] = [
+            SharedFrame(
+                dir: rootDir,
+                depth: 0,
+                relDisplay: rootRel,
+                cleanSegs: [prefixClean] + rootSigs.map(\.clean),
+                acrSegs: [""] + rootSigs.map(\.acronym)
+            )
+        ]
+        let startCount = items.count
+        var hitCap = false
+
+        while let frame = stack.popLast() {
+            if frame.depth > maxDepth { continue }
+            if (items.count - startCount) >= maxItems {
+                hitCap = true
+                break
+            }
+            guard let dirPtr = Darwin.opendir(frame.dir) else { continue }
+            var childFrames: [SharedFrame] = []
+
+            while let ent = Darwin.readdir(dirPtr) {
+                let nameLen = Int(ent.pointee.d_namlen)
+                guard nameLen > 0 else { continue }
+                let dType = ent.pointee.d_type
+
+                let name: String = withUnsafePointer(to: ent.pointee.d_name) { ptr in
+                    ptr.withMemoryRebound(to: UInt8.self, capacity: nameLen) { utf8Ptr in
+                        String(decoding: UnsafeBufferPointer(start: utf8Ptr, count: nameLen), as: UTF8.self)
+                    }
+                }
+                if name.isEmpty || shouldSkip(name) || name == "Icon\r" { continue }
+
+                let full = "\(frame.dir)/\(name)"
+                let isDir: Bool
+                if dType == DT_DIR {
+                    isDir = true
+                } else if dType == DT_REG || dType == DT_LNK {
+                    isDir = false
+                } else {
+                    isDir = (name as NSString).pathExtension.isEmpty
+                }
+
+                let (c, a) = extractSignatures(name)
+                let nextClean = frame.cleanSegs + [c]
+                let nextAcr = frame.acrSegs + [a]
+                let nextRel = frame.relDisplay.isEmpty ? name : "\(frame.relDisplay)/\(name)"
+
+                items.append(SharedDriveEntry(
+                    path: full,
+                    isDir: isDir,
+                    displaySub: "\(prefixDisplay)/\(nextRel)",
+                    cleanSegs: nextClean,
+                    acrSegs: nextAcr
+                ))
+                if (items.count - startCount) >= maxItems {
+                    hitCap = true
+                    break
+                }
+                if isDir && frame.depth < maxDepth {
+                    childFrames.append(SharedFrame(
+                        dir: full,
+                        depth: frame.depth + 1,
+                        relDisplay: nextRel,
+                        cleanSegs: nextClean,
+                        acrSegs: nextAcr
+                    ))
+                }
+            }
+            Darwin.closedir(dirPtr)
+
+            for cf in childFrames.reversed() {
+                stack.append(cf)
+            }
+        }
+        return hitCap
     }
 
     func rebuildMacFoldersCacheInBackground() {
@@ -1412,340 +2089,6 @@ final class GoogleDriveIndexService: ObservableObject {
             childDirs.sort()
             for sub in childDirs.reversed() {
                 stack.append((sub, depth + 1))
-            }
-        }
-    }
-
-    func rebuildFolderCacheInBackground() {
-        guard !isRebuildingFolders else { return }
-        refreshAccountPaths()
-        let mounts = activeAccounts.compactMap { $0.myDrivePath }
-        guard !mounts.isEmpty else { return }
-
-        isRebuildingFolders = true
-        rebuildProgressText = L("Đang quét My Drive...", "Scanning My Drive...")
-        let targetCachePath = folderCachePath
-        let primaryRoot = myDrivePath
-
-        Task.detached(priority: .utility) {
-            let fm = FileManager.default
-            var entries: [DriveFolderEntry] = []
-            entries.reserveCapacity(60_000)
-            var count = 0
-
-            for rootPath in mounts {
-                var stack: [(dir: String, depth: Int)] = [(rootPath, 0)]
-                let rootPrefixCount = rootPath.count + 1
-
-                while let (currentDir, depth) = stack.popLast() {
-                    if depth > 10 { continue }
-                    guard let names = try? fm.contentsOfDirectory(atPath: currentDir) else { continue }
-
-                    var subdirs: [String] = []
-                    for name in names {
-                        if Self.shouldSkip(name) { continue }
-                        let fullPath = "\(currentDir)/\(name)"
-                        var isDir: ObjCBool = false
-                        guard fm.fileExists(atPath: fullPath, isDirectory: &isDir), isDir.boolValue else { continue }
-
-                        let rel = fullPath.hasPrefix(rootPath + "/")
-                            ? String(fullPath.dropFirst(rootPrefixCount))
-                            : name
-
-                        let rawSegs = rel.split(separator: "/").map(String.init)
-                        var cleanSegs: [String] = []
-                        var acrSegs: [String] = []
-                        cleanSegs.reserveCapacity(rawSegs.count)
-                        acrSegs.reserveCapacity(rawSegs.count)
-
-                        for s in rawSegs {
-                            let (c, a) = Self.extractSignatures(s)
-                            cleanSegs.append(c)
-                            acrSegs.append(a)
-                        }
-
-                        entries.append(DriveFolderEntry(path: fullPath, cleanSegs: cleanSegs, acrSegs: acrSegs))
-                        count += 1
-
-                        if count % 2500 == 0 {
-                            let cSnap = count
-                            await MainActor.run {
-                                GoogleDriveIndexService.shared.rebuildProgressText = L("Đang quét: \(cSnap.formatted()) thư mục...", "Scanning: \(cSnap.formatted()) folders...")
-                            }
-                        }
-
-                        if depth < 10 {
-                            subdirs.append(fullPath)
-                        }
-                    }
-
-                    subdirs.sort()
-                    for sd in subdirs.reversed() {
-                        stack.append((sd, depth + 1))
-                    }
-                }
-            }
-
-            let now = Date().timeIntervalSince1970
-            let payload = FolderCachePayload(timestamp: now, root: primaryRoot, items: entries, folders: nil)
-            Self.writeCodableAtomic(payload, to: targetCachePath)
-
-            let finalEntries = entries
-            let finalFastFolders = FastFolderIndex.build(from: finalEntries)
-            await MainActor.run {
-                let service = GoogleDriveIndexService.shared
-                service.folderEntries = finalEntries
-                service.fastFolderIndex = finalFastFolders
-                service.folderCount = finalEntries.count
-                service.lastCacheUpdate = Date(timeIntervalSince1970: now)
-                service.isRebuildingFolders = false
-                service.rebuildProgressText = nil
-                LauncherViewModel.shared.refreshSearchResults()
-            }
-        }
-    }
-
-    func rebuildSharedCacheInBackground() {
-        guard !isRebuildingShared else { return }
-        let mounts = activeAccounts
-        guard mounts.contains(where: { $0.sharedDrivesPath != nil || $0.shortcutTargetsPath != nil }) else { return }
-
-        isRebuildingShared = true
-        let targetCachePath = sharedCachePath
-        let primaryAcc = accountRoot
-
-        Task.detached(priority: .utility) {
-            let fm = FileManager.default
-            var items: [SharedDriveEntry] = []
-
-            for mount in mounts {
-                if let sdPath = mount.sharedDrivesPath, let drives = try? fm.contentsOfDirectory(atPath: sdPath) {
-                    for d in drives where !d.hasPrefix(".") {
-                        let drivePath = "\(sdPath)/\(d)"
-                        var isDir: ObjCBool = false
-                        guard fm.fileExists(atPath: drivePath, isDirectory: &isDir), isDir.boolValue else { continue }
-                        let (c, a) = Self.extractSignatures(d)
-                        let sharedPrefix = L("Bộ nhớ dùng chung", "Shared Drives")
-                        items.append(SharedDriveEntry(
-                            path: drivePath,
-                            isDir: true,
-                            displaySub: "\(sharedPrefix)/\(d)",
-                            cleanSegs: ["bonhodungchungshareddrives", c],
-                            acrSegs: ["", a]
-                        ))
-                        Self.walkSharedTree(
-                            rootDir: drivePath,
-                            baseStripPath: sdPath,
-                            prefixDisplay: sharedPrefix,
-                            prefixClean: "bonhodungchungshareddrives",
-                            into: &items
-                        )
-                    }
-                }
-
-                if let stPath = mount.shortcutTargetsPath, let targetIDs = try? fm.contentsOfDirectory(atPath: stPath) {
-                    for tid in targetIDs where !tid.hasPrefix(".") {
-                        let idDir = "\(stPath)/\(tid)"
-                        guard let names = try? fm.contentsOfDirectory(atPath: idDir) else { continue }
-                        for name in names where !name.hasPrefix(".") {
-                            let itemPath = "\(idDir)/\(name)"
-                            var isDir: ObjCBool = false
-                            guard fm.fileExists(atPath: itemPath, isDirectory: &isDir) else { continue }
-                            let (c, a) = Self.extractSignatures(name)
-                            let sharedWithMePrefix = L("Được chia sẻ", "Shared With Me")
-                            items.append(SharedDriveEntry(
-                                path: itemPath,
-                                isDir: isDir.boolValue,
-                                displaySub: "\(sharedWithMePrefix)/\(name)",
-                                cleanSegs: ["duocchiase", c],
-                                acrSegs: ["", a]
-                            ))
-                            if isDir.boolValue {
-                                Self.walkSharedTree(
-                                    rootDir: itemPath,
-                                    baseStripPath: idDir,
-                                    prefixDisplay: sharedWithMePrefix,
-                                    prefixClean: "duocchiase",
-                                    into: &items
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            let now = Date().timeIntervalSince1970
-            let payload = SharedCachePayload(timestamp: now, root: primaryAcc, items: items)
-            Self.writeCodableAtomic(payload, to: targetCachePath)
-
-            let finalItems = items
-            let finalFastShared = FastSharedIndex.build(from: finalItems)
-            await MainActor.run {
-                let service = GoogleDriveIndexService.shared
-                service.sharedEntries = finalItems
-                service.fastSharedIndex = finalFastShared
-                service.sharedCount = finalItems.count
-                service.isRebuildingShared = false
-            }
-        }
-    }
-
-    private nonisolated static func walkSharedTree(
-        rootDir: String,
-        baseStripPath: String,
-        prefixDisplay: String,
-        prefixClean: String,
-        into items: inout [SharedDriveEntry]
-    ) {
-        let fm = FileManager.default
-        var stack: [(String, Int)] = [(rootDir, 0)]
-        let baseLen = baseStripPath.count + 1
-
-        while let (cur, depth) = stack.popLast() {
-            if depth > 8 { continue }
-            guard let names = try? fm.contentsOfDirectory(atPath: cur) else { continue }
-            for name in names {
-                if shouldSkip(name) { continue }
-                let full = "\(cur)/\(name)"
-                var isDir: ObjCBool = false
-                guard fm.fileExists(atPath: full, isDirectory: &isDir) else { continue }
-                let rel = full.hasPrefix(baseStripPath + "/") ? String(full.dropFirst(baseLen)) : name
-                let segs = rel.split(separator: "/").map(String.init)
-                let sigs = segs.map { extractSignatures($0) }
-                let cSegs = [prefixClean] + sigs.map(\.clean)
-                let aSegs = [""] + sigs.map(\.acronym)
-                items.append(SharedDriveEntry(
-                    path: full,
-                    isDir: isDir.boolValue,
-                    displaySub: "\(prefixDisplay)/\(rel)",
-                    cleanSegs: cSegs,
-                    acrSegs: aSegs
-                ))
-                if isDir.boolValue && depth < 8 {
-                    stack.append((full, depth + 1))
-                }
-            }
-        }
-    }
-
-    func rebuildFileCacheInBackground() {
-        guard !isRebuildingFiles else { return }
-        isRebuildingFiles = true
-
-        let home = homePath
-        let targetCache = fileCachePath
-        var scanRoots: [(path: String, maxDepth: Int)] = []
-        var seenScanRoots = Set<String>()
-        for acc in activeAccounts {
-            if let md = acc.myDrivePath, seenScanRoots.insert(md).inserted { scanRoots.append((md, 10)) }
-            if let sd = acc.sharedDrivesPath, seenScanRoots.insert(sd).inserted { scanRoots.append((sd, 8)) }
-        }
-        for localSub in ["Desktop", "Downloads", "Documents"] {
-            let p = "\(home)/\(localSub)"
-            if seenScanRoots.insert(p).inserted {
-                scanRoots.append((p, 4))
-            }
-        }
-        for customDir in AppSettings.shared.customMacFolders {
-            let clean = customDir.hasSuffix("/") && customDir.count > 1 ? String(customDir.dropLast()) : customDir
-            if !clean.isEmpty && seenScanRoots.insert(clean).inserted {
-                scanRoots.append((clean, 6))
-            }
-        }
-
-        let rootsSnap = scanRoots
-        Task.detached(priority: .utility) {
-            let skippedDirNames: Set<String> = [
-                "node_modules", ".git", ".svn", ".venv", "venv", "__pycache__",
-                ".build", "build", "deriveddata", "pods", "library"
-            ]
-            var collected: [DriveFileEntry] = []
-            collected.reserveCapacity(60_000)
-            let maxFiles = 200_000
-
-            outerLoop: for root in rootsSnap {
-                var stack: [(dir: String, depth: Int, cleanParent: String)] = [(root.path, 0, "")]
-                let rootPrefixLen = root.path.count + 1
-
-                while let (curDir, depth, parentClean) = stack.popLast() {
-                    if collected.count >= maxFiles { break outerLoop }
-                    guard let dirPtr = Darwin.opendir(curDir) else { continue }
-                    var childDirs: [(String, String)] = []
-
-                    while let ent = Darwin.readdir(dirPtr) {
-                        let nameLen = Int(ent.pointee.d_namlen)
-                        guard nameLen > 0 else { continue }
-                        let dType = ent.pointee.d_type
-
-                        let name: String = withUnsafePointer(to: ent.pointee.d_name) { ptr in
-                            ptr.withMemoryRebound(to: UInt8.self, capacity: nameLen) { utf8Ptr in
-                                String(decoding: UnsafeBufferPointer(start: utf8Ptr, count: nameLen), as: UTF8.self)
-                            }
-                        }
-                        if name.isEmpty || name.hasPrefix(".") || name == "Icon\r" { continue }
-
-                        let fullPath = "\(curDir)/\(name)"
-                        let isDirectory: Bool
-                        if dType == DT_DIR {
-                            isDirectory = true
-                        } else if dType == DT_REG || dType == DT_LNK {
-                            isDirectory = false
-                        } else {
-                            // DT_UNKNOWN: only lstat outside CloudStorage, or infer from extension
-                            if fullPath.contains("/Library/CloudStorage/") {
-                                let extGuess = (name as NSString).pathExtension
-                                isDirectory = extGuess.isEmpty
-                            } else {
-                                var st = Darwin.stat()
-                                isDirectory = (Darwin.lstat(fullPath, &st) == 0) && ((st.st_mode & S_IFMT) == S_IFDIR)
-                            }
-                        }
-
-                        if isDirectory {
-                            let lowerName = name.lowercased()
-                            if skippedDirNames.contains(lowerName) || Self.shouldSkip(name) { continue }
-                            if depth < root.maxDepth {
-                                let relParent = fullPath.hasPrefix(root.path + "/")
-                                    ? String(fullPath.dropFirst(rootPrefixLen))
-                                    : name
-                                childDirs.append((fullPath, Self.cleanString(relParent)))
-                            }
-                        } else {
-                            let ext = (name as NSString).pathExtension.lowercased()
-                            if ext == "tmp" || ext == "part" || ext == "crdownload" || ext == "ds_store" { continue }
-                            let stem = ext.isEmpty ? name : (name as NSString).deletingPathExtension
-                            let (cStem, acr) = Self.extractSignatures(stem)
-                            let cFull = ext.isEmpty ? cStem : "\(cStem)\(ext)"
-                            collected.append(DriveFileEntry(
-                                path: fullPath,
-                                ext: ext,
-                                cleanName: cFull,
-                                acronym: acr,
-                                cleanParent: parentClean
-                            ))
-                            if collected.count >= maxFiles { break }
-                        }
-                    }
-                    Darwin.closedir(dirPtr)
-
-                    for (subPath, subClean) in childDirs.reversed() {
-                        stack.append((subPath, depth + 1, subClean))
-                    }
-                }
-            }
-
-            let now = Date().timeIntervalSince1970
-            let payload = FileCachePayload(timestamp: now, items: collected)
-            Self.writeCodableAtomic(payload, to: targetCache)
-
-            let finalFiles = collected
-            let builtFast = FastFileIndex.build(from: finalFiles)
-            await MainActor.run {
-                let svc = GoogleDriveIndexService.shared
-                svc.fileEntries = finalFiles
-                svc.fastFileIndex = builtFast
-                svc.fileCount = finalFiles.count
-                svc.isRebuildingFiles = false
             }
         }
     }
@@ -2446,14 +2789,48 @@ final class GoogleDriveIndexService: ObservableObject {
         return idx
     }
 
+    /// Bounded top-K buffer helper: keeps only the highest-ranked `maxResults` hits without sorting all 90k items (§4.4).
+    private nonisolated static func insertBoundedTopK<Element>(
+        _ candidate: Element,
+        into topK: inout [Element],
+        limit: Int,
+        isBetter: (Element, Element) -> Bool
+    ) {
+        guard limit > 0 else { return }
+        if topK.count < limit {
+            topK.append(candidate)
+            if topK.count == limit {
+                topK.sort(by: isBetter)
+            }
+            return
+        }
+        guard let worst = topK.last, isBetter(candidate, worst) else { return }
+        // Binary search insertion point in sorted `topK`
+        var low = 0
+        var high = topK.count - 1
+        while low < high {
+            let mid = (low + high) >> 1
+            if isBetter(candidate, topK[mid]) {
+                high = mid
+            } else {
+                low = mid + 1
+            }
+        }
+        topK.removeLast()
+        topK.insert(candidate, at: low)
+    }
+
     nonisolated static func evaluateMyDriveSearchHits(
         tokens: [String],
         fastIndex: FastFolderIndex,
         historySnapshot: [String: HistoryRecord],
         maxResults: Int
     ) -> [(path: String, historyCount: Int)] {
-        let tokenBytes = tokens.map(cleanString).filter { !$0.isEmpty }.map { Array($0.utf8) }
-        guard !tokenBytes.isEmpty else { return [] }
+        let cleanTokens = tokens.map(cleanString).filter { !$0.isEmpty }
+        guard !cleanTokens.isEmpty else { return [] }
+        let tokenBytes = cleanTokens.map { Array($0.utf8) }
+        let queryKey = cleanTokens.joined(separator: " ")
+        let totalRecs = fastIndex.records.count
 
         let numTokens = tokenBytes.count
         let lastTokIdx = numTokens - 1
@@ -2467,14 +2844,35 @@ final class GoogleDriveIndexService: ObservableObject {
             let historyCount: Int
         }
 
-        var hits: [ScoredHit] = []
-        hits.reserveCapacity(128)
+        let isBetter: (ScoredHit, ScoredHit) -> Bool = { a, b in
+            if a.totalScore != b.totalScore { return a.totalScore > b.totalScore }
+            if a.hasHistory != b.hasHistory { return a.hasHistory && !b.hasHistory }
+            if a.negDepth != b.negDepth { return a.negDepth > b.negDepth }
+            return a.negLen > b.negLen
+        }
 
-        for rec in fastIndex.records {
+        let cachedSubIndices: [Int]? = folderRefineLock.withLock { cached in
+            guard let cached,
+                  cached.indexIdentityCount == totalRecs,
+                  queryKey.count > cached.queryKey.count,
+                  queryKey.hasPrefix(cached.queryKey),
+                  cached.candidateIndices.count <= 5_000 else {
+                return nil
+            }
+            return cached.candidateIndices
+        }
+
+        var topHits: [ScoredHit] = []
+        topHits.reserveCapacity(min(maxResults, 64))
+        var matchedIndices: [Int] = []
+        matchedIndices.reserveCapacity(512)
+
+        func evaluateRecord(at recIdx: Int) {
+            let rec = fastIndex.records[recIdx]
             let cleanSegs = rec.cleanBytes
             let acrSegs = rec.acrBytes
             let numSegs = cleanSegs.count
-            if numSegs == 0 { continue }
+            if numSegs == 0 { return }
 
             let leafIdx = numSegs - 1
             var curS = 0
@@ -2523,28 +2921,49 @@ final class GoogleDriveIndexService: ObservableObject {
             }
 
             if matchedAll {
+                if matchedIndices.count <= 5_000 {
+                    matchedIndices.append(recIdx)
+                }
                 if leafMatched { matchScore += 1000 }
                 let hRec = historySnapshot[rec.path]
                 let histBoost = hRec.map { min(150 + $0.count * 15, 300) } ?? 0
-                hits.append(ScoredHit(
+                let hit = ScoredHit(
                     totalScore: matchScore + histBoost,
                     hasHistory: histBoost > 0,
                     negDepth: -numSegs,
                     negLen: -rec.path.utf8.count,
                     path: rec.path,
                     historyCount: hRec?.count ?? 0
-                ))
+                )
+                insertBoundedTopK(hit, into: &topHits, limit: maxResults, isBetter: isBetter)
             }
         }
 
-        hits.sort {
-            if $0.totalScore != $1.totalScore { return $0.totalScore > $1.totalScore }
-            if $0.hasHistory != $1.hasHistory { return $0.hasHistory && !$1.hasHistory }
-            if $0.negDepth != $1.negDepth { return $0.negDepth > $1.negDepth }
-            return $0.negLen > $1.negLen
+        if let sub = cachedSubIndices {
+            for idx in sub where idx < totalRecs {
+                evaluateRecord(at: idx)
+            }
+        } else {
+            for idx in 0..<totalRecs {
+                evaluateRecord(at: idx)
+            }
         }
 
-        return hits.prefix(maxResults).map { ($0.path, $0.historyCount) }
+        if matchedIndices.count <= 5_000 {
+            let captured = matchedIndices
+            folderRefineLock.withLock { state in
+                state = FolderPrefixRefineCache(
+                    queryKey: queryKey,
+                    indexIdentityCount: totalRecs,
+                    candidateIndices: captured
+                )
+            }
+        }
+
+        if topHits.count < maxResults {
+            topHits.sort(by: isBetter)
+        }
+        return topHits.map { ($0.path, $0.historyCount) }
     }
 
     nonisolated static func evaluateSharedSearchHits(
@@ -2553,8 +2972,11 @@ final class GoogleDriveIndexService: ObservableObject {
         historySnapshot: [String: HistoryRecord],
         maxResults: Int
     ) -> [(entry: SharedDriveEntry, historyCount: Int)] {
-        let tokenBytes = tokens.map(cleanString).filter { !$0.isEmpty }.map { Array($0.utf8) }
-        guard !tokenBytes.isEmpty else { return [] }
+        let cleanTokens = tokens.map(cleanString).filter { !$0.isEmpty }
+        guard !cleanTokens.isEmpty else { return [] }
+        let tokenBytes = cleanTokens.map { Array($0.utf8) }
+        let queryKey = cleanTokens.joined(separator: " ")
+        let totalRecs = fastIndex.records.count
 
         let numTokens = tokenBytes.count
         let lastTokIdx = numTokens - 1
@@ -2568,14 +2990,35 @@ final class GoogleDriveIndexService: ObservableObject {
             let historyCount: Int
         }
 
-        var hits: [ScoredShared] = []
-        hits.reserveCapacity(128)
+        let isBetter: (ScoredShared, ScoredShared) -> Bool = { a, b in
+            if a.totalScore != b.totalScore { return a.totalScore > b.totalScore }
+            if a.hasHistory != b.hasHistory { return a.hasHistory && !b.hasHistory }
+            if a.negDepth != b.negDepth { return a.negDepth > b.negDepth }
+            return a.negLen > b.negLen
+        }
 
-        for rec in fastIndex.records {
+        let cachedSubIndices: [Int]? = sharedRefineLock.withLock { cached in
+            guard let cached,
+                  cached.indexIdentityCount == totalRecs,
+                  queryKey.count > cached.queryKey.count,
+                  queryKey.hasPrefix(cached.queryKey),
+                  cached.candidateIndices.count <= 5_000 else {
+                return nil
+            }
+            return cached.candidateIndices
+        }
+
+        var topHits: [ScoredShared] = []
+        topHits.reserveCapacity(min(maxResults, 64))
+        var matchedIndices: [Int] = []
+        matchedIndices.reserveCapacity(512)
+
+        func evaluateRecord(at recIdx: Int) {
+            let rec = fastIndex.records[recIdx]
             let cleanSegs = rec.cleanBytes
             let acrSegs = rec.acrBytes
             let numSegs = cleanSegs.count
-            if numSegs == 0 { continue }
+            if numSegs == 0 { return }
 
             let leafIdx = numSegs - 1
             var curS = 0
@@ -2617,28 +3060,49 @@ final class GoogleDriveIndexService: ObservableObject {
             }
 
             if matchedAll {
+                if matchedIndices.count <= 5_000 {
+                    matchedIndices.append(recIdx)
+                }
                 if leafMatched { matchScore += 1000 }
                 let hRec = historySnapshot[rec.entry.path]
                 let histBoost = hRec.map { min(150 + $0.count * 15, 300) } ?? 0
-                hits.append(ScoredShared(
+                let hit = ScoredShared(
                     totalScore: matchScore + histBoost,
                     hasHistory: histBoost > 0,
                     negDepth: -numSegs,
                     negLen: -rec.entry.path.utf8.count,
                     entry: rec.entry,
                     historyCount: hRec?.count ?? 0
-                ))
+                )
+                insertBoundedTopK(hit, into: &topHits, limit: maxResults, isBetter: isBetter)
             }
         }
 
-        hits.sort {
-            if $0.totalScore != $1.totalScore { return $0.totalScore > $1.totalScore }
-            if $0.hasHistory != $1.hasHistory { return $0.hasHistory && !$1.hasHistory }
-            if $0.negDepth != $1.negDepth { return $0.negDepth > $1.negDepth }
-            return $0.negLen > $1.negLen
+        if let sub = cachedSubIndices {
+            for idx in sub where idx < totalRecs {
+                evaluateRecord(at: idx)
+            }
+        } else {
+            for idx in 0..<totalRecs {
+                evaluateRecord(at: idx)
+            }
         }
 
-        return hits.prefix(maxResults).map { ($0.entry, $0.historyCount) }
+        if matchedIndices.count <= 5_000 {
+            let captured = matchedIndices
+            sharedRefineLock.withLock { state in
+                state = FolderPrefixRefineCache(
+                    queryKey: queryKey,
+                    indexIdentityCount: totalRecs,
+                    candidateIndices: captured
+                )
+            }
+        }
+
+        if topHits.count < maxResults {
+            topHits.sort(by: isBetter)
+        }
+        return topHits.map { ($0.entry, $0.historyCount) }
     }
 
     func defaultInstalledAppResultItems(limit: Int = 80) -> [SearchResultItem] {
@@ -3239,6 +3703,8 @@ final class GoogleDriveIndexService: ObservableObject {
         guard !cleanedTokens.isEmpty else { return [] }
 
         let tokenBytes = cleanedTokens.map { Array($0.utf8) }
+        let queryKey = cleanedTokens.joined(separator: " ")
+        let totalRecs = fastIndex.records.count
 
         struct ScoredFileHit {
             let score: Int
@@ -3248,10 +3714,29 @@ final class GoogleDriveIndexService: ObservableObject {
             let isPinned: Bool
         }
 
-        var hits: [ScoredFileHit] = []
-        hits.reserveCapacity(128)
+        let isBetter: (ScoredFileHit, ScoredFileHit) -> Bool = { a, b in
+            if a.score != b.score { return a.score > b.score }
+            return a.negLen > b.negLen
+        }
 
-        for rec in fastIndex.records {
+        let cachedSubIndices: [Int]? = fileRefineLock.withLock { cached in
+            guard let cached,
+                  cached.indexIdentityCount == totalRecs,
+                  queryKey.count > cached.queryKey.count,
+                  queryKey.hasPrefix(cached.queryKey),
+                  cached.candidateIndices.count <= 5_000 else {
+                return nil
+            }
+            return cached.candidateIndices
+        }
+
+        var topHits: [ScoredFileHit] = []
+        topHits.reserveCapacity(min(maxResults, 64))
+        var matchedIndices: [Int] = []
+        matchedIndices.reserveCapacity(512)
+
+        func evaluateRecord(at recIdx: Int) {
+            let rec = fastIndex.records[recIdx]
             var totalScore = 0
             var nameMatchCount = 0
             var allMatched = true
@@ -3277,26 +3762,49 @@ final class GoogleDriveIndexService: ObservableObject {
                 }
             }
 
-            guard allMatched && nameMatchCount > 0 else { continue }
+            guard allMatched && nameMatchCount > 0 else { return }
 
+            if matchedIndices.count <= 5_000 {
+                matchedIndices.append(recIdx)
+            }
             let isPin = pinnedSet.contains(rec.entry.path)
             let hCount = historySnapshot[rec.entry.path]?.count ?? 0
             let boost = (isPin ? 900 : 0) + min(320, hCount * 40)
-            hits.append(ScoredFileHit(
+            let hit = ScoredFileHit(
                 score: totalScore + boost,
                 negLen: -rec.entry.cleanName.utf8.count,
                 entry: rec.entry,
                 historyCount: hCount,
                 isPinned: isPin
-            ))
+            )
+            insertBoundedTopK(hit, into: &topHits, limit: maxResults, isBetter: isBetter)
         }
 
-        hits.sort { a, b in
-            if a.score != b.score { return a.score > b.score }
-            return a.negLen > b.negLen
+        if let sub = cachedSubIndices {
+            for idx in sub where idx < totalRecs {
+                evaluateRecord(at: idx)
+            }
+        } else {
+            for idx in 0..<totalRecs {
+                evaluateRecord(at: idx)
+            }
         }
 
-        return hits.prefix(maxResults).map { ($0.entry, $0.historyCount, $0.isPinned) }
+        if matchedIndices.count <= 5_000 {
+            let captured = matchedIndices
+            fileRefineLock.withLock { state in
+                state = FilePrefixRefineCache(
+                    queryKey: queryKey,
+                    indexIdentityCount: totalRecs,
+                    candidateIndices: captured
+                )
+            }
+        }
+
+        if topHits.count < maxResults {
+            topHits.sort(by: isBetter)
+        }
+        return topHits.map { ($0.entry, $0.historyCount, $0.isPinned) }
     }
 
     func buildFileSearchResultItems(
@@ -3661,5 +4169,126 @@ final class GoogleDriveIndexService: ObservableObject {
             ))
         }
         return results
+    }
+
+    // MARK: - CLI Benchmark Entry (--bench-index, §4.2, §4.4, §6)
+
+    static func currentPhysicalMemoryFootprintMB() -> Double {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let kr = withUnsafeMutablePointer(to: &info) { ptr in
+            ptr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { intPtr in
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), intPtr, &count)
+            }
+        }
+        guard kr == KERN_SUCCESS else { return 0.0 }
+        return Double(info.phys_footprint) / (1024.0 * 1024.0)
+    }
+
+    static func runIndexBenchmarkCLI() async {
+        print("=== DriveBar Index Benchmark (--bench-index) ===")
+        let memBefore = currentPhysicalMemoryFootprintMB()
+
+        // 1. Cold cache load timing
+        let loadStart = ProcessInfo.processInfo.systemUptime
+        let service = await MainActor.run { GoogleDriveIndexService.shared }
+        let cacheDir = await MainActor.run { service.cacheDir }
+        let fm = FileManager.default
+
+        let folderPath = "\(cacheDir)/folder_cache.json"
+        let sharedPath = "\(cacheDir)/shared_cache.json"
+        let filePath = "\(cacheDir)/file_cache.json"
+        let macPath = "\(cacheDir)/mac_folders_cache.json"
+
+        let loadedFolders = Self.readFolderCacheDisk(at: folderPath)?.0 ?? []
+        let loadedShared = Self.readSharedCacheDisk(at: sharedPath)?.0 ?? []
+        let loadedFiles = Self.readFileCacheDisk(at: filePath)?.0 ?? []
+        let loadedMac = Self.readMacFoldersCacheDisk(at: macPath)?.items ?? []
+
+        let fastFolder = FastFolderIndex.build(from: loadedFolders)
+        let fastShared = FastSharedIndex.build(from: loadedShared)
+        let fastFile = FastFileIndex.build(from: loadedFiles)
+        let fastMac = FastSharedIndex.build(from: loadedMac)
+        let coldLoadMs = (ProcessInfo.processInfo.systemUptime - loadStart) * 1000.0
+        let memAfterLoad = currentPhysicalMemoryFootprintMB()
+
+        print(String(format: "Cold JSON Cache Load + FastIndex Build : %.1f ms", coldLoadMs))
+        print("  Folders : \(fastFolder.records.count)")
+        print("  Shared  : \(fastShared.records.count)")
+        print("  Files   : \(fastFile.records.count)")
+        print("  Mac     : \(fastMac.records.count)")
+        print(String(format: "  Memory  : %.1f MB (delta +%.1f MB)", memAfterLoad, max(0, memAfterLoad - memBefore)))
+
+        // 2. Single-pass parallel index rebuild timing
+        let (mdRoots, sdRoots, customMac) = await MainActor.run {
+            service.refreshAccountPaths()
+            let md = service.activeAccounts.compactMap(\.myDrivePath)
+            let sd = service.activeAccounts.compactMap(\.sharedDrivesPath)
+            return (md, sd, AppSettings.shared.customMacFolders)
+        }
+        let homePath = fm.homeDirectoryForCurrentUser.path
+
+        let rebuildStart = ProcessInfo.processInfo.systemUptime
+        let (rebuiltFolders, rebuiltFiles) = await performParallelUnifiedScan(
+            myDriveRoots: mdRoots,
+            sharedDriveRoots: sdRoots,
+            homePath: homePath,
+            customMacFolders: customMac,
+            reportProgress: false
+        )
+        let rebuiltFastFolder = FastFolderIndex.build(from: rebuiltFolders)
+        let rebuiltFastFile = FastFileIndex.build(from: rebuiltFiles)
+        let rebuildSec = ProcessInfo.processInfo.systemUptime - rebuildStart
+        let memAfterRebuild = currentPhysicalMemoryFootprintMB()
+
+        print(String(format: "Single-Pass Parallel Rebuild           : %.2f s (%d folders, %d files)", rebuildSec, rebuiltFastFolder.records.count, rebuiltFastFile.records.count))
+        print(String(format: "  Memory after rebuild                 : %.1f MB", memAfterRebuild))
+
+        let activeFastFolder = rebuiltFastFolder.records.isEmpty ? fastFolder : rebuiltFastFolder
+        let activeFastFile = rebuiltFastFile.records.isEmpty ? fastFile : rebuiltFastFile
+
+        // 3. 20 sample queries benchmark
+        let sampleQueries = [
+            "sdh", "baocao", "2026", "nghiencuu", "thongke",
+            "lich", "hop", "tailieu", "duan", "hmu",
+            "spmph", "deoh", "antoan", "taichinh", "kehoach",
+            "daotao", "luong", "hopdong", "bienban", "tonghop"
+        ]
+
+        var queryLatenciesMs: [Double] = []
+        for q in sampleQueries {
+            let tokens = [Self.extractSignatures(q).0]
+            let qStart = ProcessInfo.processInfo.systemUptime
+            let _ = Self.evaluateMyDriveSearchHits(
+                tokens: tokens,
+                fastIndex: activeFastFolder,
+                historySnapshot: [:],
+                maxResults: 45
+            )
+            let _ = Self.evaluateSharedSearchHits(
+                tokens: tokens,
+                fastIndex: fastShared,
+                historySnapshot: [:],
+                maxResults: 45
+            )
+            let _ = Self.evaluateFileSearchHits(
+                tokens: tokens,
+                fastIndex: activeFastFile,
+                historySnapshot: [:],
+                pinnedSet: [],
+                maxResults: 45
+            )
+            let elapsedMs = (ProcessInfo.processInfo.systemUptime - qStart) * 1000.0
+            queryLatenciesMs.append(elapsedMs)
+        }
+
+        let sortedLat = queryLatenciesMs.sorted()
+        let minLat = sortedLat.first ?? 0.0
+        let medianLat = sortedLat[sortedLat.count / 2]
+        let p95Lat = sortedLat[min(sortedLat.count - 1, Int(Double(sortedLat.count) * 0.95))]
+        let maxLat = sortedLat.last ?? 0.0
+
+        print(String(format: "20 Sample Queries (Folder+Shared+File) : min=%.2f ms, median=%.2f ms, p95=%.2f ms, max=%.2f ms", minLat, medianLat, p95Lat, maxLat))
+        print("================================================")
     }
 }
