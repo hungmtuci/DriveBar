@@ -2270,19 +2270,126 @@ def copy_to_macos_clipboard(text: str) -> None:
         pass
 
 
-def get_valid_oauth_token(account_type: str = "personal") -> Optional[str]:
-    oauth_path = get_config_dir() / "gdrive_oauth.json"
-    if not oauth_path.exists():
+KEYCHAIN_SERVICE = "com.hunglx.DriveBar.gdrive"
+LAUNCH_AGENT_LABEL = "com.hunglx.DriveBar.syncd"
+
+
+def _is_test_isolated_config_dir() -> bool:
+    return bool(os.environ.get("DRIVEBAR_SYNC_CONFIG_DIR", "").strip())
+
+
+def _keychain_read_json(account_name: str) -> Optional[Dict[str, Any]]:
+    if _is_test_isolated_config_dir():
         return None
     try:
-        cfg = json.loads(oauth_path.read_text(encoding="utf-8"))
+        raw = subprocess.check_output(
+            ["/usr/bin/security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account_name, "-w"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=3,
+        ).strip()
+        if raw:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
     except Exception:
-        return None
+        pass
+    return None
 
-    acc = cfg.get(account_type) or cfg.get("personal") or {}
-    access_token = acc.get("access_token")
-    refresh_token = acc.get("refresh_token")
-    expires_at_str = acc.get("expires_at")
+
+def _keychain_write_json(account_name: str, payload: Dict[str, Any]) -> bool:
+    if _is_test_isolated_config_dir():
+        return False
+    try:
+        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        proc = subprocess.run(
+            ["/usr/bin/security", "add-generic-password", "-U", "-s", KEYCHAIN_SERVICE, "-a", account_name, "-w", serialized],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return False
+        readback = _keychain_read_json(account_name)
+        return isinstance(readback, dict) and bool(readback)
+    except Exception:
+        return False
+
+
+def migrate_plaintext_oauth_to_keychain_if_needed(oauth_path: Path, cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    One-time automatic migration (§5.3):
+    Moves plaintext `access_token`, `refresh_token`, and `client_secret` from
+    `~/.config/drivebar-sync/gdrive_oauth.json` into macOS Keychain under service
+    `com.hunglx.DriveBar.gdrive` and strips secret fields from the on-disk file
+    after verifying Keychain read-back.
+    """
+    if _is_test_isolated_config_dir():
+        return cfg
+
+    client_id = str(cfg.get("client_id", "") or "")
+    client_secret = str(cfg.get("client_secret", "") or "")
+    migrated_any = False
+
+    if client_secret:
+        client_payload = {"client_id": client_id, "client_secret": client_secret}
+        if _keychain_write_json("__oauth_client__", client_payload):
+            migrated_any = True
+
+    for acc_key in ("personal", "system"):
+        acc_obj = cfg.get(acc_key)
+        if isinstance(acc_obj, dict) and (acc_obj.get("access_token") or acc_obj.get("refresh_token")):
+            kc_payload = {
+                "access_token": acc_obj.get("access_token", ""),
+                "refresh_token": acc_obj.get("refresh_token", ""),
+                "expires_at": acc_obj.get("expires_at", ""),
+                "client_id": client_id,
+                "client_secret": client_secret,
+            }
+            if _keychain_write_json(acc_key, kc_payload):
+                migrated_any = True
+                cfg[acc_key] = {
+                    k: v
+                    for k, v in acc_obj.items()
+                    if k not in ("access_token", "refresh_token", "client_secret")
+                }
+                cfg[acc_key]["storedInKeychain"] = True
+
+    if migrated_any:
+        if "client_secret" in cfg and _keychain_read_json("__oauth_client__"):
+            del cfg["client_secret"]
+        cfg["keychainService"] = KEYCHAIN_SERVICE
+        try:
+            write_json_atomic(oauth_path, cfg, indent=2)
+        except Exception:
+            pass
+    return cfg
+
+
+def get_valid_oauth_token(account_type: str = "personal") -> Optional[str]:
+    oauth_path = get_config_dir() / "gdrive_oauth.json"
+    cfg: Dict[str, Any] = {}
+    if oauth_path.exists():
+        try:
+            loaded = json.loads(oauth_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                cfg = migrate_plaintext_oauth_to_keychain_if_needed(oauth_path, loaded)
+        except Exception:
+            cfg = {}
+
+    kc_acc = _keychain_read_json(account_type) or _keychain_read_json("personal") or {}
+    kc_client = _keychain_read_json("__oauth_client__") or {}
+
+    file_acc = cfg.get(account_type) or cfg.get("personal") or {}
+    if not isinstance(file_acc, dict):
+        file_acc = {}
+
+    access_token = kc_acc.get("access_token") or file_acc.get("access_token")
+    refresh_token = kc_acc.get("refresh_token") or file_acc.get("refresh_token")
+    expires_at_str = kc_acc.get("expires_at") or file_acc.get("expires_at")
+    client_id = kc_acc.get("client_id") or kc_client.get("client_id") or cfg.get("client_id", "")
+    client_secret = kc_acc.get("client_secret") or kc_client.get("client_secret") or cfg.get("client_secret", "")
 
     if access_token and expires_at_str:
         try:
@@ -2294,8 +2401,6 @@ def get_valid_oauth_token(account_type: str = "personal") -> Optional[str]:
     if not refresh_token:
         return access_token
 
-    client_id = cfg.get("client_id", "")
-    client_secret = cfg.get("client_secret", "")
     if not client_id or not client_secret:
         return access_token
 
@@ -2312,10 +2417,28 @@ def get_valid_oauth_token(account_type: str = "personal") -> Optional[str]:
             new_tok = body.get("access_token")
             exp_in = int(body.get("expires_in", 3600))
             if new_tok:
-                acc["access_token"] = new_tok
-                acc["expires_at"] = (datetime.datetime.now() + datetime.timedelta(seconds=exp_in - 60)).isoformat()
-                cfg[account_type] = acc
-                write_json_atomic(oauth_path, cfg, indent=2)
+                new_exp = (datetime.datetime.now() + datetime.timedelta(seconds=exp_in - 60)).isoformat()
+                kc_payload = {
+                    "access_token": new_tok,
+                    "refresh_token": refresh_token,
+                    "expires_at": new_exp,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                }
+                stored_kc = _keychain_write_json(account_type, kc_payload)
+                if not stored_kc and oauth_path.exists():
+                    file_acc["access_token"] = new_tok
+                    file_acc["expires_at"] = new_exp
+                    cfg[account_type] = file_acc
+                    write_json_atomic(oauth_path, cfg, indent=2)
+                elif oauth_path.exists():
+                    file_acc["expires_at"] = new_exp
+                    file_acc["storedInKeychain"] = True
+                    file_acc.pop("access_token", None)
+                    file_acc.pop("refresh_token", None)
+                    cfg[account_type] = file_acc
+                    cfg.pop("client_secret", None)
+                    write_json_atomic(oauth_path, cfg, indent=2)
                 return new_tok
     except Exception:
         pass
@@ -2446,7 +2569,7 @@ def manage_drive_share_permission(input_path: str, action: str = "status") -> Di
         }
 
 
-def ensure_daemon_started() -> None:
+def ensure_daemon_started(allow_standalone_spawn: bool = False) -> None:
     pid_file = daemon_pid_path()
     if pid_file.exists():
         try:
@@ -2455,22 +2578,51 @@ def ensure_daemon_started() -> None:
             return
         except Exception:
             pass
-    try:
-        subprocess.Popen(
-            [sys.executable, os.path.abspath(__file__), "--daemon"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-    except Exception:
-        pass
+
+    # Prefer launchd LaunchAgent (`com.hunglx.DriveBar.syncd`, §5.1)
+    plist_path = Path.home() / "Library" / "LaunchAgents" / f"{LAUNCH_AGENT_LABEL}.plist"
+    if plist_path.exists():
+        uid = os.getuid()
+        domain_target = f"gui/{uid}"
+        service_target = f"{domain_target}/{LAUNCH_AGENT_LABEL}"
+        try:
+            r = subprocess.run(
+                ["/bin/launchctl", "kickstart", service_target],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=3,
+                check=False,
+            )
+            if r.returncode != 0:
+                subprocess.run(
+                    ["/bin/launchctl", "bootstrap", domain_target, str(plist_path)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=3,
+                    check=False,
+                )
+            return
+        except Exception:
+            pass
+
+    if allow_standalone_spawn:
+        try:
+            subprocess.Popen(
+                [sys.executable, os.path.abspath(__file__), "--daemon"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception:
+            pass
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="DriveBar Local Folder <-> Google Drive Sync Engine")
     parser.add_argument("--version", action="store_true", help="Print helper version and exit")
-    parser.add_argument("--daemon", action="store_true", help="Run continuous event-driven sync daemon")
+    parser.add_argument("--daemon", action="store_true", help="Run continuous event-driven sync daemon (managed by launchd)")
+    parser.add_argument("--standalone-daemon", action="store_true", help="Spawn or run standalone background daemon for manual CLI use")
     parser.add_argument("--process-commands", action="store_true", help="Process all queued commands in commands/ once")
     parser.add_argument("--sync-all", action="store_true", help="Sync all enabled pairs in sync_pairs.json")
     parser.add_argument("--quick-action", nargs="+", help="Finder Quick Action entry point for selected folders")
@@ -2493,6 +2645,10 @@ def main() -> None:
 
     if args.daemon:
         run_daemon()
+        return
+
+    if args.standalone_daemon:
+        ensure_daemon_started(allow_standalone_spawn=True)
         return
 
     if args.process_commands:

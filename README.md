@@ -13,8 +13,13 @@
 
 ---
 
-## ✨ Điểm mới trong v1.8.0
+## ✨ Điểm mới trong v1.8.0–v2.0.0
 
+- **Kiến trúc Đồng bộ An toàn Dữ liệu 3 chiều & Chỉ mục Nhị phân `mmap` (`v2.0.0`):**
+  - **Bảo vệ chống xóa hàng loạt & Kiểm tra tình trạng Mount (`Mount Health & Mass-Deletion Guard`)**: Tự động chặn xóa khi ổ Google Drive chưa mount hoặc khi số tệp dự kiến xóa vượt ngưỡng an toàn (`>= 5` tệp & `> 20%` hoặc `>= 25` tệp), yêu cầu xác nhận trực tiếp trên giao diện Cài đặt.
+  - **Phát hiện xung đột 3 chiều (`3-Way Conflict Detection`)**: Đối chiếu trạng thái `Local` – `Drive` – `Baseline` (`~/.config/drivebar-sync/state/<pairId>.json`), tự động giữ bản mới hơn và lưu bản xung đột thành `<tên> (Conflict <máy> <YYYY-MM-DD HHMMSS>).<đuôi>` trên cả 2 phía, tuyệt đối không ghi đè mất dữ liệu.
+  - **Tiến trình `launchd` (`com.hunglx.DriveBar.syncd`) & Sự kiện `kqueue`**: Thay thế vòng lặp quét `3s` bằng cơ chế lắng nghe sự kiện `kqueue`/`FSEvents` (`~0% CPU` khi rỗi), lưu khóa OAuth an toàn trong **macOS Keychain** (`com.hunglx.DriveBar.gdrive`).
+  - **Bộ nhớ đệm chỉ mục nhị phân `drivebar_index_v1.bin` (`DBIX v1` memory-mapped)**: Nạp 340.000+ thư mục & tệp tin tức thời khi khởi động (`< 5 ms`), giảm >90% RAM và tìm kiếm trực tiếp trên con trỏ byte không cấp phát bộ nhớ phụ. Xem chi tiết tại [`docs/SYNC_ARCHITECTURE.md`](docs/SYNC_ARCHITECTURE.md).
 - **Đồng bộ 2 chiều Thư mục Ổ cứng Mac ↔ Google Drive từ Menu Chuột phải Finder (`Quick Actions` & `Services`):**
   - Giải quyết triệt để hạn chế của Google Drive for Desktop trên macOS (vốn từ chối thêm các thư mục con nằm trong `~/Documents` khi `~/Documents` đang bật iCloud Drive).
   - Bấm chuột phải vào bất kỳ thư mục sản phẩm nào trên ổ cứng Mac (ví dụ `~/Documents/antigravity/TuVanDichVu/Ho_so_San_pham_Nghiem_thu_CNYTCC_YTeSo`) → chọn **Quick Actions (Tác vụ nhanh)** hoặc **Services (Dịch vụ)**:

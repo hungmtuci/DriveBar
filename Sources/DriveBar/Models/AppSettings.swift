@@ -51,6 +51,7 @@ final class AppSettings: ObservableObject {
         static let disabledSystemCommandIDs = "drivebar.disabledSystemCommandIDs"
         static let confirmSystemCommandIDs = "drivebar.confirmSystemCommandIDs"
         static let appLanguage = "drivebar.appLanguage"
+        static let keepAlfredCacheCompatible = "drivebar.keepAlfredCacheCompatible"
     }
 
     @Published var appLanguage: AppLanguagePreference {
@@ -306,6 +307,15 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    @Published var keepAlfredCacheCompatible: Bool {
+        didSet {
+            defaults.set(keepAlfredCacheCompatible, forKey: Keys.keepAlfredCacheCompatible)
+            if keepAlfredCacheCompatible {
+                GoogleDriveIndexService.shared.scheduleAlfredCompatibilityJSONPersist()
+            }
+        }
+    }
+
     @Published var selectedDriveAccountFilter: String {
         didSet {
             defaults.set(selectedDriveAccountFilter, forKey: Keys.selectedDriveAccountFilter)
@@ -436,6 +446,7 @@ final class AppSettings: ObservableObject {
         self.enableClipboardHistory = defaults.object(forKey: Keys.enableClipboardHistory) as? Bool ?? true
         self.enableActionLatching = defaults.object(forKey: Keys.enableActionLatching) as? Bool ?? true
         self.enableRealtimeFSEvents = defaults.object(forKey: Keys.enableRealtimeFSEvents) as? Bool ?? true
+        self.keepAlfredCacheCompatible = defaults.object(forKey: Keys.keepAlfredCacheCompatible) as? Bool ?? true
         self.selectedDriveAccountFilter = defaults.string(forKey: Keys.selectedDriveAccountFilter) ?? "ALL"
 
         let syncRootExists = FileManager.default.fileExists(atPath: "\(home)/Sync")

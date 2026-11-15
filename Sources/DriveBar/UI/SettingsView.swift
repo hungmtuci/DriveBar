@@ -1368,6 +1368,14 @@ private struct GoogleDriveSettingsPane: View {
                             .disabled(driveService.isRebuildingFolders)
                         }
                     }
+
+                    MacSettingsRowDivider()
+
+                    MacSettingsToggleRow(
+                        title: L("Giữ tương thích cache Alfred (folder_cache.json)", "Keep Alfred cache compatible (folder_cache.json)"),
+                        subtitle: L("Xuất song song folder_cache.json và shared_cache.json ở nền cùng với bộ nhớ đệm nhị phân drivebar_index_v1.bin", "Export folder_cache.json and shared_cache.json in the background alongside the memory-mapped drivebar_index_v1.bin binary index"),
+                        isOn: $settings.keepAlfredCacheCompatible
+                    )
                 }
 
                 // 2. Syncthing P2P Sync & Smart Action Latching
@@ -1526,6 +1534,40 @@ private struct GoogleDriveSettingsPane: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+            }
+
+            MacSettingsRowDivider()
+
+            MacSettingsRow(
+                symbol: "bolt.horizontal.circle",
+                title: L("Tiến trình Đồng bộ Nền (launchd Sync Agent)", "Background Sync Agent (launchd)"),
+                subtitle: {
+                    let pidText = localSyncService.syncAgentPID.map { "PID \($0)" } ?? L("Chưa chạy", "Stopped")
+                    let verText = "v\(localSyncService.syncAgentVersion)"
+                    if let err = localSyncService.syncAgentLastError, !err.isEmpty {
+                        return "\(pidText) • \(verText) • \(err)"
+                    }
+                    return L(
+                        "com.hunglx.DriveBar.syncd • \(pidText) • \(verText) • Cơ chế sự kiện kqueue/FSEvents (0% CPU khi rỗi)",
+                        "com.hunglx.DriveBar.syncd • \(pidText) • \(verText) • Event-driven kqueue/FSEvents (0% idle CPU)"
+                    )
+                }(),
+                statusDotColor: localSyncService.syncAgentRunning ? .green : .orange,
+                statusText: localSyncService.syncAgentRunning ? L("Đang chạy", "Running") : L("Đang dừng", "Stopped")
+            ) {
+                HStack(spacing: 6) {
+                    Button(L("Khởi động lại", "Restart")) {
+                        localSyncService.restartSyncAgent(showToast: true)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button(L("Sửa dịch vụ đồng bộ", "Repair sync service")) {
+                        localSyncService.repairSyncService(showToast: true)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
             }
 
             MacSettingsRowDivider()

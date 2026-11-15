@@ -311,6 +311,10 @@ final class LocalFolderDriveSyncService: ObservableObject {
     }
     @Published private(set) var activeSyncingIDs: Set<UUID> = []
     @Published private(set) var isGlobalSyncing: Bool = false
+    @Published private(set) var syncAgentRunning: Bool = false
+    @Published private(set) var syncAgentPID: Int32? = nil
+    @Published private(set) var syncAgentVersion: String = "2.0.0"
+    @Published private(set) var syncAgentLastError: String? = nil
     @Published var defaultDriveSyncSubfolder: String {
         didSet {
             UserDefaults.standard.set(defaultDriveSyncSubfolder, forKey: Self.defaultSubfolderKey)
@@ -321,6 +325,7 @@ final class LocalFolderDriveSyncService: ObservableObject {
     nonisolated private static let defaultSubfolderKey = "drivebar.defaultDriveSyncSubfolder.v1"
     nonisolated private static let finderSyncTagVI = "Đồng bộ GDrive"
     nonisolated private static let expectedHelperVersion = "2.0.0"
+    nonisolated private static let launchAgentLabel = "com.hunglx.DriveBar.syncd"
 
     private struct MappedPairEntry: Sendable {
         let localStd: String
@@ -374,27 +379,249 @@ final class LocalFolderDriveSyncService: ObservableObject {
     }
 
     func start() {
-        ensureInstalledHelperUpToDate()
+        ensureInstalledHelperAndLaunchAgentUpToDate()
         installFinderQuickActionsIfNeeded(force: true)
         reloadPairsFromSharedFileIfAvailable()
         restartFSEventsMonitor()
         startPeriodicTimer()
-        // Trigger initial background sync shortly after launch
+        // Refresh agent status and trigger initial background sync shortly after launch
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
             guard let self else { return }
             self.reloadPairsFromSharedFileIfAvailable()
+            self.refreshSyncAgentStatus()
             if !Self.isSyncDaemonRunning() {
                 self.syncAllEnabledPairs(showToast: false)
             }
         }
     }
 
-    // MARK: - Helper Version Verification & Atomic Upgrade (§3.4)
+    // MARK: - Helper Version Verification, Atomic Upgrade & LaunchAgent Management (§3.4, §5.1)
 
-    func ensureInstalledHelperUpToDate() {
-        syncQueue.async {
-            Self.syncBundledHelperScriptIfNeeded()
+    func ensureInstalledHelperAndLaunchAgentUpToDate() {
+        syncQueue.async { [weak self] in
+            let upgraded = Self.syncBundledHelperScriptIfNeeded()
+            Self.ensureLaunchAgentInstalledAndRunning(forceKickstart: upgraded)
+            let status = Self.querySyncAgentStatusSnapshot()
+            Task { @MainActor [weak self] in
+                self?.applySyncAgentStatusSnapshot(status)
+            }
         }
+    }
+
+    func refreshSyncAgentStatus() {
+        syncQueue.async { [weak self] in
+            let status = Self.querySyncAgentStatusSnapshot()
+            Task { @MainActor [weak self] in
+                self?.applySyncAgentStatusSnapshot(status)
+            }
+        }
+    }
+
+    func restartSyncAgent(showToast: Bool = true) {
+        syncQueue.async { [weak self] in
+            _ = Self.syncBundledHelperScriptIfNeeded()
+            Self.ensureLaunchAgentInstalledAndRunning(forceKickstart: true)
+            let status = Self.querySyncAgentStatusSnapshot()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.applySyncAgentStatusSnapshot(status)
+                if showToast {
+                    if status.running {
+                        FloatingToastController.shared.showSuccess(
+                            title: L("Đã khởi động lại dịch vụ đồng bộ (launchd)", "Restarted sync agent (launchd)"),
+                            subtitle: "PID \(status.pid ?? 0) • v\(status.version)",
+                            symbol: "arrow.triangle.2.circlepath.circle.fill"
+                        )
+                    } else {
+                        FloatingToastController.shared.showError(
+                            title: L("Không thể khởi động lại dịch vụ đồng bộ", "Could not restart sync agent"),
+                            subtitle: status.lastError ?? Self.launchAgentLabel
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    func repairSyncService(showToast: Bool = true) {
+        installFinderQuickActionsIfNeeded(force: true)
+        syncQueue.async { [weak self] in
+            _ = Self.syncBundledHelperScriptIfNeeded(forceCopy: true)
+            Self.ensureLaunchAgentInstalledAndRunning(forceKickstart: true)
+            let status = Self.querySyncAgentStatusSnapshot()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.applySyncAgentStatusSnapshot(status)
+                self.reloadPairsFromSharedFileIfAvailable()
+                self.restartFSEventsMonitor()
+                if showToast {
+                    FloatingToastController.shared.showSuccess(
+                        title: L("Đã sửa & làm mới dịch vụ đồng bộ DriveBar", "Repaired DriveBar sync service"),
+                        subtitle: L(
+                            "LaunchAgent (PID \(status.pid ?? 0), v\(status.version)) & Quick Actions Finder đã sẵn sàng",
+                            "LaunchAgent (PID \(status.pid ?? 0), v\(status.version)) & Finder Quick Actions ready"
+                        ),
+                        symbol: "wrench.and.screwdriver.fill"
+                    )
+                }
+            }
+        }
+    }
+
+    private struct SyncAgentStatusSnapshot: Sendable {
+        let running: Bool
+        let pid: Int32?
+        let version: String
+        let lastError: String?
+    }
+
+    private func applySyncAgentStatusSnapshot(_ snap: SyncAgentStatusSnapshot) {
+        self.syncAgentRunning = snap.running
+        self.syncAgentPID = snap.pid
+        self.syncAgentVersion = snap.version
+        self.syncAgentLastError = snap.lastError
+    }
+
+    nonisolated private static func launchAgentPlistPath() -> String {
+        (NSHomeDirectory() as NSString).appendingPathComponent("Library/LaunchAgents/\(launchAgentLabel).plist")
+    }
+
+    nonisolated private static func syncAgentLogFilePath() -> String {
+        (NSHomeDirectory() as NSString).appendingPathComponent("Library/Logs/DriveBar/syncd.log")
+    }
+
+    nonisolated private static func buildLaunchAgentPlistXML(pythonPath: String, scriptPath: String, logPath: String) -> String {
+        """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>Label</key>
+            <string>\(launchAgentLabel)</string>
+            <key>ProgramArguments</key>
+            <array>
+                <string>\(pythonPath)</string>
+                <string>\(scriptPath)</string>
+                <string>--daemon</string>
+            </array>
+            <key>RunAtLoad</key>
+            <true/>
+            <key>KeepAlive</key>
+            <true/>
+            <key>ProcessType</key>
+            <string>Background</string>
+            <key>LowPriorityIO</key>
+            <true/>
+            <key>StandardOutPath</key>
+            <string>\(logPath)</string>
+            <key>StandardErrorPath</key>
+            <string>\(logPath)</string>
+        </dict>
+        </plist>
+        """
+    }
+
+    nonisolated private static func runLaunchctl(_ args: [String]) -> (exitCode: Int32, output: String) {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        proc.arguments = args
+        let out = Pipe()
+        proc.standardOutput = out
+        proc.standardError = out
+        do {
+            try proc.run()
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            proc.waitUntilExit()
+            let str = String(data: data, encoding: .utf8) ?? ""
+            return (proc.terminationStatus, str)
+        } catch {
+            return (-1, error.localizedDescription)
+        }
+    }
+
+    nonisolated private static func ensureLaunchAgentInstalledAndRunning(forceKickstart: Bool) {
+        let fm = FileManager.default
+        let scriptPath = helperScriptPath()
+        guard fm.fileExists(atPath: scriptPath) else { return }
+
+        let logPath = syncAgentLogFilePath()
+        let logDir = (logPath as NSString).deletingLastPathComponent
+        try? fm.createDirectory(atPath: logDir, withIntermediateDirectories: true)
+
+        let plistPath = launchAgentPlistPath()
+        let agentsDir = (plistPath as NSString).deletingLastPathComponent
+        try? fm.createDirectory(atPath: agentsDir, withIntermediateDirectories: true)
+
+        let expectedXML = buildLaunchAgentPlistXML(
+            pythonPath: pythonExecutablePath(),
+            scriptPath: scriptPath,
+            logPath: logPath
+        )
+        let currentXML = try? String(contentsOfFile: plistPath, encoding: .utf8)
+        let plistChanged = (currentXML != expectedXML)
+        if plistChanged {
+            try? expectedXML.write(toFile: plistPath, atomically: true, encoding: .utf8)
+        }
+
+        let uid = Darwin.getuid()
+        let domainTarget = "gui/\(uid)"
+        let serviceTarget = "\(domainTarget)/\(launchAgentLabel)"
+
+        let printRes = runLaunchctl(["print", serviceTarget])
+        let isLoadedInLaunchd = (printRes.exitCode == 0)
+
+        if !isLoadedInLaunchd {
+            // Stop any legacy unmanaged daemon holding daemon.pid before launchd takes ownership
+            let pidPath = (sharedConfigDirPath() as NSString).appendingPathComponent("daemon.pid")
+            if let pidStr = try? String(contentsOfFile: pidPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+               let legacyPid = Int32(pidStr), legacyPid > 0 {
+                _ = Darwin.kill(legacyPid, SIGTERM)
+                usleep(150_000)
+            }
+            _ = runLaunchctl(["bootstrap", domainTarget, plistPath])
+        } else if plistChanged || forceKickstart {
+            if plistChanged {
+                _ = runLaunchctl(["bootout", domainTarget, plistPath])
+                usleep(100_000)
+                _ = runLaunchctl(["bootstrap", domainTarget, plistPath])
+            } else {
+                _ = runLaunchctl(["kickstart", "-k", serviceTarget])
+            }
+        }
+    }
+
+    nonisolated private static func querySyncAgentStatusSnapshot() -> SyncAgentStatusSnapshot {
+        let version = extractHelperVersion(atPath: helperScriptPath()) ?? expectedHelperVersion
+        let pidPath = (sharedConfigDirPath() as NSString).appendingPathComponent("daemon.pid")
+        var daemonPid: Int32? = nil
+        if let pidStr = try? String(contentsOfFile: pidPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+           let parsed = Int32(pidStr), parsed > 0, Darwin.kill(parsed, 0) == 0 {
+            daemonPid = parsed
+        }
+
+        if daemonPid == nil {
+            let uid = Darwin.getuid()
+            let res = runLaunchctl(["print", "gui/\(uid)/\(launchAgentLabel)"])
+            if res.exitCode == 0 {
+                for line in res.output.components(separatedBy: .newlines) {
+                    let trimmed = line.trimmingCharacters(in: .whitespaces)
+                    if trimmed.hasPrefix("pid = ") {
+                        let numStr = String(trimmed.dropFirst("pid = ".count)).trimmingCharacters(in: .whitespaces)
+                        if let p = Int32(numStr), p > 0 {
+                            daemonPid = p
+                            break
+                        }
+                    }
+                }
+            }
+        }
+
+        return SyncAgentStatusSnapshot(
+            running: daemonPid != nil,
+            pid: daemonPid,
+            version: version,
+            lastError: nil
+        )
     }
 
     nonisolated private static func bundledHelperCandidatePaths() -> [String] {
@@ -422,19 +649,20 @@ final class LocalFolderDriveSyncService: ObservableObject {
         return nil
     }
 
-    nonisolated private static func syncBundledHelperScriptIfNeeded() {
+    @discardableResult
+    nonisolated private static func syncBundledHelperScriptIfNeeded(forceCopy: Bool = false) -> Bool {
         let fm = FileManager.default
         let dstPath = helperScriptPath()
         let cfgDir = sharedConfigDirPath()
         try? fm.createDirectory(atPath: cfgDir, withIntermediateDirectories: true)
 
         guard let srcPath = bundledHelperCandidatePaths().first(where: { fm.fileExists(atPath: $0) }) else {
-            return
+            return false
         }
         let srcVersion = extractHelperVersion(atPath: srcPath) ?? expectedHelperVersion
         let dstVersion = extractHelperVersion(atPath: dstPath)
 
-        if !fm.fileExists(atPath: dstPath) || dstVersion != srcVersion {
+        if forceCopy || !fm.fileExists(atPath: dstPath) || dstVersion != srcVersion {
             let tmpPath = dstPath + ".tmp.\(ProcessInfo.processInfo.processIdentifier)"
             try? fm.removeItem(atPath: tmpPath)
             do {
@@ -446,10 +674,13 @@ final class LocalFolderDriveSyncService: ObservableObject {
                     try fm.moveItem(atPath: tmpPath, toPath: dstPath)
                 }
                 try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dstPath)
+                return true
             } catch {
                 try? fm.removeItem(atPath: tmpPath)
+                return false
             }
         }
+        return false
     }
 
     // MARK: - Persistence & Single-Writer Command Channel (§3.3)
@@ -1480,292 +1711,24 @@ final class LocalFolderDriveSyncService: ObservableObject {
                     }
                 }
             } catch {
-                // Fall through to native Swift fallback if subprocess fails to launch
+                updated.lastError = error.localizedDescription
+                updated.status = "error"
             }
-        }
-
-        // 3. Hardened Native Swift Fallback (with Mount Health & Mass-Deletion Guard §3.1)
-        do {
-            let hadPriorSync = pair.lastSyncedAt != nil || pair.lastSyncFileCount > 0
-            if hadPriorSync {
-                if !fm.fileExists(atPath: pair.driveTargetPath) {
-                    throw NSError(
-                        domain: "DriveBarSync",
-                        code: 4001,
-                        userInfo: [NSLocalizedDescriptionKey: "Drive target folder is missing or unmounted (aborted to prevent data loss)"]
-                    )
-                }
-                if !fm.fileExists(atPath: pair.localPath) && !isSymbolicLink(atPath: pair.localPath) {
-                    throw NSError(
-                        domain: "DriveBarSync",
-                        code: 4002,
-                        userInfo: [NSLocalizedDescriptionKey: "Local synced folder is missing (aborted to prevent data loss)"]
-                    )
-                }
-            }
-
-            let driveParent = (pair.driveTargetPath as NSString).deletingLastPathComponent
-            if !fm.fileExists(atPath: driveParent) {
-                try fm.createDirectory(atPath: driveParent, withIntermediateDirectories: true)
-            }
-
-            if pair.syncMode == .symlinkToDrive {
-                return try performSymlinkModeSync(pair: pair)
-            }
-
-            if isSymbolicLink(atPath: pair.localPath) {
-                try fm.removeItem(atPath: pair.localPath)
-                if fm.fileExists(atPath: pair.driveTargetPath) {
-                    try fm.copyItem(atPath: pair.driveTargetPath, toPath: pair.localPath)
-                } else {
-                    try fm.createDirectory(atPath: pair.localPath, withIntermediateDirectories: true)
-                }
-            }
-
-            if !fm.fileExists(atPath: pair.localPath) {
-                try fm.createDirectory(atPath: pair.localPath, withIntermediateDirectories: true)
-            }
-            if !fm.fileExists(atPath: pair.driveTargetPath) {
-                try fm.createDirectory(atPath: pair.driveTargetPath, withIntermediateDirectories: true)
-            }
-
-            let localScan = scanDirectoryTree(rootPath: pair.localPath, isCloudStorage: false)
-            let driveScan = scanDirectoryTree(rootPath: pair.driveTargetPath, isCloudStorage: true)
-
-            if hadPriorSync && pair.lastSyncFileCount > 0 && (localScan.files.isEmpty || driveScan.files.isEmpty) {
-                let msg = "One side scanned 0 files while baseline had \(pair.lastSyncFileCount) files (mass-deletion guard)."
-                updated.status = "needs_confirmation"
-                updated.lastError = msg
-                return (updated, SyncExecutionReport(
-                    pairID: pair.id,
-                    copiedToDrive: 0,
-                    copiedToLocal: 0,
-                    trashedCount: 0,
-                    totalFiles: localScan.files.count,
-                    totalBytes: updated.lastSyncTotalBytes,
-                    errorMessage: msg
-                ))
-            }
-
-            var copiedToDrive = 0
-            var copiedToLocal = 0
-
-            for relDir in localScan.directories.union(driveScan.directories).sorted() {
-                let lDir = (pair.localPath as NSString).appendingPathComponent(relDir)
-                let dDir = (pair.driveTargetPath as NSString).appendingPathComponent(relDir)
-                if localScan.directories.contains(relDir) && !driveScan.directories.contains(relDir) {
-                    try? fm.createDirectory(atPath: dDir, withIntermediateDirectories: true)
-                } else if driveScan.directories.contains(relDir) && !localScan.directories.contains(relDir) {
-                    try? fm.createDirectory(atPath: lDir, withIntermediateDirectories: true)
-                }
-            }
-
-            let allRelFiles = Set(localScan.files.keys).union(driveScan.files.keys)
-            for relFile in allRelFiles.sorted() {
-                let lPath = (pair.localPath as NSString).appendingPathComponent(relFile)
-                let dPath = (pair.driveTargetPath as NSString).appendingPathComponent(relFile)
-                let lMeta = localScan.files[relFile]
-                let dMeta = driveScan.files[relFile]
-
-                switch (lMeta, dMeta) {
-                case let (.some(l), .some(d)):
-                    let timeDiff = l.mtime.timeIntervalSince(d.mtime)
-                    if abs(timeDiff) <= 2.0 && l.size == d.size {
-                        break
-                    } else if timeDiff > 2.0 {
-                        if copyFileAtomically(from: lPath, to: dPath, mtime: l.mtime) { copiedToDrive += 1 }
-                    } else if !d.isDataless && !d.isCloudStub {
-                        if copyFileAtomically(from: dPath, to: lPath, mtime: d.mtime) { copiedToLocal += 1 }
-                    }
-                case let (.some(l), .none):
-                    if copyFileAtomically(from: lPath, to: dPath, mtime: l.mtime) { copiedToDrive += 1 }
-                case let (.none, .some(d)):
-                    if !d.isDataless && !d.isCloudStub {
-                        if copyFileAtomically(from: dPath, to: lPath, mtime: d.mtime) { copiedToLocal += 1 }
-                    }
-                case (.none, .none):
-                    break
-                }
-            }
-
-            let totalFiles = allRelFiles.count
-            let totalBytes = localScan.files.values.reduce(Int64(0)) { $0 + $1.size }
-            updated.lastSyncedAt = Date()
-            updated.lastSyncFileCount = totalFiles
-            updated.lastSyncTotalBytes = totalBytes
-            updated.lastError = nil
-            updated.status = "ok"
-
-            let report = SyncExecutionReport(
-                pairID: pair.id,
-                copiedToDrive: copiedToDrive,
-                copiedToLocal: copiedToLocal,
-                trashedCount: 0,
-                totalFiles: totalFiles,
-                totalBytes: totalBytes,
-                errorMessage: nil
-            )
-            return (updated, report)
-        } catch {
-            updated.lastError = error.localizedDescription
-            updated.status = "error"
-            let report = SyncExecutionReport(
-                pairID: pair.id,
-                copiedToDrive: 0,
-                copiedToLocal: 0,
-                trashedCount: 0,
-                totalFiles: updated.lastSyncFileCount,
-                totalBytes: updated.lastSyncTotalBytes,
-                errorMessage: error.localizedDescription
-            )
-            return (updated, report)
-        }
-    }
-
-    nonisolated private static func performSymlinkModeSync(
-        pair: SyncedFolderPair
-    ) throws -> (SyncedFolderPair, SyncExecutionReport) {
-        var updated = pair
-        let fm = FileManager.default
-
-        if !fm.fileExists(atPath: pair.driveTargetPath) {
-            try fm.createDirectory(atPath: pair.driveTargetPath, withIntermediateDirectories: true)
-        }
-
-        if !isSymbolicLink(atPath: pair.localPath) {
-            let localScan = scanDirectoryTree(rootPath: pair.localPath, isCloudStorage: false)
-            for relDir in localScan.directories.sorted() {
-                let dDir = (pair.driveTargetPath as NSString).appendingPathComponent(relDir)
-                try? fm.createDirectory(atPath: dDir, withIntermediateDirectories: true)
-            }
-            for (relFile, meta) in localScan.files {
-                let lPath = (pair.localPath as NSString).appendingPathComponent(relFile)
-                let dPath = (pair.driveTargetPath as NSString).appendingPathComponent(relFile)
-                _ = copyFileAtomically(from: lPath, to: dPath, mtime: meta.mtime)
-            }
-            try fm.trashItem(at: URL(fileURLWithPath: pair.localPath), resultingItemURL: nil)
-            try fm.createSymbolicLink(atPath: pair.localPath, withDestinationPath: pair.driveTargetPath)
         } else {
-            let dest = (try? fm.destinationOfSymbolicLink(atPath: pair.localPath)) ?? ""
-            if (dest as NSString).standardizingPath != (pair.driveTargetPath as NSString).standardizingPath {
-                try? fm.removeItem(atPath: pair.localPath)
-                try fm.createSymbolicLink(atPath: pair.localPath, withDestinationPath: pair.driveTargetPath)
-            }
+            updated.lastError = "Missing sync engine helper script at \(script)"
+            updated.status = "error"
         }
 
-        let driveScan = scanDirectoryTree(rootPath: pair.driveTargetPath, isCloudStorage: true)
-        let totalFiles = driveScan.files.count
-        let totalBytes = driveScan.files.values.reduce(Int64(0)) { $0 + $1.size }
-
-        updated.lastSyncedAt = Date()
-        updated.lastSyncFileCount = totalFiles
-        updated.lastSyncTotalBytes = totalBytes
-        updated.lastError = nil
-        updated.status = "ok"
-
-        let report = SyncExecutionReport(
+        let errReport = SyncExecutionReport(
             pairID: pair.id,
-            copiedToDrive: totalFiles,
+            copiedToDrive: 0,
             copiedToLocal: 0,
             trashedCount: 0,
-            totalFiles: totalFiles,
-            totalBytes: totalBytes,
-            errorMessage: nil
+            totalFiles: updated.lastSyncFileCount,
+            totalBytes: updated.lastSyncTotalBytes,
+            errorMessage: updated.lastError ?? "Sync engine command failed"
         )
-        return (updated, report)
-    }
-
-    // MARK: - Directory Scanner & Atomic File Copy
-
-    private struct ScannedFileMeta: Sendable {
-        let mtime: Date
-        let size: Int64
-        let isDataless: Bool
-        let isCloudStub: Bool
-    }
-
-    private struct DirectoryScanResult: Sendable {
-        var directories: Set<String> = []
-        var files: [String: ScannedFileMeta] = [:]
-    }
-
-    nonisolated private static func scanDirectoryTree(rootPath: String, isCloudStorage: Bool) -> DirectoryScanResult {
-        var result = DirectoryScanResult()
-        let fm = FileManager.default
-        let stdRoot = (rootPath as NSString).standardizingPath
-        guard let enumerator = fm.enumerator(atPath: stdRoot) else { return result }
-
-        while let relObj = enumerator.nextObject() as? String {
-            let name = (relObj as NSString).lastPathComponent
-            if name.isEmpty { continue }
-
-            if ignoredDirectoryNames.contains(name) {
-                enumerator.skipDescendants()
-                continue
-            }
-            if ignoredFileNames.contains(name) || name.hasPrefix("~$") || name.hasPrefix(".~") || name.hasPrefix(".tmp") || name.hasPrefix(".drivebar_sync_tmp_") {
-                continue
-            }
-
-            let fullPath = (stdRoot as NSString).appendingPathComponent(relObj)
-            var st = Darwin.stat()
-            guard Darwin.lstat(fullPath, &st) == 0 else { continue }
-
-            let mode = st.st_mode & S_IFMT
-            if mode == S_IFLNK {
-                continue
-            } else if mode == S_IFDIR {
-                result.directories.insert(relObj)
-            } else if mode == S_IFREG {
-                let ext = (name as NSString).pathExtension.lowercased()
-                if cloudStubExtensions.contains(ext) {
-                    continue
-                }
-                let mtime = Date(timeIntervalSince1970: TimeInterval(st.st_mtimespec.tv_sec) + TimeInterval(st.st_mtimespec.tv_nsec) / 1_000_000_000.0)
-                let size = Int64(st.st_size)
-                let isDataless = isCloudStorage && ((st.st_flags & UInt32(SF_DATALESS)) != 0)
-                result.files[relObj] = ScannedFileMeta(
-                    mtime: mtime,
-                    size: size,
-                    isDataless: isDataless,
-                    isCloudStub: false
-                )
-            }
-        }
-        return result
-    }
-
-    nonisolated private static func copyFileAtomically(from srcPath: String, to dstPath: String, mtime: Date) -> Bool {
-        let fm = FileManager.default
-        let dstParent = (dstPath as NSString).deletingLastPathComponent
-        if !fm.fileExists(atPath: dstParent) {
-            try? fm.createDirectory(atPath: dstParent, withIntermediateDirectories: true)
-        }
-
-        let tempPath = dstParent + "/.drivebar_sync_tmp_\(UUID().uuidString)"
-        do {
-            if fm.fileExists(atPath: tempPath) {
-                try? fm.removeItem(atPath: tempPath)
-            }
-            try fm.copyItem(atPath: srcPath, toPath: tempPath)
-            try? fm.setAttributes([.modificationDate: mtime], ofItemAtPath: tempPath)
-
-            if fm.fileExists(atPath: dstPath) {
-                _ = try fm.replaceItemAt(
-                    URL(fileURLWithPath: dstPath),
-                    withItemAt: URL(fileURLWithPath: tempPath),
-                    backupItemName: nil,
-                    options: [.usingNewMetadataOnly]
-                )
-            } else {
-                try fm.moveItem(atPath: tempPath, toPath: dstPath)
-            }
-            try? fm.setAttributes([.modificationDate: mtime], ofItemAtPath: dstPath)
-            return true
-        } catch {
-            try? fm.removeItem(atPath: tempPath)
-            return false
-        }
+        return (updated, errReport)
     }
 
     nonisolated static func isSymbolicLink(atPath path: String) -> Bool {
@@ -1794,6 +1757,7 @@ final class LocalFolderDriveSyncService: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.reloadPairsFromSharedFileIfAvailable()
+                self.refreshSyncAgentStatus()
                 if !Self.isSyncDaemonRunning() {
                     self.syncAllEnabledPairs(showToast: false)
                 }

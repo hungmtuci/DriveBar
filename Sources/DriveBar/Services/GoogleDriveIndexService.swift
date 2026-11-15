@@ -28,103 +28,670 @@ struct InstalledAppEntry: Sendable {
     let isNestedHelper: Bool
 }
 
-struct FastFolderRecord: Sendable {
-    let path: String
-    let cleanBytes: [[UInt8]]
-    let acrBytes: [[UInt8]]
+// MARK: - Compact Packed Binary Index Representation (DBIX v1, §5.2)
+
+enum BinaryIndexCodec {
+    @inline(__always)
+    nonisolated static func writeU16LE(_ ptr: UnsafeMutablePointer<UInt8>, _ offset: Int, _ val: Int) {
+        let u = UInt16(clamping: max(0, val))
+        ptr[offset] = UInt8(truncatingIfNeeded: u)
+        ptr[offset &+ 1] = UInt8(truncatingIfNeeded: u >> 8)
+    }
+
+    @inline(__always)
+    nonisolated static func writeU32LE(_ ptr: UnsafeMutablePointer<UInt8>, _ offset: Int, _ val: Int) {
+        let u = UInt32(clamping: max(0, val))
+        ptr[offset] = UInt8(truncatingIfNeeded: u)
+        ptr[offset &+ 1] = UInt8(truncatingIfNeeded: u >> 8)
+        ptr[offset &+ 2] = UInt8(truncatingIfNeeded: u >> 16)
+        ptr[offset &+ 3] = UInt8(truncatingIfNeeded: u >> 24)
+    }
+
+    @inline(__always)
+    nonisolated static func appendU16LE(_ data: inout Data, _ val: Int) {
+        let u = UInt16(clamping: max(0, val))
+        let b0 = UInt8(truncatingIfNeeded: u)
+        let b1 = UInt8(truncatingIfNeeded: u >> 8)
+        data.append(b0)
+        data.append(b1)
+    }
+
+    @inline(__always)
+    nonisolated static func appendU32LE(_ data: inout Data, _ val: Int) {
+        let u = UInt32(clamping: max(0, val))
+        var le = u.littleEndian
+        withUnsafeBytes(of: &le) { data.append(contentsOf: $0) }
+    }
+
+    @inline(__always)
+    nonisolated static func appendU64LE(_ data: inout Data, _ val: UInt64) {
+        var le = val.littleEndian
+        withUnsafeBytes(of: &le) { data.append(contentsOf: $0) }
+    }
+
+    @inline(__always)
+    nonisolated static func readU16LE(_ base: UnsafePointer<UInt8>, _ offset: Int) -> Int {
+        Int(base[offset]) | (Int(base[offset &+ 1]) << 8)
+    }
+
+    @inline(__always)
+    nonisolated static func readU32LE(_ base: UnsafePointer<UInt8>, _ offset: Int) -> Int {
+        Int(base[offset])
+            | (Int(base[offset &+ 1]) << 8)
+            | (Int(base[offset &+ 2]) << 16)
+            | (Int(base[offset &+ 3]) << 24)
+    }
+
+    @inline(__always)
+    nonisolated static func readU64LE(_ base: UnsafePointer<UInt8>, _ offset: Int) -> UInt64 {
+        var out: UInt64 = 0
+        for i in 0..<8 {
+            out |= UInt64(base[offset &+ i]) << (i &* 8)
+        }
+        return out
+    }
+
+    @inline(__always)
+    nonisolated static func compareSliceToBytes(
+        _ base: UnsafePointer<UInt8>,
+        _ sliceOffset: Int,
+        _ sliceLen: Int,
+        _ target: [UInt8]
+    ) -> Int {
+        let tLen = target.count
+        let minLen = sliceLen < tLen ? sliceLen : tLen
+        var i = 0
+        while i < minLen {
+            let a = Int(base[sliceOffset &+ i])
+            let b = Int(target[i])
+            if a != b { return a &- b }
+            i &+= 1
+        }
+        return sliceLen &- tLen
+    }
+
+    @inline(__always)
+    nonisolated static func sliceHasPrefix(
+        _ base: UnsafePointer<UInt8>,
+        _ sliceOffset: Int,
+        _ sliceLen: Int,
+        _ prefix: [UInt8]
+    ) -> Bool {
+        let pLen = prefix.count
+        if sliceLen < pLen { return false }
+        var i = 0
+        while i < pLen {
+            if base[sliceOffset &+ i] != prefix[i] { return false }
+            i &+= 1
+        }
+        return true
+    }
+
+    @inline(__always)
+    nonisolated static func decodeUTF8(_ base: UnsafePointer<UInt8>, _ offset: Int, _ len: Int) -> String {
+        if len <= 0 { return "" }
+        return String(decoding: UnsafeBufferPointer(start: base.advanced(by: offset), count: len), as: UTF8.self)
+    }
 }
 
 struct FastFolderIndex: Sendable {
-    let records: [FastFolderRecord]
-    let knownPaths: Set<String>
-    let childrenByParent: [String: [String]]
+    let blob: Data
+    let count: Int
 
-    static let empty = FastFolderIndex(records: [], knownPaths: [], childrenByParent: [:])
+    var isEmpty: Bool { count == 0 }
+    static let empty = FastFolderIndex(blob: Data([0, 0, 0, 0]), count: 0)
 
     nonisolated static func build(from entries: [DriveFolderEntry]) -> FastFolderIndex {
-        var recs: [FastFolderRecord] = []
-        recs.reserveCapacity(entries.count)
-        var paths = Set<String>(minimumCapacity: entries.count)
-        var byParent: [String: [String]] = [:]
-        byParent.reserveCapacity(entries.count / 3 + 16)
+        if entries.isEmpty { return .empty }
+        let sorted = entries.sorted { $0.path.utf8.lexicographicallyPrecedes($1.path.utf8) }
+        let n = sorted.count
+        let headerBytes = 4 &+ n &* 4
+        var out = Data(count: headerBytes)
+        out.reserveCapacity(headerBytes &+ n &* 96)
+        var offsets = [Int](repeating: 0, count: n)
 
-        for e in entries {
-            paths.insert(e.path)
-            let parent = (e.path as NSString).deletingLastPathComponent
-            byParent[parent, default: []].append(e.path)
-            recs.append(FastFolderRecord(
-                path: e.path,
-                cleanBytes: e.cleanSegs.map { Array($0.utf8) },
-                acrBytes: e.acrSegs.map { Array($0.utf8) }
-            ))
+        for i in 0..<n {
+            let e = sorted[i]
+            offsets[i] = out.count
+            let pUTF8 = e.path.utf8
+            let pLen = min(65535, pUTF8.count)
+            BinaryIndexCodec.appendU16LE(&out, pLen)
+            out.append(contentsOf: pUTF8.prefix(pLen))
+
+            let segCount = min(255, e.cleanSegs.count)
+            out.append(UInt8(segCount))
+            for s in 0..<segCount {
+                let cUTF8 = e.cleanSegs[s].utf8
+                let cLen = min(255, cUTF8.count)
+                out.append(UInt8(cLen))
+                out.append(contentsOf: cUTF8.prefix(cLen))
+
+                let aStr = s < e.acrSegs.count ? e.acrSegs[s] : ""
+                let aUTF8 = aStr.utf8
+                let aLen = min(255, aUTF8.count)
+                out.append(UInt8(aLen))
+                out.append(contentsOf: aUTF8.prefix(aLen))
+            }
         }
-        return FastFolderIndex(records: recs, knownPaths: paths, childrenByParent: byParent)
-    }
-}
 
-struct FastSharedRecord: Sendable {
-    let entry: SharedDriveEntry
-    let cleanBytes: [[UInt8]]
-    let acrBytes: [[UInt8]]
+        out.withUnsafeMutableBytes { rawBuf in
+            guard let ptr = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+            BinaryIndexCodec.writeU32LE(ptr, 0, n)
+            for i in 0..<n {
+                BinaryIndexCodec.writeU32LE(ptr, 4 &+ i &* 4, offsets[i])
+            }
+        }
+        return FastFolderIndex(blob: out, count: n)
+    }
+
+    nonisolated func indexOfPath(_ targetPath: String) -> Int? {
+        guard count > 0 else { return nil }
+        let targetBytes = Array(targetPath.utf8)
+        return blob.withUnsafeBytes { rawBuf -> Int? in
+            guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return nil }
+            var low = 0
+            var high = count - 1
+            while low <= high {
+                let mid = (low &+ high) >> 1
+                let recOff = BinaryIndexCodec.readU32LE(base, 4 &+ mid &* 4)
+                let pLen = BinaryIndexCodec.readU16LE(base, recOff)
+                let cmp = BinaryIndexCodec.compareSliceToBytes(base, recOff &+ 2, pLen, targetBytes)
+                if cmp == 0 {
+                    return mid
+                } else if cmp < 0 {
+                    low = mid &+ 1
+                } else {
+                    high = mid &- 1
+                }
+            }
+            return nil
+        }
+    }
+
+    nonisolated func containsPath(_ targetPath: String) -> Bool {
+        indexOfPath(targetPath) != nil
+    }
+
+    nonisolated func path(at recIdx: Int) -> String {
+        guard recIdx >= 0 && recIdx < count else { return "" }
+        return blob.withUnsafeBytes { rawBuf -> String in
+            guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return "" }
+            let recOff = BinaryIndexCodec.readU32LE(base, 4 &+ recIdx &* 4)
+            let pLen = BinaryIndexCodec.readU16LE(base, recOff)
+            return BinaryIndexCodec.decodeUTF8(base, recOff &+ 2, pLen)
+        }
+    }
+
+    nonisolated func children(ofParent parentPath: String) -> [String] {
+        guard count > 0 else { return [] }
+        let prefixBytes = Array((parentPath + "/").utf8)
+        let prefixLen = prefixBytes.count
+        return blob.withUnsafeBytes { rawBuf -> [String] in
+            guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return [] }
+            var low = 0
+            var high = count
+            while low < high {
+                let mid = (low &+ high) >> 1
+                let recOff = BinaryIndexCodec.readU32LE(base, 4 &+ mid &* 4)
+                let pLen = BinaryIndexCodec.readU16LE(base, recOff)
+                if BinaryIndexCodec.compareSliceToBytes(base, recOff &+ 2, pLen, prefixBytes) < 0 {
+                    low = mid &+ 1
+                } else {
+                    high = mid
+                }
+            }
+
+            var out: [String] = []
+            var idx = low
+            while idx < count {
+                let recOff = BinaryIndexCodec.readU32LE(base, 4 &+ idx &* 4)
+                let pLen = BinaryIndexCodec.readU16LE(base, recOff)
+                let pStart = recOff &+ 2
+                if !BinaryIndexCodec.sliceHasPrefix(base, pStart, pLen, prefixBytes) {
+                    break
+                }
+                // Check if direct child (no further '/' in remaining bytes)
+                var hasNestedSlash = false
+                var k = prefixLen
+                while k < pLen {
+                    if base[pStart &+ k] == 47 {
+                        hasNestedSlash = true
+                        break
+                    }
+                    k &+= 1
+                }
+                if !hasNestedSlash && pLen > prefixLen {
+                    out.append(BinaryIndexCodec.decodeUTF8(base, pStart, pLen))
+                }
+                idx &+= 1
+            }
+            return out
+        }
+    }
+
+    nonisolated func rootFolderPaths(excluding: Set<String>, limit: Int) -> [String] {
+        guard count > 0 && limit > 0 else { return [] }
+        return blob.withUnsafeBytes { rawBuf -> [String] in
+            guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return [] }
+            var out: [String] = []
+            for idx in 0..<count {
+                let recOff = BinaryIndexCodec.readU32LE(base, 4 &+ idx &* 4)
+                let pLen = BinaryIndexCodec.readU16LE(base, recOff)
+                let pStart = recOff &+ 2
+                let segCount = Int(base[pStart &+ pLen])
+                if segCount <= 1 {
+                    let p = BinaryIndexCodec.decodeUTF8(base, pStart, pLen)
+                    if !excluding.contains(p) {
+                        out.append(p)
+                        if out.count >= limit { break }
+                    }
+                }
+            }
+            return out
+        }
+    }
+
+    nonisolated func decodeEntries() -> [DriveFolderEntry] {
+        guard count > 0 else { return [] }
+        return blob.withUnsafeBytes { rawBuf -> [DriveFolderEntry] in
+            guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return [] }
+            var out: [DriveFolderEntry] = []
+            out.reserveCapacity(count)
+            for idx in 0..<count {
+                let recOff = BinaryIndexCodec.readU32LE(base, 4 &+ idx &* 4)
+                let pLen = BinaryIndexCodec.readU16LE(base, recOff)
+                let pStart = recOff &+ 2
+                let path = BinaryIndexCodec.decodeUTF8(base, pStart, pLen)
+                var pos = pStart &+ pLen
+                let segCount = Int(base[pos])
+                pos &+= 1
+                var cleanSegs: [String] = []
+                var acrSegs: [String] = []
+                cleanSegs.reserveCapacity(segCount)
+                acrSegs.reserveCapacity(segCount)
+                for _ in 0..<segCount {
+                    let cLen = Int(base[pos])
+                    pos &+= 1
+                    cleanSegs.append(BinaryIndexCodec.decodeUTF8(base, pos, cLen))
+                    pos &+= cLen
+                    let aLen = Int(base[pos])
+                    pos &+= 1
+                    acrSegs.append(BinaryIndexCodec.decodeUTF8(base, pos, aLen))
+                    pos &+= aLen
+                }
+                out.append(DriveFolderEntry(path: path, cleanSegs: cleanSegs, acrSegs: acrSegs))
+            }
+            return out
+        }
+    }
 }
 
 struct FastSharedIndex: Sendable {
-    let records: [FastSharedRecord]
-    let byPath: [String: SharedDriveEntry]
-    let childrenByParent: [String: [(path: String, isDir: Bool)]]
+    let blob: Data
+    let count: Int
 
-    static let empty = FastSharedIndex(records: [], byPath: [:], childrenByParent: [:])
+    var isEmpty: Bool { count == 0 }
+    static let empty = FastSharedIndex(blob: Data([0, 0, 0, 0]), count: 0)
 
     nonisolated static func build(from entries: [SharedDriveEntry]) -> FastSharedIndex {
-        var recs: [FastSharedRecord] = []
-        recs.reserveCapacity(entries.count)
-        var map: [String: SharedDriveEntry] = [:]
-        map.reserveCapacity(entries.count)
-        var byParent: [String: [(path: String, isDir: Bool)]] = [:]
+        if entries.isEmpty { return .empty }
+        let sorted = entries.sorted { $0.path.utf8.lexicographicallyPrecedes($1.path.utf8) }
+        let n = sorted.count
+        let headerBytes = 4 &+ n &* 4
+        var out = Data(count: headerBytes)
+        out.reserveCapacity(headerBytes &+ n &* 128)
+        var offsets = [Int](repeating: 0, count: n)
 
-        for e in entries {
-            map[e.path] = e
-            let parent = (e.path as NSString).deletingLastPathComponent
-            byParent[parent, default: []].append((e.path, e.isDir))
-            recs.append(FastSharedRecord(
-                entry: e,
-                cleanBytes: e.cleanSegs.map { Array($0.utf8) },
-                acrBytes: e.acrSegs.map { Array($0.utf8) }
-            ))
+        for i in 0..<n {
+            let e = sorted[i]
+            offsets[i] = out.count
+            let pUTF8 = e.path.utf8
+            let pLen = min(65535, pUTF8.count)
+            BinaryIndexCodec.appendU16LE(&out, pLen)
+            out.append(contentsOf: pUTF8.prefix(pLen))
+
+            out.append(e.isDir ? 1 : 0)
+
+            let dUTF8 = e.displaySub.utf8
+            let dLen = min(65535, dUTF8.count)
+            BinaryIndexCodec.appendU16LE(&out, dLen)
+            out.append(contentsOf: dUTF8.prefix(dLen))
+
+            let segCount = min(255, e.cleanSegs.count)
+            out.append(UInt8(segCount))
+            for s in 0..<segCount {
+                let cUTF8 = e.cleanSegs[s].utf8
+                let cLen = min(255, cUTF8.count)
+                out.append(UInt8(cLen))
+                out.append(contentsOf: cUTF8.prefix(cLen))
+
+                let aStr = s < e.acrSegs.count ? e.acrSegs[s] : ""
+                let aUTF8 = aStr.utf8
+                let aLen = min(255, aUTF8.count)
+                out.append(UInt8(aLen))
+                out.append(contentsOf: aUTF8.prefix(aLen))
+            }
         }
-        return FastSharedIndex(records: recs, byPath: map, childrenByParent: byParent)
+
+        out.withUnsafeMutableBytes { rawBuf in
+            guard let ptr = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+            BinaryIndexCodec.writeU32LE(ptr, 0, n)
+            for i in 0..<n {
+                BinaryIndexCodec.writeU32LE(ptr, 4 &+ i &* 4, offsets[i])
+            }
+        }
+        return FastSharedIndex(blob: out, count: n)
+    }
+
+    nonisolated func indexOfPath(_ targetPath: String) -> Int? {
+        guard count > 0 else { return nil }
+        let targetBytes = Array(targetPath.utf8)
+        return blob.withUnsafeBytes { rawBuf -> Int? in
+            guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return nil }
+            var low = 0
+            var high = count - 1
+            while low <= high {
+                let mid = (low &+ high) >> 1
+                let recOff = BinaryIndexCodec.readU32LE(base, 4 &+ mid &* 4)
+                let pLen = BinaryIndexCodec.readU16LE(base, recOff)
+                let cmp = BinaryIndexCodec.compareSliceToBytes(base, recOff &+ 2, pLen, targetBytes)
+                if cmp == 0 {
+                    return mid
+                } else if cmp < 0 {
+                    low = mid &+ 1
+                } else {
+                    high = mid &- 1
+                }
+            }
+            return nil
+        }
+    }
+
+    nonisolated func isDir(forPath targetPath: String) -> Bool? {
+        guard let idx = indexOfPath(targetPath) else { return nil }
+        return blob.withUnsafeBytes { rawBuf -> Bool? in
+            guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return nil }
+            let recOff = BinaryIndexCodec.readU32LE(base, 4 &+ idx &* 4)
+            let pLen = BinaryIndexCodec.readU16LE(base, recOff)
+            return base[recOff &+ 2 &+ pLen] != 0
+        }
+    }
+
+    nonisolated func entry(at recIdx: Int) -> SharedDriveEntry {
+        blob.withUnsafeBytes { rawBuf -> SharedDriveEntry in
+            guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                  recIdx >= 0 && recIdx < count else {
+                return SharedDriveEntry(path: "", isDir: false, displaySub: "", cleanSegs: [], acrSegs: [])
+            }
+            return Self.decodeSingleEntry(base: base, recOff: BinaryIndexCodec.readU32LE(base, 4 &+ recIdx &* 4))
+        }
+    }
+
+    private nonisolated static func decodeSingleEntry(base: UnsafePointer<UInt8>, recOff: Int) -> SharedDriveEntry {
+        let pLen = BinaryIndexCodec.readU16LE(base, recOff)
+        let pStart = recOff &+ 2
+        let path = BinaryIndexCodec.decodeUTF8(base, pStart, pLen)
+        var pos = pStart &+ pLen
+        let isDir = base[pos] != 0
+        pos &+= 1
+        let dLen = BinaryIndexCodec.readU16LE(base, pos)
+        pos &+= 2
+        let displaySub = BinaryIndexCodec.decodeUTF8(base, pos, dLen)
+        pos &+= dLen
+        let segCount = Int(base[pos])
+        pos &+= 1
+        var cleanSegs: [String] = []
+        var acrSegs: [String] = []
+        cleanSegs.reserveCapacity(segCount)
+        acrSegs.reserveCapacity(segCount)
+        for _ in 0..<segCount {
+            let cLen = Int(base[pos])
+            pos &+= 1
+            cleanSegs.append(BinaryIndexCodec.decodeUTF8(base, pos, cLen))
+            pos &+= cLen
+            let aLen = Int(base[pos])
+            pos &+= 1
+            acrSegs.append(BinaryIndexCodec.decodeUTF8(base, pos, aLen))
+            pos &+= aLen
+        }
+        return SharedDriveEntry(path: path, isDir: isDir, displaySub: displaySub, cleanSegs: cleanSegs, acrSegs: acrSegs)
+    }
+
+    nonisolated func children(ofParent parentPath: String) -> [(path: String, isDir: Bool)] {
+        guard count > 0 else { return [] }
+        let prefixBytes = Array((parentPath + "/").utf8)
+        let prefixLen = prefixBytes.count
+        return blob.withUnsafeBytes { rawBuf -> [(path: String, isDir: Bool)] in
+            guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return [] }
+            var low = 0
+            var high = count
+            while low < high {
+                let mid = (low &+ high) >> 1
+                let recOff = BinaryIndexCodec.readU32LE(base, 4 &+ mid &* 4)
+                let pLen = BinaryIndexCodec.readU16LE(base, recOff)
+                if BinaryIndexCodec.compareSliceToBytes(base, recOff &+ 2, pLen, prefixBytes) < 0 {
+                    low = mid &+ 1
+                } else {
+                    high = mid
+                }
+            }
+
+            var out: [(path: String, isDir: Bool)] = []
+            var idx = low
+            while idx < count {
+                let recOff = BinaryIndexCodec.readU32LE(base, 4 &+ idx &* 4)
+                let pLen = BinaryIndexCodec.readU16LE(base, recOff)
+                let pStart = recOff &+ 2
+                if !BinaryIndexCodec.sliceHasPrefix(base, pStart, pLen, prefixBytes) {
+                    break
+                }
+                var hasNestedSlash = false
+                var k = prefixLen
+                while k < pLen {
+                    if base[pStart &+ k] == 47 {
+                        hasNestedSlash = true
+                        break
+                    }
+                    k &+= 1
+                }
+                if !hasNestedSlash && pLen > prefixLen {
+                    let isDir = base[pStart &+ pLen] != 0
+                    out.append((BinaryIndexCodec.decodeUTF8(base, pStart, pLen), isDir))
+                }
+                idx &+= 1
+            }
+            return out
+        }
+    }
+
+    nonisolated func prefixEntries(limit: Int) -> [SharedDriveEntry] {
+        guard count > 0 && limit > 0 else { return [] }
+        let take = min(limit, count)
+        return blob.withUnsafeBytes { rawBuf -> [SharedDriveEntry] in
+            guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return [] }
+            var out: [SharedDriveEntry] = []
+            out.reserveCapacity(take)
+            for idx in 0..<take {
+                let recOff = BinaryIndexCodec.readU32LE(base, 4 &+ idx &* 4)
+                out.append(Self.decodeSingleEntry(base: base, recOff: recOff))
+            }
+            return out
+        }
+    }
+
+    nonisolated func decodeEntries() -> [SharedDriveEntry] {
+        prefixEntries(limit: count)
     }
 }
 
-struct FastFileRecord: Sendable {
-    let entry: DriveFileEntry
-    let cleanNameBytes: [UInt8]
-    let acrBytes: [UInt8]
-    let extBytes: [UInt8]
-    let cleanParentBytes: [UInt8]
-}
-
 struct FastFileIndex: Sendable {
-    let records: [FastFileRecord]
-    let pathSet: Set<String>
+    let blob: Data
+    let count: Int
 
-    static let empty = FastFileIndex(records: [], pathSet: [])
+    var isEmpty: Bool { count == 0 }
+    static let empty = FastFileIndex(blob: Data([0, 0, 0, 0]), count: 0)
 
     nonisolated static func build(from entries: [DriveFileEntry]) -> FastFileIndex {
-        var recs: [FastFileRecord] = []
-        recs.reserveCapacity(entries.count)
-        var paths = Set<String>(minimumCapacity: entries.count)
-        for e in entries {
-            paths.insert(e.path)
-            recs.append(FastFileRecord(
-                entry: e,
-                cleanNameBytes: Array(e.cleanName.utf8),
-                acrBytes: Array(e.acronym.utf8),
-                extBytes: Array(e.ext.utf8),
-                cleanParentBytes: Array(e.cleanParent.utf8)
-            ))
+        if entries.isEmpty { return .empty }
+        let sorted = entries.sorted { $0.path.utf8.lexicographicallyPrecedes($1.path.utf8) }
+        let n = sorted.count
+        let headerBytes = 4 &+ n &* 4
+        var out = Data(count: headerBytes)
+        out.reserveCapacity(headerBytes &+ n &* 84)
+        var offsets = [Int](repeating: 0, count: n)
+
+        for i in 0..<n {
+            let e = sorted[i]
+            offsets[i] = out.count
+            let pUTF8 = e.path.utf8
+            let pLen = min(65535, pUTF8.count)
+            BinaryIndexCodec.appendU16LE(&out, pLen)
+            out.append(contentsOf: pUTF8.prefix(pLen))
+
+            let extUTF8 = e.ext.utf8
+            let extLen = min(255, extUTF8.count)
+            out.append(UInt8(extLen))
+            out.append(contentsOf: extUTF8.prefix(extLen))
+
+            let cUTF8 = e.cleanName.utf8
+            let cLen = min(255, cUTF8.count)
+            out.append(UInt8(cLen))
+            out.append(contentsOf: cUTF8.prefix(cLen))
+
+            let aUTF8 = e.acronym.utf8
+            let aLen = min(255, aUTF8.count)
+            out.append(UInt8(aLen))
+            out.append(contentsOf: aUTF8.prefix(aLen))
+
+            let parUTF8 = e.cleanParent.utf8
+            let parLen = min(255, parUTF8.count)
+            out.append(UInt8(parLen))
+            out.append(contentsOf: parUTF8.prefix(parLen))
         }
-        return FastFileIndex(records: recs, pathSet: paths)
+
+        out.withUnsafeMutableBytes { rawBuf in
+            guard let ptr = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+            BinaryIndexCodec.writeU32LE(ptr, 0, n)
+            for i in 0..<n {
+                BinaryIndexCodec.writeU32LE(ptr, 4 &+ i &* 4, offsets[i])
+            }
+        }
+        return FastFileIndex(blob: out, count: n)
+    }
+
+    nonisolated func indexOfPath(_ targetPath: String) -> Int? {
+        guard count > 0 else { return nil }
+        let targetBytes = Array(targetPath.utf8)
+        return blob.withUnsafeBytes { rawBuf -> Int? in
+            guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return nil }
+            var low = 0
+            var high = count - 1
+            while low <= high {
+                let mid = (low &+ high) >> 1
+                let recOff = BinaryIndexCodec.readU32LE(base, 4 &+ mid &* 4)
+                let pLen = BinaryIndexCodec.readU16LE(base, recOff)
+                let cmp = BinaryIndexCodec.compareSliceToBytes(base, recOff &+ 2, pLen, targetBytes)
+                if cmp == 0 {
+                    return mid
+                } else if cmp < 0 {
+                    low = mid &+ 1
+                } else {
+                    high = mid &- 1
+                }
+            }
+            return nil
+        }
+    }
+
+    nonisolated func containsPath(_ targetPath: String) -> Bool {
+        indexOfPath(targetPath) != nil
+    }
+
+    nonisolated func entry(at recIdx: Int) -> DriveFileEntry {
+        blob.withUnsafeBytes { rawBuf -> DriveFileEntry in
+            guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                  recIdx >= 0 && recIdx < count else {
+                return DriveFileEntry(path: "", ext: "", cleanName: "", acronym: "", cleanParent: "")
+            }
+            return Self.decodeSingleFileEntry(base: base, recOff: BinaryIndexCodec.readU32LE(base, 4 &+ recIdx &* 4))
+        }
+    }
+
+    private nonisolated static func decodeSingleFileEntry(base: UnsafePointer<UInt8>, recOff: Int) -> DriveFileEntry {
+        let pLen = BinaryIndexCodec.readU16LE(base, recOff)
+        var pos = recOff &+ 2
+        let path = BinaryIndexCodec.decodeUTF8(base, pos, pLen)
+        pos &+= pLen
+
+        let extLen = Int(base[pos])
+        pos &+= 1
+        let ext = BinaryIndexCodec.decodeUTF8(base, pos, extLen)
+        pos &+= extLen
+
+        let cLen = Int(base[pos])
+        pos &+= 1
+        let cleanName = BinaryIndexCodec.decodeUTF8(base, pos, cLen)
+        pos &+= cLen
+
+        let aLen = Int(base[pos])
+        pos &+= 1
+        let acronym = BinaryIndexCodec.decodeUTF8(base, pos, aLen)
+        pos &+= aLen
+
+        let parLen = Int(base[pos])
+        pos &+= 1
+        let cleanParent = BinaryIndexCodec.decodeUTF8(base, pos, parLen)
+
+        return DriveFileEntry(path: path, ext: ext, cleanName: cleanName, acronym: acronym, cleanParent: cleanParent)
+    }
+
+    nonisolated func prefixEntries(limit: Int) -> [DriveFileEntry] {
+        guard count > 0 && limit > 0 else { return [] }
+        let take = min(limit, count)
+        return blob.withUnsafeBytes { rawBuf -> [DriveFileEntry] in
+            guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return [] }
+            var out: [DriveFileEntry] = []
+            out.reserveCapacity(take)
+            for idx in 0..<take {
+                let recOff = BinaryIndexCodec.readU32LE(base, 4 &+ idx &* 4)
+                out.append(Self.decodeSingleFileEntry(base: base, recOff: recOff))
+            }
+            return out
+        }
+    }
+
+    nonisolated func candidateFileURLs(matchingFilter filterTerm: String) -> [URL] {
+        guard count > 0 else { return [] }
+        return blob.withUnsafeBytes { rawBuf -> [URL] in
+            guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return [] }
+            var out: [URL] = []
+            for idx in 0..<count {
+                let recOff = BinaryIndexCodec.readU32LE(base, 4 &+ idx &* 4)
+                let pLen = BinaryIndexCodec.readU16LE(base, recOff)
+                let p = BinaryIndexCodec.decodeUTF8(base, recOff &+ 2, pLen)
+                if filterTerm.isEmpty || p.localizedCaseInsensitiveContains(filterTerm) {
+                    out.append(URL(fileURLWithPath: p))
+                }
+            }
+            return out
+        }
+    }
+
+    nonisolated func filterEntries(maxCount: Int, predicate: (DriveFileEntry) -> Bool) -> [DriveFileEntry] {
+        guard count > 0 && maxCount > 0 else { return [] }
+        return blob.withUnsafeBytes { rawBuf -> [DriveFileEntry] in
+            guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return [] }
+            var out: [DriveFileEntry] = []
+            for idx in 0..<count {
+                let recOff = BinaryIndexCodec.readU32LE(base, 4 &+ idx &* 4)
+                let entry = Self.decodeSingleFileEntry(base: base, recOff: recOff)
+                if predicate(entry) {
+                    out.append(entry)
+                    if out.count >= maxCount { break }
+                }
+            }
+            return out
+        }
     }
 }
 
@@ -150,10 +717,6 @@ final class GoogleDriveIndexService: ObservableObject {
     @Published private(set) var rebuildProgressText: String?
     @Published private(set) var lastCacheUpdate: Date?
 
-    private var folderEntries: [DriveFolderEntry] = []
-    private var sharedEntries: [SharedDriveEntry] = []
-    private var fileEntries: [DriveFileEntry] = []
-    private var macFolderEntries: [SharedDriveEntry] = []
     private var macFolderRootsSnapshot: [String] = []
     private(set) var fastFolderIndex: FastFolderIndex = .empty
     private(set) var fastSharedIndex: FastSharedIndex = .empty
@@ -172,9 +735,8 @@ final class GoogleDriveIndexService: ObservableObject {
     private var pendingEventPaths = Set<String>()
     private var isProcessingFSEvents: Bool = false
     private var debounceTask: Task<Void, Never>?
-    private var cachePersistTask: Task<Void, Never>?
-    private var sharedCachePersistTask: Task<Void, Never>?
-    private var macCachePersistTask: Task<Void, Never>?
+    private var binaryCachePersistTask: Task<Void, Never>?
+    private var alfredCompatPersistTask: Task<Void, Never>?
     nonisolated private static let fileWriteQueuesLock = OSAllocatedUnfairLock(initialState: [String: DispatchQueue]())
 
     private struct FolderPrefixRefineCache: Sendable {
@@ -193,6 +755,7 @@ final class GoogleDriveIndexService: ObservableObject {
 
     private let homePath = FileManager.default.homeDirectoryForCurrentUser.path
     private var cacheDir: String { "\(homePath)/.config/alfred-scripts" }
+    private var binaryCachePath: String { "\(cacheDir)/drivebar_index_v1.bin" }
     private var folderCachePath: String { "\(cacheDir)/folder_cache.json" }
     private var sharedCachePath: String { "\(cacheDir)/shared_cache.json" }
     private var fileCachePath: String { "\(cacheDir)/file_cache.json" }
@@ -461,9 +1024,9 @@ final class GoogleDriveIndexService: ObservableObject {
         pendingEventPaths.removeAll()
 
         let accountsSnap = activeAccounts
-        let currentFolders = folderEntries
-        let currentShared = sharedEntries
-        let currentMacEntries = macFolderEntries
+        let folderIdxSnap = fastFolderIndex
+        let sharedIdxSnap = fastSharedIndex
+        let macIdxSnap = fastMacFolderIndex
         let macRootsSnap = AppSettings.shared.customMacFolders.map {
             $0.hasSuffix("/") && $0.count > 1 ? String($0.dropLast()) : $0
         }
@@ -471,9 +1034,9 @@ final class GoogleDriveIndexService: ObservableObject {
 
         Task.detached(priority: .utility) {
             let fm = FileManager.default
-            var sortedFolders = currentFolders.sorted { $0.path < $1.path }
-            var sortedShared = currentShared.sorted { $0.path < $1.path }
-            var sortedMac = currentMacEntries.sorted { $0.path < $1.path }
+            var sortedFolders: [DriveFolderEntry]? = nil
+            var sortedShared: [SharedDriveEntry]? = nil
+            var sortedMac: [SharedDriveEntry]? = nil
             var didMutateFolders = false
             var didMutateShared = false
             var didMutateMac = false
@@ -482,6 +1045,9 @@ final class GoogleDriveIndexService: ObservableObject {
             for eventPath in batch {
                 // 1. Check Custom Mac Folders incremental updates (files & subfolders)
                 if let matchedMacRoot = macRootsSnap.first(where: { eventPath == $0 || eventPath.hasPrefix($0 + "/") }) {
+                    if sortedMac == nil {
+                        sortedMac = macIdxSnap.decodeEntries()
+                    }
                     var isDirObj: ObjCBool = false
                     let exists = fm.fileExists(atPath: eventPath, isDirectory: &isDirObj)
                     if exists {
@@ -495,15 +1061,15 @@ final class GoogleDriveIndexService: ObservableObject {
                                 maxLimit: 5_000,
                                 into: &freshMac
                             )
-                            _ = Self.removePathAndDescendants(from: &sortedMac, rootPath: eventPath, pathOf: \.path)
-                            Self.upsertSortedEntries(into: &sortedMac, newItems: freshMac, pathOf: \.path)
+                            _ = Self.removePathAndDescendants(from: &sortedMac!, rootPath: eventPath, pathOf: \.path)
+                            Self.upsertSortedEntries(into: &sortedMac!, newItems: freshMac, pathOf: \.path)
                             didMutateMac = true
                         } else if let fileEntry = Self.makeSingleMacEntry(path: eventPath, isDir: false, rootDir: matchedMacRoot, homePath: homeSnap) {
-                            Self.upsertSortedEntries(into: &sortedMac, newItems: [fileEntry], pathOf: \.path)
+                            Self.upsertSortedEntries(into: &sortedMac!, newItems: [fileEntry], pathOf: \.path)
                             didMutateMac = true
                         }
                     } else {
-                        if Self.removePathAndDescendants(from: &sortedMac, rootPath: eventPath, pathOf: \.path) {
+                        if Self.removePathAndDescendants(from: &sortedMac!, rootPath: eventPath, pathOf: \.path) {
                             didMutateMac = true
                         }
                     }
@@ -516,17 +1082,23 @@ final class GoogleDriveIndexService: ObservableObject {
                 let existsAsDir = fm.fileExists(atPath: eventPath, isDirectory: &isDir) && isDir.boolValue
 
                 if let md = acc.myDrivePath, eventPath.hasPrefix(md + "/") {
+                    if sortedFolders == nil {
+                        sortedFolders = folderIdxSnap.decodeEntries()
+                    }
                     if existsAsDir {
                         let newSubtree = Self.scanFolderSubtree(at: eventPath, myDriveRoot: md, maxSubDepth: 4)
-                        _ = Self.removePathAndDescendants(from: &sortedFolders, rootPath: eventPath, pathOf: \.path)
-                        Self.upsertSortedEntries(into: &sortedFolders, newItems: newSubtree, pathOf: \.path)
+                        _ = Self.removePathAndDescendants(from: &sortedFolders!, rootPath: eventPath, pathOf: \.path)
+                        Self.upsertSortedEntries(into: &sortedFolders!, newItems: newSubtree, pathOf: \.path)
                         didMutateFolders = true
                     } else {
-                        if Self.removePathAndDescendants(from: &sortedFolders, rootPath: eventPath, pathOf: \.path) {
+                        if Self.removePathAndDescendants(from: &sortedFolders!, rootPath: eventPath, pathOf: \.path) {
                             didMutateFolders = true
                         }
                     }
                 } else if let sd = acc.sharedDrivesPath, eventPath.hasPrefix(sd + "/") {
+                    if sortedShared == nil {
+                        sortedShared = sharedIdxSnap.decodeEntries()
+                    }
                     if existsAsDir {
                         var fresh: [SharedDriveEntry] = []
                         let rel = String(eventPath.dropFirst(sd.count + 1))
@@ -552,48 +1124,46 @@ final class GoogleDriveIndexService: ObservableObject {
                         if hitCap {
                             shouldScheduleFullSharedRebuild = true
                         }
-                        _ = Self.removePathAndDescendants(from: &sortedShared, rootPath: eventPath, pathOf: \.path)
-                        Self.upsertSortedEntries(into: &sortedShared, newItems: fresh, pathOf: \.path)
+                        _ = Self.removePathAndDescendants(from: &sortedShared!, rootPath: eventPath, pathOf: \.path)
+                        Self.upsertSortedEntries(into: &sortedShared!, newItems: fresh, pathOf: \.path)
                         didMutateShared = true
                     } else {
-                        if Self.removePathAndDescendants(from: &sortedShared, rootPath: eventPath, pathOf: \.path) {
+                        if Self.removePathAndDescendants(from: &sortedShared!, rootPath: eventPath, pathOf: \.path) {
                             didMutateShared = true
                         }
                     }
                 }
             }
 
-            let updatedFolders = didMutateFolders ? sortedFolders : nil
-            let updatedFastFolders = updatedFolders.map { FastFolderIndex.build(from: $0) }
-            let updatedShared = didMutateShared ? sortedShared : nil
-            let updatedFastShared = updatedShared.map { FastSharedIndex.build(from: $0) }
-            let updatedMac = didMutateMac ? sortedMac : nil
-            let updatedFastMac = updatedMac.map { FastSharedIndex.build(from: $0) }
+            let updatedFastFolders = didMutateFolders ? sortedFolders.map { FastFolderIndex.build(from: $0) } : nil
+            let updatedFastShared = didMutateShared ? sortedShared.map { FastSharedIndex.build(from: $0) } : nil
+            let updatedFastMac = didMutateMac ? sortedMac.map { FastSharedIndex.build(from: $0) } : nil
             let needSharedRebuild = shouldScheduleFullSharedRebuild
             let mutatedAny = didMutateFolders || didMutateShared || didMutateMac
+            let mutatedAlfred = didMutateFolders || didMutateShared
 
             await MainActor.run {
                 let svc = GoogleDriveIndexService.shared
-                if let updatedFolders, let updatedFastFolders {
-                    svc.folderEntries = updatedFolders
+                if let updatedFastFolders {
                     svc.fastFolderIndex = updatedFastFolders
-                    svc.folderCount = updatedFolders.count
+                    svc.folderCount = updatedFastFolders.count
                     svc.lastCacheUpdate = Date()
                     Self.folderRefineLock.withLock { $0 = nil }
-                    svc.scheduleFolderCachePersist()
                 }
-                if let updatedShared, let updatedFastShared {
-                    svc.sharedEntries = updatedShared
+                if let updatedFastShared {
                     svc.fastSharedIndex = updatedFastShared
-                    svc.sharedCount = updatedShared.count
+                    svc.sharedCount = updatedFastShared.count
                     Self.sharedRefineLock.withLock { $0 = nil }
-                    svc.scheduleSharedCachePersist()
                 }
-                if let updatedMac, let updatedFastMac {
-                    svc.macFolderEntries = updatedMac
+                if let updatedFastMac {
                     svc.fastMacFolderIndex = updatedFastMac
-                    svc.macFolderItemCount = updatedMac.count
-                    svc.scheduleMacFoldersCachePersist()
+                    svc.macFolderItemCount = updatedFastMac.count
+                }
+                if mutatedAny {
+                    svc.scheduleBinaryIndexPersist()
+                }
+                if mutatedAlfred && AppSettings.shared.keepAlfredCacheCompatible {
+                    svc.scheduleAlfredCompatibilityJSONPersist()
                 }
                 svc.isProcessingFSEvents = false
                 if needSharedRebuild {
@@ -615,13 +1185,11 @@ final class GoogleDriveIndexService: ObservableObject {
         pathOf: (T) -> String
     ) -> Bool {
         var didRemove = false
-        // 1. Remove exact `rootPath` if present
         let exactIdx = lowerBoundIndex(in: sortedArray, target: rootPath, pathOf: pathOf)
         if exactIdx < sortedArray.count && pathOf(sortedArray[exactIdx]) == rootPath {
             sortedArray.remove(at: exactIdx)
             didRemove = true
         }
-        // 2. Remove range `[rootPath + "/", rootPath + "0")` (`'0'` is ASCII 48, immediately after `'/'` ASCII 47)
         let lowerPrefix = rootPath + "/"
         let upperPrefix = rootPath + "0"
         let startIdx = lowerBoundIndex(in: sortedArray, target: lowerPrefix, pathOf: pathOf)
@@ -702,63 +1270,209 @@ final class GoogleDriveIndexService: ObservableObject {
         return out
     }
 
-    private func scheduleFolderCachePersist() {
-        cachePersistTask?.cancel()
-        let entriesSnap = folderEntries
-        let rootSnap = myDrivePath
-        let targetPath = folderCachePath
-        cachePersistTask = Task.detached(priority: .background) {
-            try? await Task.sleep(nanoseconds: 2_500_000_000)
-            guard !Task.isCancelled else { return }
-            let payload = FolderCachePayload(
-                timestamp: Date().timeIntervalSince1970,
-                root: rootSnap,
-                items: entriesSnap,
-                folders: nil
-            )
-            Self.writeCodableAtomic(payload, to: targetPath)
+    // MARK: - DBIX v1 Binary Cache Persistence & Alfred Compatibility (§5.2)
+
+    struct LoadedBinaryIndex: Sendable {
+        let timestamp: Double
+        let macRoots: [String]
+        let folderIndex: FastFolderIndex
+        let sharedIndex: FastSharedIndex
+        let fileIndex: FastFileIndex
+        let macIndex: FastSharedIndex
+    }
+
+    nonisolated static func saveBinaryIndexToDisk(
+        to filePath: String,
+        timestamp: Double,
+        macRoots: [String],
+        folderIndex: FastFolderIndex,
+        sharedIndex: FastSharedIndex,
+        fileIndex: FastFileIndex,
+        macIndex: FastSharedIndex
+    ) {
+        let rootsData = (try? JSONEncoder().encode(macRoots)) ?? Data("[]".utf8)
+        let fBlob = folderIndex.blob
+        let sBlob = sharedIndex.blob
+        let flBlob = fileIndex.blob
+        let mBlob = macIndex.blob
+
+        var out = Data()
+        out.reserveCapacity(52 &+ rootsData.count &+ fBlob.count &+ sBlob.count &+ flBlob.count &+ mBlob.count)
+
+        // 52-byte header:
+        // [0..<4]   Magic "DBIX"
+        // [4..<8]   Version = 1 (UInt32 LE)
+        // [8..<16]  Timestamp (Float64 bitPattern UInt64 LE)
+        // [16..<20] folderCount (UInt32 LE)
+        // [20..<24] sharedCount (UInt32 LE)
+        // [24..<28] fileCount (UInt32 LE)
+        // [28..<32] macCount (UInt32 LE)
+        // [32..<36] rootsDataLen (UInt32 LE)
+        // [36..<40] folderBlobLen (UInt32 LE)
+        // [40..<44] sharedBlobLen (UInt32 LE)
+        // [44..<48] fileBlobLen (UInt32 LE)
+        // [48..<52] macBlobLen (UInt32 LE)
+        out.append(contentsOf: [0x44, 0x42, 0x49, 0x58]) // "DBIX"
+        BinaryIndexCodec.appendU32LE(&out, 1)
+        BinaryIndexCodec.appendU64LE(&out, timestamp.bitPattern)
+        BinaryIndexCodec.appendU32LE(&out, folderIndex.count)
+        BinaryIndexCodec.appendU32LE(&out, sharedIndex.count)
+        BinaryIndexCodec.appendU32LE(&out, fileIndex.count)
+        BinaryIndexCodec.appendU32LE(&out, macIndex.count)
+        BinaryIndexCodec.appendU32LE(&out, rootsData.count)
+        BinaryIndexCodec.appendU32LE(&out, fBlob.count)
+        BinaryIndexCodec.appendU32LE(&out, sBlob.count)
+        BinaryIndexCodec.appendU32LE(&out, flBlob.count)
+        BinaryIndexCodec.appendU32LE(&out, mBlob.count)
+
+        out.append(rootsData)
+        out.append(fBlob)
+        out.append(sBlob)
+        out.append(flBlob)
+        out.append(mBlob)
+
+        writeQueue(for: filePath).sync {
+            let fm = FileManager.default
+            let dir = (filePath as NSString).deletingLastPathComponent
+            try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            try? out.write(to: URL(fileURLWithPath: filePath), options: .atomic)
         }
     }
 
-    private func scheduleSharedCachePersist() {
-        sharedCachePersistTask?.cancel()
-        let itemsSnap = sharedEntries
-        let rootSnap = accountRoot
-        let targetPath = sharedCachePath
-        sharedCachePersistTask = Task.detached(priority: .background) {
-            try? await Task.sleep(nanoseconds: 2_500_000_000)
+    nonisolated static func loadBinaryIndexFromDisk(at filePath: String) -> LoadedBinaryIndex? {
+        guard let mapped = try? Data(contentsOf: URL(fileURLWithPath: filePath), options: .alwaysMapped),
+              mapped.count >= 52 else {
+            return nil
+        }
+
+        let headerMeta: (
+            ts: Double,
+            fCount: Int,
+            sCount: Int,
+            flCount: Int,
+            mCount: Int,
+            rootsLen: Int,
+            fLen: Int,
+            sLen: Int,
+            flLen: Int,
+            mLen: Int
+        )? = mapped.withUnsafeBytes { rawBuf in
+            guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return nil }
+            guard base[0] == 0x44, base[1] == 0x42, base[2] == 0x49, base[3] == 0x58 else { return nil }
+            let version = BinaryIndexCodec.readU32LE(base, 4)
+            guard version == 1 else { return nil }
+            let tsBits = BinaryIndexCodec.readU64LE(base, 8)
+            let ts = Double(bitPattern: tsBits)
+            let fCount = BinaryIndexCodec.readU32LE(base, 16)
+            let sCount = BinaryIndexCodec.readU32LE(base, 20)
+            let flCount = BinaryIndexCodec.readU32LE(base, 24)
+            let mCount = BinaryIndexCodec.readU32LE(base, 28)
+            let rootsLen = BinaryIndexCodec.readU32LE(base, 32)
+            let fLen = BinaryIndexCodec.readU32LE(base, 36)
+            let sLen = BinaryIndexCodec.readU32LE(base, 40)
+            let flLen = BinaryIndexCodec.readU32LE(base, 44)
+            let mLen = BinaryIndexCodec.readU32LE(base, 48)
+            return (ts, fCount, sCount, flCount, mCount, rootsLen, fLen, sLen, flLen, mLen)
+        }
+
+        guard let m = headerMeta else { return nil }
+        let totalExpected = 52 + m.rootsLen + m.fLen + m.sLen + m.flLen + m.mLen
+        guard mapped.count == totalExpected,
+              m.fLen >= 4 + m.fCount * 4,
+              m.sLen >= 4 + m.sCount * 4,
+              m.flLen >= 4 + m.flCount * 4,
+              m.mLen >= 4 + m.mCount * 4 else {
+            return nil
+        }
+
+        var cursor = 52
+        let rootsSlice = mapped.subdata(in: cursor..<(cursor + m.rootsLen))
+        cursor += m.rootsLen
+        let fSlice = mapped.subdata(in: cursor..<(cursor + m.fLen))
+        cursor += m.fLen
+        let sSlice = mapped.subdata(in: cursor..<(cursor + m.sLen))
+        cursor += m.sLen
+        let flSlice = mapped.subdata(in: cursor..<(cursor + m.flLen))
+        cursor += m.flLen
+        let mSlice = mapped.subdata(in: cursor..<(cursor + m.mLen))
+
+        let roots = (try? JSONDecoder().decode([String].self, from: rootsSlice)) ?? []
+        return LoadedBinaryIndex(
+            timestamp: m.ts,
+            macRoots: roots,
+            folderIndex: FastFolderIndex(blob: fSlice, count: m.fCount),
+            sharedIndex: FastSharedIndex(blob: sSlice, count: m.sCount),
+            fileIndex: FastFileIndex(blob: flSlice, count: m.flCount),
+            macIndex: FastSharedIndex(blob: mSlice, count: m.mCount)
+        )
+    }
+
+    func scheduleBinaryIndexPersist(delayNanoseconds: UInt64 = 1_500_000_000) {
+        binaryCachePersistTask?.cancel()
+        let binPath = binaryCachePath
+        let ts = (lastCacheUpdate ?? Date()).timeIntervalSince1970
+        let rootsSnap = macFolderRootsSnapshot
+        let fIdx = fastFolderIndex
+        let sIdx = fastSharedIndex
+        let flIdx = fastFileIndex
+        let mIdx = fastMacFolderIndex
+
+        binaryCachePersistTask = Task.detached(priority: .utility) {
+            if delayNanoseconds > 0 {
+                try? await Task.sleep(nanoseconds: delayNanoseconds)
+            }
             guard !Task.isCancelled else { return }
-            let payload = SharedCachePayload(
-                timestamp: Date().timeIntervalSince1970,
-                root: rootSnap,
-                items: itemsSnap
+            Self.saveBinaryIndexToDisk(
+                to: binPath,
+                timestamp: ts,
+                macRoots: rootsSnap,
+                folderIndex: fIdx,
+                sharedIndex: sIdx,
+                fileIndex: flIdx,
+                macIndex: mIdx
             )
-            Self.writeCodableAtomic(payload, to: targetPath)
         }
     }
 
-    private func scheduleMacFoldersCachePersist() {
-        macCachePersistTask?.cancel()
-        let itemsSnap = macFolderEntries
-        let rootsSnap = AppSettings.shared.customMacFolders.map {
-            $0.hasSuffix("/") && $0.count > 1 ? String($0.dropLast()) : $0
-        }
-        let targetPath = macFoldersCachePath
-        macCachePersistTask = Task.detached(priority: .background) {
-            try? await Task.sleep(nanoseconds: 2_500_000_000)
+    /// Writes `folder_cache.json` and `shared_cache.json` at `.background` priority debounced by 30s when `keepAlfredCacheCompatible` is enabled (§5.2).
+    func scheduleAlfredCompatibilityJSONPersist() {
+        alfredCompatPersistTask?.cancel()
+        guard AppSettings.shared.keepAlfredCacheCompatible else { return }
+        let fIdx = fastFolderIndex
+        let sIdx = fastSharedIndex
+        let mdRoot = myDrivePath
+        let accRoot = accountRoot
+        let fPath = folderCachePath
+        let sPath = sharedCachePath
+
+        alfredCompatPersistTask = Task.detached(priority: .background) {
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
             guard !Task.isCancelled else { return }
-            let payload = MacFoldersCachePayload(
-                timestamp: Date().timeIntervalSince1970,
-                roots: rootsSnap,
-                items: itemsSnap
-            )
-            Self.writeCodableAtomic(payload, to: targetPath)
+            let now = Date().timeIntervalSince1970
+            if !fIdx.isEmpty {
+                let fPayload = FolderCachePayload(
+                    timestamp: now,
+                    root: mdRoot,
+                    items: fIdx.decodeEntries(),
+                    folders: nil
+                )
+                Self.writeCodableAtomic(fPayload, to: fPath)
+            }
+            if !sIdx.isEmpty {
+                let sPayload = SharedCachePayload(
+                    timestamp: now,
+                    root: accRoot,
+                    items: sIdx.decodeEntries()
+                )
+                Self.writeCodableAtomic(sPayload, to: sPath)
+            }
         }
     }
 
     // MARK: - Initial Load
 
     private func loadInitialDataAsync() {
+        let bCache = binaryCachePath
         let fCache = folderCachePath
         let sCache = sharedCachePath
         let flCache = fileCachePath
@@ -789,14 +1503,71 @@ final class GoogleDriveIndexService: ObservableObject {
             let finalHistory = loadedHistory
             let finalQueryHistory = loadedQueryHistory
 
+            // Fast path (§5.2): memory-map `drivebar_index_v1.bin` in < 80 ms!
+            if let binLoaded = Self.loadBinaryIndexFromDisk(at: bCache) {
+                let scannedApps = Self.scanInstalledApplications()
+                await MainActor.run {
+                    let service = GoogleDriveIndexService.shared
+                    service.history = finalHistory
+                    service.queryHistory = finalQueryHistory
+                    service.installedApps = scannedApps
+                    service.lastAppScanUptime = ProcessInfo.processInfo.systemUptime
+
+                    service.fastFolderIndex = binLoaded.folderIndex
+                    service.folderCount = binLoaded.folderIndex.count
+                    service.fastSharedIndex = binLoaded.sharedIndex
+                    service.sharedCount = binLoaded.sharedIndex.count
+                    service.fastFileIndex = binLoaded.fileIndex
+                    service.fileCount = binLoaded.fileIndex.count
+                    service.fastMacFolderIndex = binLoaded.macIndex
+                    service.macFolderItemCount = binLoaded.macIndex.count
+                    service.macFolderRootsSnapshot = binLoaded.macRoots
+                    service.lastCacheUpdate = Date(timeIntervalSince1970: binLoaded.timestamp)
+
+                    let age = Date().timeIntervalSince1970 - binLoaded.timestamp
+                    if (binLoaded.folderIndex.isEmpty && currentAccount != nil) || age > 86_400 {
+                        service.rebuildFolderCacheInBackground()
+                    }
+                    if (binLoaded.sharedIndex.isEmpty && (service.sharedDrivesPath != nil || service.shortcutTargetsPath != nil)) || age > 86_400 {
+                        service.rebuildSharedCacheInBackground()
+                    }
+                    if binLoaded.macRoots != configuredMacRoots || (!configuredMacRoots.isEmpty && binLoaded.macIndex.isEmpty) {
+                        service.rebuildMacFoldersCacheInBackground()
+                    }
+
+                    SyncAndLatchingService.shared.start()
+                    LauncherViewModel.shared.refreshSearchResults()
+                }
+                return
+            }
+
+            // Fallback path: migrate from legacy JSON caches on first run and immediately write `drivebar_index_v1.bin`
             let loadedFolders = Self.readFolderCacheDisk(at: fCache)
-            let builtFastFolders = loadedFolders.map { FastFolderIndex.build(from: $0.0) }
+            let builtFastFolders = loadedFolders.map { FastFolderIndex.build(from: $0.0) } ?? .empty
             let loadedShared = Self.readSharedCacheDisk(at: sCache)
-            let builtFastShared = loadedShared.map { FastSharedIndex.build(from: $0.0) }
+            let builtFastShared = loadedShared.map { FastSharedIndex.build(from: $0.0) } ?? .empty
             let loadedFiles = Self.readFileCacheDisk(at: flCache)
-            let builtFastFiles = loadedFiles.map { FastFileIndex.build(from: $0.0) }
+            let builtFastFiles = loadedFiles.map { FastFileIndex.build(from: $0.0) } ?? .empty
             let loadedMac = Self.readMacFoldersCacheDisk(at: mCache)
-            let builtFastMac = loadedMac.map { FastSharedIndex.build(from: $0.items) }
+            let builtFastMac = loadedMac.map { FastSharedIndex.build(from: $0.items) } ?? .empty
+            let ts = loadedFolders?.1 ?? loadedFiles?.1 ?? Date().timeIntervalSince1970
+            let macRoots = loadedMac?.roots ?? configuredMacRoots
+
+            if !builtFastFolders.isEmpty || !builtFastShared.isEmpty || !builtFastFiles.isEmpty || !builtFastMac.isEmpty {
+                Self.saveBinaryIndexToDisk(
+                    to: bCache,
+                    timestamp: ts,
+                    macRoots: macRoots,
+                    folderIndex: builtFastFolders,
+                    sharedIndex: builtFastShared,
+                    fileIndex: builtFastFiles,
+                    macIndex: builtFastMac
+                )
+                // Remove redundant non-Alfred JSON caches once `drivebar_index_v1.bin` is active (§5.2)
+                try? FileManager.default.removeItem(atPath: flCache)
+                try? FileManager.default.removeItem(atPath: mCache)
+            }
+
             let scannedApps = Self.scanInstalledApplications()
 
             await MainActor.run {
@@ -806,49 +1577,32 @@ final class GoogleDriveIndexService: ObservableObject {
                 service.installedApps = scannedApps
                 service.lastAppScanUptime = ProcessInfo.processInfo.systemUptime
 
-                if let (entries, ts) = loadedFolders, let builtFastFolders {
-                    service.folderEntries = entries
-                    service.fastFolderIndex = builtFastFolders
-                    service.folderCount = entries.count
-                    service.lastCacheUpdate = Date(timeIntervalSince1970: ts)
-                    if Date().timeIntervalSince1970 - ts > 86_400 {
-                        service.rebuildFolderCacheInBackground()
-                    }
-                } else if currentAccount != nil {
+                service.fastFolderIndex = builtFastFolders
+                service.folderCount = builtFastFolders.count
+                service.fastSharedIndex = builtFastShared
+                service.sharedCount = builtFastShared.count
+                service.fastFileIndex = builtFastFiles
+                service.fileCount = builtFastFiles.count
+                service.fastMacFolderIndex = builtFastMac
+                service.macFolderItemCount = builtFastMac.count
+                service.macFolderRootsSnapshot = macRoots
+                service.lastCacheUpdate = Date(timeIntervalSince1970: ts)
+
+                if builtFastFolders.isEmpty && currentAccount != nil {
+                    service.rebuildFolderCacheInBackground()
+                } else if Date().timeIntervalSince1970 - ts > 86_400 {
                     service.rebuildFolderCacheInBackground()
                 }
 
-                if let (sEntries, ts) = loadedShared, let builtFastShared {
-                    service.sharedEntries = sEntries
-                    service.fastSharedIndex = builtFastShared
-                    service.sharedCount = sEntries.count
-                    if Date().timeIntervalSince1970 - ts > 86_400 {
-                        service.rebuildSharedCacheInBackground()
-                    }
-                } else if service.sharedDrivesPath != nil || service.shortcutTargetsPath != nil {
+                if builtFastShared.isEmpty && (service.sharedDrivesPath != nil || service.shortcutTargetsPath != nil) {
                     service.rebuildSharedCacheInBackground()
                 }
 
-                if let (fEntries, ts) = loadedFiles, let builtFastFiles {
-                    service.fileEntries = fEntries
-                    service.fastFileIndex = builtFastFiles
-                    service.fileCount = fEntries.count
-                    if Date().timeIntervalSince1970 - ts > 86_400 {
-                        service.rebuildFileCacheInBackground()
-                    }
-                } else {
+                if builtFastFiles.isEmpty {
                     service.rebuildFileCacheInBackground()
                 }
 
-                if let macPayload = loadedMac, let builtFastMac {
-                    service.macFolderEntries = macPayload.items
-                    service.fastMacFolderIndex = builtFastMac
-                    service.macFolderItemCount = macPayload.items.count
-                    service.macFolderRootsSnapshot = macPayload.roots
-                    if macPayload.roots != configuredMacRoots || Date().timeIntervalSince1970 - macPayload.timestamp > 86_400 {
-                        service.rebuildMacFoldersCacheInBackground()
-                    }
-                } else if !configuredMacRoots.isEmpty {
+                if macRoots != configuredMacRoots || (!configuredMacRoots.isEmpty && builtFastMac.isEmpty) {
                     service.rebuildMacFoldersCacheInBackground()
                 }
 
@@ -1440,12 +2194,9 @@ final class GoogleDriveIndexService: ObservableObject {
         let customMac = AppSettings.shared.customMacFolders.map {
             $0.hasSuffix("/") && $0.count > 1 ? String($0.dropLast()) : $0
         }.filter { !$0.isEmpty }
-        let primaryMyDrive = myDrivePath
-        let targetFolderCache = folderCachePath
         let targetFileCache = fileCachePath
 
         Task.detached(priority: .utility) {
-            let startTime = CFAbsoluteTimeGetCurrent()
             let (allFolders, allFiles) = await Self.performParallelUnifiedScan(
                 myDriveRoots: myDriveRoots,
                 sharedDriveRoots: sharedDriveRoots,
@@ -1453,33 +2204,27 @@ final class GoogleDriveIndexService: ObservableObject {
                 customMacFolders: customMac,
                 reportProgress: true
             )
-            let elapsedMs = (CFAbsoluteTimeGetCurrent() - startTime) * 1000.0
             let now = Date().timeIntervalSince1970
-
-            let folderPayload = FolderCachePayload(timestamp: now, root: primaryMyDrive, items: allFolders, folders: nil)
-            Self.writeCodableAtomic(folderPayload, to: targetFolderCache)
-
-            let filePayload = FileCachePayload(timestamp: now, items: allFiles)
-            Self.writeCodableAtomic(filePayload, to: targetFileCache)
-
             let builtFastFolders = FastFolderIndex.build(from: allFolders)
             let builtFastFiles = FastFileIndex.build(from: allFiles)
-            _ = elapsedMs
+            try? FileManager.default.removeItem(atPath: targetFileCache)
 
             await MainActor.run {
                 let svc = GoogleDriveIndexService.shared
-                svc.folderEntries = allFolders
                 svc.fastFolderIndex = builtFastFolders
-                svc.folderCount = allFolders.count
-                svc.fileEntries = allFiles
+                svc.folderCount = builtFastFolders.count
                 svc.fastFileIndex = builtFastFiles
-                svc.fileCount = allFiles.count
+                svc.fileCount = builtFastFiles.count
                 svc.lastCacheUpdate = Date(timeIntervalSince1970: now)
                 svc.isRebuildingFolders = false
                 svc.isRebuildingFiles = false
                 svc.rebuildProgressText = nil
                 Self.folderRefineLock.withLock { $0 = nil }
                 Self.fileRefineLock.withLock { $0 = nil }
+                svc.scheduleBinaryIndexPersist(delayNanoseconds: 0)
+                if AppSettings.shared.keepAlfredCacheCompatible {
+                    svc.scheduleAlfredCompatibilityJSONPersist()
+                }
                 if !svc.pendingEventPaths.isEmpty {
                     svc.processPendingFSEvents()
                 }
@@ -1692,8 +2437,6 @@ final class GoogleDriveIndexService: ObservableObject {
         guard mounts.contains(where: { $0.sharedDrivesPath != nil || $0.shortcutTargetsPath != nil }) else { return }
 
         isRebuildingShared = true
-        let targetCachePath = sharedCachePath
-        let primaryAcc = accountRoot
 
         Task.detached(priority: .utility) {
             let fm = FileManager.default
@@ -1759,20 +2502,17 @@ final class GoogleDriveIndexService: ObservableObject {
                 }
             }
 
-            items.sort { $0.path < $1.path }
-            let now = Date().timeIntervalSince1970
-            let payload = SharedCachePayload(timestamp: now, root: primaryAcc, items: items)
-            Self.writeCodableAtomic(payload, to: targetCachePath)
-
-            let finalItems = items
-            let finalFastShared = FastSharedIndex.build(from: finalItems)
+            let finalFastShared = FastSharedIndex.build(from: items)
             await MainActor.run {
                 let service = GoogleDriveIndexService.shared
-                service.sharedEntries = finalItems
                 service.fastSharedIndex = finalFastShared
-                service.sharedCount = finalItems.count
+                service.sharedCount = finalFastShared.count
                 service.isRebuildingShared = false
                 Self.sharedRefineLock.withLock { $0 = nil }
+                service.scheduleBinaryIndexPersist(delayNanoseconds: 0)
+                if AppSettings.shared.keepAlfredCacheCompatible {
+                    service.scheduleAlfredCompatibilityJSONPersist()
+                }
                 if !service.pendingEventPaths.isEmpty {
                     service.processPendingFSEvents()
                 }
@@ -1894,7 +2634,6 @@ final class GoogleDriveIndexService: ObservableObject {
         }
 
         if uniqueRoots.isEmpty {
-            macFolderEntries = []
             fastMacFolderIndex = .empty
             macFolderItemCount = 0
             macFolderRootsSnapshot = []
@@ -1903,6 +2642,7 @@ final class GoogleDriveIndexService: ObservableObject {
             Task.detached(priority: .background) {
                 try? FileManager.default.removeItem(atPath: targetCache)
             }
+            scheduleBinaryIndexPersist(delayNanoseconds: 0)
             if LauncherPanelController.shared.isVisible {
                 LauncherViewModel.shared.refreshSearchResults()
             }
@@ -1935,20 +2675,16 @@ final class GoogleDriveIndexService: ObservableObject {
                 }
             }
 
-            let now = Date().timeIntervalSince1970
-            let payload = MacFoldersCachePayload(timestamp: now, roots: uniqueRoots, items: collected)
-            Self.writeCodableAtomic(payload, to: targetCache)
-
-            let finalItems = collected
-            let builtFast = FastSharedIndex.build(from: finalItems)
+            try? FileManager.default.removeItem(atPath: targetCache)
+            let builtFast = FastSharedIndex.build(from: collected)
             await MainActor.run {
                 let svc = GoogleDriveIndexService.shared
                 guard svc.macFoldersRebuildGen == gen else { return }
-                svc.macFolderEntries = finalItems
                 svc.fastMacFolderIndex = builtFast
-                svc.macFolderItemCount = finalItems.count
+                svc.macFolderItemCount = builtFast.count
                 svc.macFolderRootsSnapshot = uniqueRoots
                 svc.isRebuildingMacFolders = false
+                svc.scheduleBinaryIndexPersist(delayNanoseconds: 0)
                 if LauncherPanelController.shared.isVisible {
                     LauncherViewModel.shared.refreshSearchResults()
                 }
@@ -2385,12 +3121,12 @@ final class GoogleDriveIndexService: ObservableObject {
                 let isSharedPath = sdPrefixes.contains { itemKey.hasPrefix($0) }
                 if isSharedMode != isSharedPath { continue }
 
-                let isKnownFolder = fastFolderIndex.knownPaths.contains(itemKey) ||
-                    (fastSharedIndex.byPath[itemKey]?.isDir == true) ||
-                    (fastMacFolderIndex.byPath[itemKey]?.isDir == true)
-                let isKnownSharedFile = (fastSharedIndex.byPath[itemKey]?.isDir == false) ||
-                    (fastMacFolderIndex.byPath[itemKey]?.isDir == false)
-                let isKnownDriveFile = fastFileIndex.pathSet.contains(itemKey)
+                let isKnownFolder = fastFolderIndex.containsPath(itemKey) ||
+                    (fastSharedIndex.isDir(forPath: itemKey) == true) ||
+                    (fastMacFolderIndex.isDir(forPath: itemKey) == true)
+                let isKnownSharedFile = (fastSharedIndex.isDir(forPath: itemKey) == false) ||
+                    (fastMacFolderIndex.isDir(forPath: itemKey) == false)
+                let isKnownDriveFile = fastFileIndex.containsPath(itemKey)
 
                 if !isKnownFolder && !isKnownSharedFile && !isKnownDriveFile {
                     if itemKey.contains("/Library/CloudStorage/") { continue }
@@ -2582,9 +3318,9 @@ final class GoogleDriveIndexService: ObservableObject {
     func isKnownDirectory(_ path: String, hasDirectoryHint: Bool = false) -> Bool {
         if hasDirectoryHint { return true }
         let trimmed = path.hasSuffix("/") && path.count > 1 ? String(path.dropLast()) : path
-        if fastFolderIndex.knownPaths.contains(trimmed) { return true }
-        if let sh = fastSharedIndex.byPath[trimmed] { return sh.isDir }
-        if let mf = fastMacFolderIndex.byPath[trimmed] { return mf.isDir }
+        if fastFolderIndex.containsPath(trimmed) { return true }
+        if let shDir = fastSharedIndex.isDir(forPath: trimmed) { return shDir }
+        if let mfDir = fastMacFolderIndex.isDir(forPath: trimmed) { return mfDir }
         if availableAccounts.contains(where: {
             trimmed == $0.rootPath || trimmed == $0.myDrivePath || trimmed == $0.sharedDrivesPath || trimmed == $0.shortcutTargetsPath
         }) {
@@ -2641,7 +3377,6 @@ final class GoogleDriveIndexService: ObservableObject {
         let pinnedPathSet = Set(pinnedItems.compactMap(\.path))
 
         let validMyDrivePrefixes = activeAccounts.compactMap(\.myDrivePath)
-        let knownFolderSet = fastFolderIndex.knownPaths
         let sorted = history.sorted {
             if $0.value.last_used != $1.value.last_used {
                 return $0.value.last_used > $1.value.last_used
@@ -2657,7 +3392,7 @@ final class GoogleDriveIndexService: ObservableObject {
             if !validMyDrivePrefixes.isEmpty, !validMyDrivePrefixes.contains(where: { hPath.hasPrefix($0) }) {
                 continue
             }
-            if !knownFolderSet.isEmpty && !knownFolderSet.contains(hPath) {
+            if !fastFolderIndex.isEmpty && !fastFolderIndex.containsPath(hPath) {
                 continue
             }
             let sub = "\(L("Mở gần đây (\(rec.count) lần)", "Recently opened (\(rec.count) times)")) ‹ \(formatHierarchicalSubtitle(hPath))"
@@ -2675,14 +3410,15 @@ final class GoogleDriveIndexService: ObservableObject {
         }
 
         if items.count == pinnedItems.count {
-            for entry in folderEntries where entry.cleanSegs.count <= 1 && !pinnedPathSet.contains(entry.path) {
+            let roots = fastFolderIndex.rootFolderPaths(excluding: pinnedPathSet, limit: max(1, targetLimit - items.count))
+            for rootPath in roots {
                 items.append(SearchResultItem(
-                    id: "root:\(entry.path)",
-                    title: (entry.path as NSString).lastPathComponent,
-                    subtitle: formatHierarchicalSubtitle(entry.path),
-                    path: entry.path,
+                    id: "root:\(rootPath)",
+                    title: (rootPath as NSString).lastPathComponent,
+                    subtitle: formatHierarchicalSubtitle(rootPath),
+                    path: rootPath,
                     isDirectory: true,
-                    kind: .driveFolder(path: entry.path),
+                    kind: .driveFolder(path: rootPath),
                     badge: nil,
                     sfSymbolFallback: "folder.fill"
                 ))
@@ -2695,7 +3431,6 @@ final class GoogleDriveIndexService: ObservableObject {
     func recentSharedItems(limit: Int = 9) -> [SearchResultItem] {
         let sdPrefixes = activeAccounts.compactMap(\.sharedDrivesPath)
         let stPrefixes = activeAccounts.compactMap(\.shortcutTargetsPath)
-        let sharedByPath = fastSharedIndex.byPath
         let sorted = history.sorted { $0.value.last_used > $1.value.last_used }
         var items: [SearchResultItem] = []
 
@@ -2703,7 +3438,7 @@ final class GoogleDriveIndexService: ObservableObject {
             let inSD = sdPrefixes.contains { hPath.hasPrefix($0) }
             let inST = stPrefixes.contains { hPath.hasPrefix($0) }
             guard inSD || inST else { continue }
-            let isDir = sharedByPath[hPath]?.isDir ?? true
+            let isDir = fastSharedIndex.isDir(forPath: hPath) ?? true
 
             let sub = "\(L("Mở gần đây (\(rec.count) lần)", "Recently opened (\(rec.count) times)")) ‹ \(formatHierarchicalSubtitle(hPath))"
             items.append(SearchResultItem(
@@ -2720,7 +3455,7 @@ final class GoogleDriveIndexService: ObservableObject {
         }
 
         if items.isEmpty {
-            for entry in sharedEntries.prefix(limit) {
+            for entry in fastSharedIndex.prefixEntries(limit: limit) {
                 items.append(SearchResultItem(
                     id: "sd:\(entry.path)",
                     title: (entry.path as NSString).lastPathComponent,
@@ -2736,48 +3471,7 @@ final class GoogleDriveIndexService: ObservableObject {
         return items
     }
 
-    // MARK: - Ultra-Fast ASCII Byte Search (< 1.2ms on 90,000 folders, Off-Main-Thread Capable)
-
-    @inline(__always)
-    private nonisolated static func asciiContains(_ hay: [UInt8], _ needle: [UInt8]) -> Bool {
-        let nLen = needle.count
-        let hLen = hay.count
-        if nLen == 0 { return true }
-        if nLen > hLen { return false }
-        let first = needle[0]
-        let maxStart = hLen - nLen
-        var i = 0
-        while i <= maxStart {
-            if hay[i] == first {
-                var j = 1
-                while j < nLen && hay[i + j] == needle[j] {
-                    j += 1
-                }
-                if j == nLen { return true }
-            }
-            i += 1
-        }
-        return false
-    }
-
-    @inline(__always)
-    private nonisolated static func asciiHasPrefix(_ hay: [UInt8], from startIdx: Int, _ needle: [UInt8]) -> Bool {
-        let nLen = needle.count
-        if startIdx + nLen > hay.count { return false }
-        var j = 0
-        while j < nLen {
-            if hay[startIdx + j] != needle[j] { return false }
-            j += 1
-        }
-        return true
-    }
-
-    @inline(__always)
-    private nonisolated static func asciiEquals(_ hay: [UInt8], from startIdx: Int, _ needle: [UInt8]) -> Bool {
-        let rem = hay.count - startIdx
-        if rem != needle.count { return false }
-        return asciiHasPrefix(hay, from: startIdx, needle)
-    }
+    // MARK: - Ultra-Fast Zero-Allocation Pointer Slice Search (< 2ms on 200k records, §4.4, §5.2)
 
     @inline(__always)
     private nonisolated static func firstNonDigitIndex(_ bytes: [UInt8]) -> Int {
@@ -2785,6 +3479,78 @@ final class GoogleDriveIndexService: ObservableObject {
         let count = bytes.count
         while idx < count && bytes[idx] >= 48 && bytes[idx] <= 57 {
             idx += 1
+        }
+        return idx
+    }
+
+    @inline(__always)
+    private nonisolated static func asciiContainsSlice(
+        _ base: UnsafePointer<UInt8>,
+        _ offset: Int,
+        _ len: Int,
+        _ needle: [UInt8]
+    ) -> Bool {
+        let nLen = needle.count
+        if nLen == 0 { return true }
+        if nLen > len { return false }
+        let first = needle[0]
+        let maxStart = len &- nLen
+        var i = 0
+        while i <= maxStart {
+            if base[offset &+ i] == first {
+                var j = 1
+                while j < nLen && base[offset &+ i &+ j] == needle[j] {
+                    j &+= 1
+                }
+                if j == nLen { return true }
+            }
+            i &+= 1
+        }
+        return false
+    }
+
+    @inline(__always)
+    private nonisolated static func asciiHasPrefixSlice(
+        _ base: UnsafePointer<UInt8>,
+        _ offset: Int,
+        _ len: Int,
+        from startIdx: Int,
+        _ needle: [UInt8]
+    ) -> Bool {
+        let nLen = needle.count
+        if startIdx &+ nLen > len { return false }
+        var j = 0
+        while j < nLen {
+            if base[offset &+ startIdx &+ j] != needle[j] { return false }
+            j &+= 1
+        }
+        return true
+    }
+
+    @inline(__always)
+    private nonisolated static func asciiEqualsSlice(
+        _ base: UnsafePointer<UInt8>,
+        _ offset: Int,
+        _ len: Int,
+        from startIdx: Int,
+        _ needle: [UInt8]
+    ) -> Bool {
+        let rem = len &- startIdx
+        if rem != needle.count { return false }
+        return asciiHasPrefixSlice(base, offset, len, from: startIdx, needle)
+    }
+
+    @inline(__always)
+    private nonisolated static func firstNonDigitOffset(
+        _ base: UnsafePointer<UInt8>,
+        _ offset: Int,
+        _ len: Int
+    ) -> Int {
+        var idx = 0
+        while idx < len {
+            let b = base[offset &+ idx]
+            if b < 48 || b > 57 { break }
+            idx &+= 1
         }
         return idx
     }
@@ -2805,7 +3571,6 @@ final class GoogleDriveIndexService: ObservableObject {
             return
         }
         guard let worst = topK.last, isBetter(candidate, worst) else { return }
-        // Binary search insertion point in sorted `topK`
         var low = 0
         var high = topK.count - 1
         while low < high {
@@ -2827,20 +3592,21 @@ final class GoogleDriveIndexService: ObservableObject {
         maxResults: Int
     ) -> [(path: String, historyCount: Int)] {
         let cleanTokens = tokens.map(cleanString).filter { !$0.isEmpty }
-        guard !cleanTokens.isEmpty else { return [] }
+        guard !cleanTokens.isEmpty && !fastIndex.isEmpty else { return [] }
         let tokenBytes = cleanTokens.map { Array($0.utf8) }
         let queryKey = cleanTokens.joined(separator: " ")
-        let totalRecs = fastIndex.records.count
+        let totalRecs = fastIndex.count
 
         let numTokens = tokenBytes.count
         let lastTokIdx = numTokens - 1
+        let hasHistory = !historySnapshot.isEmpty
 
         struct ScoredHit {
             let totalScore: Int
             let hasHistory: Bool
             let negDepth: Int
             let negLen: Int
-            let path: String
+            let recIdx: Int
             let historyCount: Int
         }
 
@@ -2867,85 +3633,115 @@ final class GoogleDriveIndexService: ObservableObject {
         var matchedIndices: [Int] = []
         matchedIndices.reserveCapacity(512)
 
-        func evaluateRecord(at recIdx: Int) {
-            let rec = fastIndex.records[recIdx]
-            let cleanSegs = rec.cleanBytes
-            let acrSegs = rec.acrBytes
-            let numSegs = cleanSegs.count
-            if numSegs == 0 { return }
+        fastIndex.blob.withUnsafeBytes { rawBuf in
+            guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
 
-            let leafIdx = numSegs - 1
-            var curS = 0
-            var matchedAll = true
-            var matchScore = 0
-            var leafMatched = false
+            func evaluateRecord(at recIdx: Int) {
+                let recOff = BinaryIndexCodec.readU32LE(base, 4 &+ recIdx &* 4)
+                let pLen = BinaryIndexCodec.readU16LE(base, recOff)
+                let pStart = recOff &+ 2
+                var pos = pStart &+ pLen
+                let numSegs = Int(base[pos])
+                pos &+= 1
+                if numSegs == 0 { return }
 
-            for tokIdx in 0..<numTokens {
-                let tok = tokenBytes[tokIdx]
-                var foundS = -1
-                let isLastTok = (tokIdx == lastTokIdx)
+                let leafIdx = numSegs &- 1
+                var curS = 0
+                var matchedAll = true
+                var matchScore = 0
+                var leafMatched = false
 
-                for sIdx in curS..<numSegs {
-                    let seg = cleanSegs[sIdx]
-                    let acr = sIdx < acrSegs.count ? acrSegs[sIdx] : []
+                for tokIdx in 0..<numTokens {
+                    let tok = tokenBytes[tokIdx]
+                    var foundS = -1
+                    let isLastTok = (tokIdx == lastTokIdx)
 
-                    let segMatch = asciiContains(seg, tok)
-                    let acrMatch = !acr.isEmpty && asciiHasPrefix(acr, from: 0, tok)
+                    for sIdx in curS..<numSegs {
+                        let cLen = Int(base[pos])
+                        let cOff = pos &+ 1
+                        pos = cOff &+ cLen
+                        let aLen = Int(base[pos])
+                        let aOff = pos &+ 1
+                        pos = aOff &+ aLen
 
-                    if segMatch || acrMatch {
-                        foundS = sIdx
-                        if isLastTok && sIdx == leafIdx {
-                            leafMatched = true
+                        let segMatch = asciiContainsSlice(base, cOff, cLen, tok)
+                        let acrMatch = aLen > 0 && asciiHasPrefixSlice(base, aOff, aLen, from: 0, tok)
+
+                        if segMatch || acrMatch {
+                            foundS = sIdx
+                            if isLastTok && sIdx == leafIdx {
+                                leafMatched = true
+                            }
+                            let stripIdx = firstNonDigitOffset(base, cOff, cLen)
+                            let sc: Int
+                            if asciiEqualsSlice(base, cOff, cLen, from: stripIdx, tok)
+                                || asciiEqualsSlice(base, cOff, cLen, from: 0, tok)
+                                || (aLen > 0 && asciiEqualsSlice(base, aOff, aLen, from: 0, tok)) {
+                                sc = 100
+                            } else if asciiHasPrefixSlice(base, cOff, cLen, from: stripIdx, tok)
+                                || asciiHasPrefixSlice(base, cOff, cLen, from: 0, tok)
+                                || acrMatch {
+                                sc = 80
+                            } else {
+                                sc = 50
+                            }
+                            matchScore &+= sc
+                            break
                         }
+                    }
 
-                        let stripIdx = firstNonDigitIndex(seg)
-                        let sc: Int
-                        if asciiEquals(seg, from: stripIdx, tok) || asciiEquals(seg, from: 0, tok) || (!acr.isEmpty && asciiEquals(acr, from: 0, tok)) {
-                            sc = 100
-                        } else if asciiHasPrefix(seg, from: stripIdx, tok) || asciiHasPrefix(seg, from: 0, tok) || acrMatch {
-                            sc = 80
-                        } else {
-                            sc = 50
+                    if foundS != -1 {
+                        // Next token can match the SAME segment (`foundS`), so rewind `pos` to the start of `foundS` if there are more tokens
+                        if tokIdx < lastTokIdx {
+                            pos = pStart &+ pLen &+ 1
+                            for _ in 0..<foundS {
+                                let cL = Int(base[pos])
+                                pos &+= 1 &+ cL
+                                let aL = Int(base[pos])
+                                pos &+= 1 &+ aL
+                            }
                         }
-                        matchScore += sc
+                        curS = foundS
+                    } else {
+                        matchedAll = false
                         break
                     }
                 }
 
-                if foundS != -1 {
-                    curS = foundS
-                } else {
-                    matchedAll = false
-                    break
+                if matchedAll {
+                    if matchedIndices.count <= 5_000 {
+                        matchedIndices.append(recIdx)
+                    }
+                    if leafMatched { matchScore &+= 1000 }
+                    var hCount = 0
+                    var histBoost = 0
+                    if hasHistory {
+                        let pStr = BinaryIndexCodec.decodeUTF8(base, pStart, pLen)
+                        if let hRec = historySnapshot[pStr] {
+                            hCount = hRec.count
+                            histBoost = min(150 + hCount * 15, 300)
+                        }
+                    }
+                    let hit = ScoredHit(
+                        totalScore: matchScore &+ histBoost,
+                        hasHistory: histBoost > 0,
+                        negDepth: -numSegs,
+                        negLen: -pLen,
+                        recIdx: recIdx,
+                        historyCount: hCount
+                    )
+                    insertBoundedTopK(hit, into: &topHits, limit: maxResults, isBetter: isBetter)
                 }
             }
 
-            if matchedAll {
-                if matchedIndices.count <= 5_000 {
-                    matchedIndices.append(recIdx)
+            if let sub = cachedSubIndices {
+                for idx in sub where idx < totalRecs {
+                    evaluateRecord(at: idx)
                 }
-                if leafMatched { matchScore += 1000 }
-                let hRec = historySnapshot[rec.path]
-                let histBoost = hRec.map { min(150 + $0.count * 15, 300) } ?? 0
-                let hit = ScoredHit(
-                    totalScore: matchScore + histBoost,
-                    hasHistory: histBoost > 0,
-                    negDepth: -numSegs,
-                    negLen: -rec.path.utf8.count,
-                    path: rec.path,
-                    historyCount: hRec?.count ?? 0
-                )
-                insertBoundedTopK(hit, into: &topHits, limit: maxResults, isBetter: isBetter)
-            }
-        }
-
-        if let sub = cachedSubIndices {
-            for idx in sub where idx < totalRecs {
-                evaluateRecord(at: idx)
-            }
-        } else {
-            for idx in 0..<totalRecs {
-                evaluateRecord(at: idx)
+            } else {
+                for idx in 0..<totalRecs {
+                    evaluateRecord(at: idx)
+                }
             }
         }
 
@@ -2963,7 +3759,7 @@ final class GoogleDriveIndexService: ObservableObject {
         if topHits.count < maxResults {
             topHits.sort(by: isBetter)
         }
-        return topHits.map { ($0.path, $0.historyCount) }
+        return topHits.map { (fastIndex.path(at: $0.recIdx), $0.historyCount) }
     }
 
     nonisolated static func evaluateSharedSearchHits(
@@ -2973,20 +3769,21 @@ final class GoogleDriveIndexService: ObservableObject {
         maxResults: Int
     ) -> [(entry: SharedDriveEntry, historyCount: Int)] {
         let cleanTokens = tokens.map(cleanString).filter { !$0.isEmpty }
-        guard !cleanTokens.isEmpty else { return [] }
+        guard !cleanTokens.isEmpty && !fastIndex.isEmpty else { return [] }
         let tokenBytes = cleanTokens.map { Array($0.utf8) }
         let queryKey = cleanTokens.joined(separator: " ")
-        let totalRecs = fastIndex.records.count
+        let totalRecs = fastIndex.count
 
         let numTokens = tokenBytes.count
         let lastTokIdx = numTokens - 1
+        let hasHistory = !historySnapshot.isEmpty
 
         struct ScoredShared {
             let totalScore: Int
             let hasHistory: Bool
             let negDepth: Int
             let negLen: Int
-            let entry: SharedDriveEntry
+            let recIdx: Int
             let historyCount: Int
         }
 
@@ -3013,78 +3810,112 @@ final class GoogleDriveIndexService: ObservableObject {
         var matchedIndices: [Int] = []
         matchedIndices.reserveCapacity(512)
 
-        func evaluateRecord(at recIdx: Int) {
-            let rec = fastIndex.records[recIdx]
-            let cleanSegs = rec.cleanBytes
-            let acrSegs = rec.acrBytes
-            let numSegs = cleanSegs.count
-            if numSegs == 0 { return }
+        fastIndex.blob.withUnsafeBytes { rawBuf in
+            guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
 
-            let leafIdx = numSegs - 1
-            var curS = 0
-            var matchedAll = true
-            var matchScore = 0
-            var leafMatched = false
+            func evaluateRecord(at recIdx: Int) {
+                let recOff = BinaryIndexCodec.readU32LE(base, 4 &+ recIdx &* 4)
+                let pLen = BinaryIndexCodec.readU16LE(base, recOff)
+                let pStart = recOff &+ 2
+                var pos = pStart &+ pLen &+ 1 // skip isDir
+                let dLen = BinaryIndexCodec.readU16LE(base, pos)
+                pos &+= 2 &+ dLen
+                let segTablePos = pos
+                let numSegs = Int(base[pos])
+                pos &+= 1
+                if numSegs == 0 { return }
 
-            for tokIdx in 0..<numTokens {
-                let tok = tokenBytes[tokIdx]
-                var foundS = -1
-                let isLastTok = (tokIdx == lastTokIdx)
+                let leafIdx = numSegs &- 1
+                var curS = 0
+                var matchedAll = true
+                var matchScore = 0
+                var leafMatched = false
 
-                for sIdx in curS..<numSegs {
-                    let seg = cleanSegs[sIdx]
-                    let acr = sIdx < acrSegs.count ? acrSegs[sIdx] : []
-                    let segMatch = asciiContains(seg, tok)
-                    let acrMatch = !acr.isEmpty && asciiHasPrefix(acr, from: 0, tok)
+                for tokIdx in 0..<numTokens {
+                    let tok = tokenBytes[tokIdx]
+                    var foundS = -1
+                    let isLastTok = (tokIdx == lastTokIdx)
 
-                    if segMatch || acrMatch {
-                        foundS = sIdx
-                        if isLastTok && sIdx == leafIdx { leafMatched = true }
-                        let stripIdx = firstNonDigitIndex(seg)
-                        if asciiEquals(seg, from: stripIdx, tok) || asciiEquals(seg, from: 0, tok) || (!acr.isEmpty && asciiEquals(acr, from: 0, tok)) {
-                            matchScore += 100
-                        } else if asciiHasPrefix(seg, from: stripIdx, tok) || asciiHasPrefix(seg, from: 0, tok) || acrMatch {
-                            matchScore += 80
-                        } else {
-                            matchScore += 50
+                    for sIdx in curS..<numSegs {
+                        let cLen = Int(base[pos])
+                        let cOff = pos &+ 1
+                        pos = cOff &+ cLen
+                        let aLen = Int(base[pos])
+                        let aOff = pos &+ 1
+                        pos = aOff &+ aLen
+
+                        let segMatch = asciiContainsSlice(base, cOff, cLen, tok)
+                        let acrMatch = aLen > 0 && asciiHasPrefixSlice(base, aOff, aLen, from: 0, tok)
+
+                        if segMatch || acrMatch {
+                            foundS = sIdx
+                            if isLastTok && sIdx == leafIdx { leafMatched = true }
+                            let stripIdx = firstNonDigitOffset(base, cOff, cLen)
+                            if asciiEqualsSlice(base, cOff, cLen, from: stripIdx, tok)
+                                || asciiEqualsSlice(base, cOff, cLen, from: 0, tok)
+                                || (aLen > 0 && asciiEqualsSlice(base, aOff, aLen, from: 0, tok)) {
+                                matchScore &+= 100
+                            } else if asciiHasPrefixSlice(base, cOff, cLen, from: stripIdx, tok)
+                                || asciiHasPrefixSlice(base, cOff, cLen, from: 0, tok)
+                                || acrMatch {
+                                matchScore &+= 80
+                            } else {
+                                matchScore &+= 50
+                            }
+                            break
                         }
+                    }
+                    if foundS != -1 {
+                        if tokIdx < lastTokIdx {
+                            pos = segTablePos &+ 1
+                            for _ in 0..<foundS {
+                                let cL = Int(base[pos])
+                                pos &+= 1 &+ cL
+                                let aL = Int(base[pos])
+                                pos &+= 1 &+ aL
+                            }
+                        }
+                        curS = foundS
+                    } else {
+                        matchedAll = false
                         break
                     }
                 }
-                if foundS != -1 {
-                    curS = foundS
-                } else {
-                    matchedAll = false
-                    break
+
+                if matchedAll {
+                    if matchedIndices.count <= 5_000 {
+                        matchedIndices.append(recIdx)
+                    }
+                    if leafMatched { matchScore &+= 1000 }
+                    var hCount = 0
+                    var histBoost = 0
+                    if hasHistory {
+                        let pStr = BinaryIndexCodec.decodeUTF8(base, pStart, pLen)
+                        if let hRec = historySnapshot[pStr] {
+                            hCount = hRec.count
+                            histBoost = min(150 + hCount * 15, 300)
+                        }
+                    }
+                    let hit = ScoredShared(
+                        totalScore: matchScore &+ histBoost,
+                        hasHistory: histBoost > 0,
+                        negDepth: -numSegs,
+                        negLen: -pLen,
+                        recIdx: recIdx,
+                        historyCount: hCount
+                    )
+                    insertBoundedTopK(hit, into: &topHits, limit: maxResults, isBetter: isBetter)
                 }
             }
 
-            if matchedAll {
-                if matchedIndices.count <= 5_000 {
-                    matchedIndices.append(recIdx)
+            if let sub = cachedSubIndices {
+                for idx in sub where idx < totalRecs {
+                    evaluateRecord(at: idx)
                 }
-                if leafMatched { matchScore += 1000 }
-                let hRec = historySnapshot[rec.entry.path]
-                let histBoost = hRec.map { min(150 + $0.count * 15, 300) } ?? 0
-                let hit = ScoredShared(
-                    totalScore: matchScore + histBoost,
-                    hasHistory: histBoost > 0,
-                    negDepth: -numSegs,
-                    negLen: -rec.entry.path.utf8.count,
-                    entry: rec.entry,
-                    historyCount: hRec?.count ?? 0
-                )
-                insertBoundedTopK(hit, into: &topHits, limit: maxResults, isBetter: isBetter)
-            }
-        }
-
-        if let sub = cachedSubIndices {
-            for idx in sub where idx < totalRecs {
-                evaluateRecord(at: idx)
-            }
-        } else {
-            for idx in 0..<totalRecs {
-                evaluateRecord(at: idx)
+            } else {
+                for idx in 0..<totalRecs {
+                    evaluateRecord(at: idx)
+                }
             }
         }
 
@@ -3102,7 +3933,7 @@ final class GoogleDriveIndexService: ObservableObject {
         if topHits.count < maxResults {
             topHits.sort(by: isBetter)
         }
-        return topHits.map { ($0.entry, $0.historyCount) }
+        return topHits.map { (fastIndex.entry(at: $0.recIdx), $0.historyCount) }
     }
 
     func defaultInstalledAppResultItems(limit: Int = 80) -> [SearchResultItem] {
@@ -3414,20 +4245,14 @@ final class GoogleDriveIndexService: ObservableObject {
         var combined: [(path: String, isDir: Bool)] = []
         var seen = Set<String>()
 
-        if let folderChildren = fastFolderIndex.childrenByParent[cleanParent] {
-            for p in folderChildren where seen.insert(p).inserted {
-                combined.append((p, true))
-            }
+        for p in fastFolderIndex.children(ofParent: cleanParent) where seen.insert(p).inserted {
+            combined.append((p, true))
         }
-        if let sharedChildren = fastSharedIndex.childrenByParent[cleanParent] {
-            for item in sharedChildren where seen.insert(item.path).inserted {
-                combined.append(item)
-            }
+        for item in fastSharedIndex.children(ofParent: cleanParent) where seen.insert(item.path).inserted {
+            combined.append(item)
         }
-        if let macChildren = fastMacFolderIndex.childrenByParent[cleanParent] {
-            for item in macChildren where seen.insert(item.path).inserted {
-                combined.append(item)
-            }
+        for item in fastMacFolderIndex.children(ofParent: cleanParent) where seen.insert(item.path).inserted {
+            combined.append(item)
         }
 
         if !tokens.isEmpty {
@@ -3658,7 +4483,7 @@ final class GoogleDriveIndexService: ObservableObject {
         }
 
         // 3. Fill with indexed files
-        for f in fileEntries.prefix(limit) where seen.insert(f.path).inserted {
+        for f in fastFileIndex.prefixEntries(limit: limit) where seen.insert(f.path).inserted {
             results.append(SearchResultItem(
                 id: "ffile:idx:\(f.path)",
                 title: (f.path as NSString).lastPathComponent,
@@ -3700,16 +4525,17 @@ final class GoogleDriveIndexService: ObservableObject {
             let strippedDot = raw.hasPrefix(".") ? String(raw.dropFirst()) : raw
             return cleanString(strippedDot)
         }.filter { !$0.isEmpty }
-        guard !cleanedTokens.isEmpty else { return [] }
+        guard !cleanedTokens.isEmpty && !fastIndex.isEmpty else { return [] }
 
         let tokenBytes = cleanedTokens.map { Array($0.utf8) }
         let queryKey = cleanedTokens.joined(separator: " ")
-        let totalRecs = fastIndex.records.count
+        let totalRecs = fastIndex.count
+        let hasPinnedOrHistory = !pinnedSet.isEmpty || !historySnapshot.isEmpty
 
         struct ScoredFileHit {
             let score: Int
             let negLen: Int
-            let entry: DriveFileEntry
+            let recIdx: Int
             let historyCount: Int
             let isPinned: Bool
         }
@@ -3735,58 +4561,89 @@ final class GoogleDriveIndexService: ObservableObject {
         var matchedIndices: [Int] = []
         matchedIndices.reserveCapacity(512)
 
-        func evaluateRecord(at recIdx: Int) {
-            let rec = fastIndex.records[recIdx]
-            var totalScore = 0
-            var nameMatchCount = 0
-            var allMatched = true
+        fastIndex.blob.withUnsafeBytes { rawBuf in
+            guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
 
-            for tok in tokenBytes {
-                if !rec.extBytes.isEmpty && asciiEquals(rec.extBytes, from: 0, tok) {
-                    totalScore += 950
-                    nameMatchCount += 1
-                } else if asciiEquals(rec.cleanNameBytes, from: 0, tok) || (!rec.acrBytes.isEmpty && asciiEquals(rec.acrBytes, from: 0, tok)) {
-                    totalScore += 1_300
-                    nameMatchCount += 1
-                } else if asciiHasPrefix(rec.cleanNameBytes, from: 0, tok) || (!rec.acrBytes.isEmpty && asciiHasPrefix(rec.acrBytes, from: 0, tok)) {
-                    totalScore += 1_050
-                    nameMatchCount += 1
-                } else if asciiContains(rec.cleanNameBytes, tok) {
-                    totalScore += 820
-                    nameMatchCount += 1
-                } else if !rec.cleanParentBytes.isEmpty && asciiContains(rec.cleanParentBytes, tok) {
-                    totalScore += 320
-                } else {
-                    allMatched = false
-                    break
+            func evaluateRecord(at recIdx: Int) {
+                let recOff = BinaryIndexCodec.readU32LE(base, 4 &+ recIdx &* 4)
+                let pLen = BinaryIndexCodec.readU16LE(base, recOff)
+                let pStart = recOff &+ 2
+                var pos = pStart &+ pLen
+
+                let extLen = Int(base[pos])
+                let extOff = pos &+ 1
+                pos = extOff &+ extLen
+
+                let cLen = Int(base[pos])
+                let cOff = pos &+ 1
+                pos = cOff &+ cLen
+
+                let aLen = Int(base[pos])
+                let aOff = pos &+ 1
+                pos = aOff &+ aLen
+
+                let parLen = Int(base[pos])
+                let parOff = pos &+ 1
+
+                var totalScore = 0
+                var nameMatchCount = 0
+                var allMatched = true
+
+                for tok in tokenBytes {
+                    if extLen > 0 && asciiEqualsSlice(base, extOff, extLen, from: 0, tok) {
+                        totalScore &+= 950
+                        nameMatchCount &+= 1
+                    } else if asciiEqualsSlice(base, cOff, cLen, from: 0, tok)
+                        || (aLen > 0 && asciiEqualsSlice(base, aOff, aLen, from: 0, tok)) {
+                        totalScore &+= 1_300
+                        nameMatchCount &+= 1
+                    } else if asciiHasPrefixSlice(base, cOff, cLen, from: 0, tok)
+                        || (aLen > 0 && asciiHasPrefixSlice(base, aOff, aLen, from: 0, tok)) {
+                        totalScore &+= 1_050
+                        nameMatchCount &+= 1
+                    } else if asciiContainsSlice(base, cOff, cLen, tok) {
+                        totalScore &+= 820
+                        nameMatchCount &+= 1
+                    } else if parLen > 0 && asciiContainsSlice(base, parOff, parLen, tok) {
+                        totalScore &+= 320
+                    } else {
+                        allMatched = false
+                        break
+                    }
                 }
+
+                guard allMatched && nameMatchCount > 0 else { return }
+
+                if matchedIndices.count <= 5_000 {
+                    matchedIndices.append(recIdx)
+                }
+                var isPin = false
+                var hCount = 0
+                var boost = 0
+                if hasPinnedOrHistory {
+                    let pStr = BinaryIndexCodec.decodeUTF8(base, pStart, pLen)
+                    isPin = pinnedSet.contains(pStr)
+                    hCount = historySnapshot[pStr]?.count ?? 0
+                    boost = (isPin ? 900 : 0) + min(320, hCount * 40)
+                }
+                let hit = ScoredFileHit(
+                    score: totalScore &+ boost,
+                    negLen: -cLen,
+                    recIdx: recIdx,
+                    historyCount: hCount,
+                    isPinned: isPin
+                )
+                insertBoundedTopK(hit, into: &topHits, limit: maxResults, isBetter: isBetter)
             }
 
-            guard allMatched && nameMatchCount > 0 else { return }
-
-            if matchedIndices.count <= 5_000 {
-                matchedIndices.append(recIdx)
-            }
-            let isPin = pinnedSet.contains(rec.entry.path)
-            let hCount = historySnapshot[rec.entry.path]?.count ?? 0
-            let boost = (isPin ? 900 : 0) + min(320, hCount * 40)
-            let hit = ScoredFileHit(
-                score: totalScore + boost,
-                negLen: -rec.entry.cleanName.utf8.count,
-                entry: rec.entry,
-                historyCount: hCount,
-                isPinned: isPin
-            )
-            insertBoundedTopK(hit, into: &topHits, limit: maxResults, isBetter: isBetter)
-        }
-
-        if let sub = cachedSubIndices {
-            for idx in sub where idx < totalRecs {
-                evaluateRecord(at: idx)
-            }
-        } else {
-            for idx in 0..<totalRecs {
-                evaluateRecord(at: idx)
+            if let sub = cachedSubIndices {
+                for idx in sub where idx < totalRecs {
+                    evaluateRecord(at: idx)
+                }
+            } else {
+                for idx in 0..<totalRecs {
+                    evaluateRecord(at: idx)
+                }
             }
         }
 
@@ -3804,7 +4661,7 @@ final class GoogleDriveIndexService: ObservableObject {
         if topHits.count < maxResults {
             topHits.sort(by: isBetter)
         }
-        return topHits.map { ($0.entry, $0.historyCount, $0.isPinned) }
+        return topHits.map { (fastIndex.entry(at: $0.recIdx), $0.historyCount, $0.isPinned) }
     }
 
     func buildFileSearchResultItems(
@@ -3985,11 +4842,12 @@ final class GoogleDriveIndexService: ObservableObject {
             let strippedDot = raw.hasPrefix(".") ? String(raw.dropFirst()) : raw
             return cleanString(strippedDot)
         }.filter { !$0.isEmpty }
-        guard !cleanedTokens.isEmpty else { return [] }
+        guard !cleanedTokens.isEmpty && !fastIndex.isEmpty else { return [] }
 
         let tokenBytes = cleanedTokens.map { Array($0.utf8) }
         let numTokens = tokenBytes.count
         let lastTokIdx = numTokens - 1
+        let totalRecs = fastIndex.count
 
         struct ScoredMacHit {
             let totalScore: Int
@@ -3997,7 +4855,7 @@ final class GoogleDriveIndexService: ObservableObject {
             let hasHistory: Bool
             let negDepth: Int
             let negLen: Int
-            let entry: SharedDriveEntry
+            let recIdx: Int
             let historyCount: Int
             let isPinned: Bool
         }
@@ -4005,115 +4863,151 @@ final class GoogleDriveIndexService: ObservableObject {
         var hits: [ScoredMacHit] = []
         hits.reserveCapacity(128)
 
-        for rec in fastIndex.records {
-            let cleanSegs = rec.cleanBytes
-            let acrSegs = rec.acrBytes
-            let numSegs = cleanSegs.count
-            if numSegs == 0 { continue }
+        fastIndex.blob.withUnsafeBytes { rawBuf in
+            guard let base = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
 
-            let leafIdx = numSegs - 1
+            for recIdx in 0..<totalRecs {
+                let recOff = BinaryIndexCodec.readU32LE(base, 4 &+ recIdx &* 4)
+                let pLen = BinaryIndexCodec.readU16LE(base, recOff)
+                let pStart = recOff &+ 2
+                let isDir = base[pStart &+ pLen] != 0
+                var pos = pStart &+ pLen &+ 1
+                let dLen = BinaryIndexCodec.readU16LE(base, pos)
+                pos &+= 2 &+ dLen
+                let numSegs = Int(base[pos])
+                pos &+= 1
+                if numSegs == 0 { continue }
 
-            // Pass 1: Ordered hierarchical matching (e.g. `2026 baocao` or `baocao pdf`)
-            var curS = 0
-            var orderedMatchedAll = true
-            var matchScore = 0
-            var leafMatched = false
-
-            for tokIdx in 0..<numTokens {
-                let tok = tokenBytes[tokIdx]
-                var foundS = -1
-                let isLastTok = (tokIdx == lastTokIdx)
-
-                for sIdx in curS..<numSegs {
-                    let seg = cleanSegs[sIdx]
-                    let acr = sIdx < acrSegs.count ? acrSegs[sIdx] : []
-                    let segMatch = asciiContains(seg, tok)
-                    let acrMatch = !acr.isEmpty && asciiHasPrefix(acr, from: 0, tok)
-
-                    if segMatch || acrMatch {
-                        foundS = sIdx
-                        if sIdx == leafIdx { leafMatched = true }
-                        let stripIdx = firstNonDigitIndex(seg)
-                        if asciiEquals(seg, from: stripIdx, tok) || asciiEquals(seg, from: 0, tok) || (!acr.isEmpty && asciiEquals(acr, from: 0, tok)) {
-                            matchScore += (isLastTok && sIdx == leafIdx) ? 140 : 100
-                        } else if asciiHasPrefix(seg, from: stripIdx, tok) || asciiHasPrefix(seg, from: 0, tok) || acrMatch {
-                            matchScore += 85
-                        } else {
-                            matchScore += 55
-                        }
-                        break
-                    }
+                var cOffsets = [Int](repeating: 0, count: numSegs)
+                var cLens = [Int](repeating: 0, count: numSegs)
+                var aOffsets = [Int](repeating: 0, count: numSegs)
+                var aLens = [Int](repeating: 0, count: numSegs)
+                for s in 0..<numSegs {
+                    let cL = Int(base[pos])
+                    cOffsets[s] = pos &+ 1
+                    cLens[s] = cL
+                    pos &+= 1 &+ cL
+                    let aL = Int(base[pos])
+                    aOffsets[s] = pos &+ 1
+                    aLens[s] = aL
+                    pos &+= 1 &+ aL
                 }
-                if foundS != -1 {
-                    curS = foundS
-                } else {
-                    orderedMatchedAll = false
-                    break
-                }
-            }
 
-            if orderedMatchedAll {
-                matchScore += 140 // Bonus for preserving folder -> child order
-            } else if numTokens > 1 {
-                // Pass 2: Unordered multi-segment matching (e.g. `baocao 2026` where filename is typed before parent folder)
-                var unorderedScore = 0
-                var unorderedLeaf = false
-                var allFound = true
+                let leafIdx = numSegs &- 1
 
-                for tok in tokenBytes {
-                    var bestSegScore = 0
-                    for sIdx in stride(from: leafIdx, through: 0, by: -1) {
-                        let seg = cleanSegs[sIdx]
-                        let acr = sIdx < acrSegs.count ? acrSegs[sIdx] : []
-                        let segMatch = asciiContains(seg, tok)
-                        let acrMatch = !acr.isEmpty && asciiHasPrefix(acr, from: 0, tok)
+                // Pass 1: Ordered hierarchical matching
+                var curS = 0
+                var orderedMatchedAll = true
+                var matchScore = 0
+                var leafMatched = false
+
+                for tokIdx in 0..<numTokens {
+                    let tok = tokenBytes[tokIdx]
+                    var foundS = -1
+                    let isLastTok = (tokIdx == lastTokIdx)
+
+                    for sIdx in curS..<numSegs {
+                        let cOff = cOffsets[sIdx]
+                        let cLen = cLens[sIdx]
+                        let aOff = aOffsets[sIdx]
+                        let aLen = aLens[sIdx]
+                        let segMatch = asciiContainsSlice(base, cOff, cLen, tok)
+                        let acrMatch = aLen > 0 && asciiHasPrefixSlice(base, aOff, aLen, from: 0, tok)
+
                         if segMatch || acrMatch {
-                            if sIdx == leafIdx { unorderedLeaf = true }
-                            let stripIdx = firstNonDigitIndex(seg)
-                            if asciiEquals(seg, from: stripIdx, tok) || asciiEquals(seg, from: 0, tok) || (!acr.isEmpty && asciiEquals(acr, from: 0, tok)) {
-                                bestSegScore = 95
-                            } else if asciiHasPrefix(seg, from: stripIdx, tok) || asciiHasPrefix(seg, from: 0, tok) || acrMatch {
-                                bestSegScore = 75
+                            foundS = sIdx
+                            if sIdx == leafIdx { leafMatched = true }
+                            let stripIdx = firstNonDigitOffset(base, cOff, cLen)
+                            if asciiEqualsSlice(base, cOff, cLen, from: stripIdx, tok)
+                                || asciiEqualsSlice(base, cOff, cLen, from: 0, tok)
+                                || (aLen > 0 && asciiEqualsSlice(base, aOff, aLen, from: 0, tok)) {
+                                matchScore &+= (isLastTok && sIdx == leafIdx) ? 140 : 100
+                            } else if asciiHasPrefixSlice(base, cOff, cLen, from: stripIdx, tok)
+                                || asciiHasPrefixSlice(base, cOff, cLen, from: 0, tok)
+                                || acrMatch {
+                                matchScore &+= 85
                             } else {
-                                bestSegScore = 45
+                                matchScore &+= 55
                             }
                             break
                         }
                     }
-                    if bestSegScore > 0 {
-                        unorderedScore += bestSegScore
+                    if foundS != -1 {
+                        curS = foundS
                     } else {
-                        allFound = false
+                        orderedMatchedAll = false
                         break
                     }
                 }
 
-                if allFound && unorderedLeaf {
-                    orderedMatchedAll = true
-                    matchScore = unorderedScore
-                    leafMatched = true
+                if orderedMatchedAll {
+                    matchScore &+= 140
+                } else if numTokens > 1 {
+                    var unorderedScore = 0
+                    var unorderedLeaf = false
+                    var allFound = true
+
+                    for tok in tokenBytes {
+                        var bestSegScore = 0
+                        for sIdx in stride(from: leafIdx, through: 0, by: -1) {
+                            let cOff = cOffsets[sIdx]
+                            let cLen = cLens[sIdx]
+                            let aOff = aOffsets[sIdx]
+                            let aLen = aLens[sIdx]
+                            let segMatch = asciiContainsSlice(base, cOff, cLen, tok)
+                            let acrMatch = aLen > 0 && asciiHasPrefixSlice(base, aOff, aLen, from: 0, tok)
+                            if segMatch || acrMatch {
+                                if sIdx == leafIdx { unorderedLeaf = true }
+                                let stripIdx = firstNonDigitOffset(base, cOff, cLen)
+                                if asciiEqualsSlice(base, cOff, cLen, from: stripIdx, tok)
+                                    || asciiEqualsSlice(base, cOff, cLen, from: 0, tok)
+                                    || (aLen > 0 && asciiEqualsSlice(base, aOff, aLen, from: 0, tok)) {
+                                    bestSegScore = 95
+                                } else if asciiHasPrefixSlice(base, cOff, cLen, from: stripIdx, tok)
+                                    || asciiHasPrefixSlice(base, cOff, cLen, from: 0, tok)
+                                    || acrMatch {
+                                    bestSegScore = 75
+                                } else {
+                                    bestSegScore = 45
+                                }
+                                break
+                            }
+                        }
+                        if bestSegScore > 0 {
+                            unorderedScore &+= bestSegScore
+                        } else {
+                            allFound = false
+                            break
+                        }
+                    }
+
+                    if allFound && unorderedLeaf {
+                        orderedMatchedAll = true
+                        matchScore = unorderedScore
+                        leafMatched = true
+                    }
                 }
+
+                guard orderedMatchedAll else { continue }
+                if leafMatched { matchScore &+= 1_100 }
+                if isDir { matchScore &+= 35 }
+
+                let path = BinaryIndexCodec.decodeUTF8(base, pStart, pLen)
+                let isPin = pinnedSet.contains(path)
+                let hRec = historySnapshot[path]
+                let histBoost = (isPin ? 850 : 0) + (hRec.map { min(150 + $0.count * 20, 320) } ?? 0)
+
+                hits.append(ScoredMacHit(
+                    totalScore: matchScore &+ histBoost,
+                    isDir: isDir,
+                    hasHistory: histBoost > 0,
+                    negDepth: -numSegs,
+                    negLen: -pLen,
+                    recIdx: recIdx,
+                    historyCount: hRec?.count ?? 0,
+                    isPinned: isPin
+                ))
             }
-
-            guard orderedMatchedAll else { continue }
-            if leafMatched { matchScore += 1_100 }
-            if rec.entry.isDir { matchScore += 35 }
-
-            let path = rec.entry.path
-            let isPin = pinnedSet.contains(path)
-            let hRec = historySnapshot[path]
-            let histBoost = (isPin ? 850 : 0) + (hRec.map { min(150 + $0.count * 20, 320) } ?? 0)
-
-            hits.append(ScoredMacHit(
-                totalScore: matchScore + histBoost,
-                isDir: rec.entry.isDir,
-                hasHistory: histBoost > 0,
-                negDepth: -numSegs,
-                negLen: -path.utf8.count,
-                entry: rec.entry,
-                historyCount: hRec?.count ?? 0,
-                isPinned: isPin
-            ))
         }
 
         hits.sort {
@@ -4124,7 +5018,7 @@ final class GoogleDriveIndexService: ObservableObject {
             return $0.negLen > $1.negLen
         }
 
-        return hits.prefix(maxResults).map { ($0.entry, $0.historyCount, $0.isPinned) }
+        return hits.prefix(maxResults).map { (fastIndex.entry(at: $0.recIdx), $0.historyCount, $0.isPinned) }
     }
 
     func buildCustomMacSearchResultItems(
@@ -4187,36 +5081,53 @@ final class GoogleDriveIndexService: ObservableObject {
 
     static func runIndexBenchmarkCLI() async {
         print("=== DriveBar Index Benchmark (--bench-index) ===")
-        let memBefore = currentPhysicalMemoryFootprintMB()
-
-        // 1. Cold cache load timing
-        let loadStart = ProcessInfo.processInfo.systemUptime
         let service = await MainActor.run { GoogleDriveIndexService.shared }
         let cacheDir = await MainActor.run { service.cacheDir }
         let fm = FileManager.default
 
+        let bCache = "\(cacheDir)/drivebar_index_v1.bin"
         let folderPath = "\(cacheDir)/folder_cache.json"
         let sharedPath = "\(cacheDir)/shared_cache.json"
         let filePath = "\(cacheDir)/file_cache.json"
         let macPath = "\(cacheDir)/mac_folders_cache.json"
 
-        let loadedFolders = Self.readFolderCacheDisk(at: folderPath)?.0 ?? []
-        let loadedShared = Self.readSharedCacheDisk(at: sharedPath)?.0 ?? []
-        let loadedFiles = Self.readFileCacheDisk(at: filePath)?.0 ?? []
-        let loadedMac = Self.readMacFoldersCacheDisk(at: macPath)?.items ?? []
+        // Ensure `drivebar_index_v1.bin` is populated if this is the first run after migration
+        if !fm.fileExists(atPath: bCache) {
+            let loadedFolders = Self.readFolderCacheDisk(at: folderPath)?.0 ?? []
+            let loadedShared = Self.readSharedCacheDisk(at: sharedPath)?.0 ?? []
+            let loadedFiles = Self.readFileCacheDisk(at: filePath)?.0 ?? []
+            let loadedMac = Self.readMacFoldersCacheDisk(at: macPath)?.items ?? []
+            let ff = FastFolderIndex.build(from: loadedFolders)
+            let fs = FastSharedIndex.build(from: loadedShared)
+            let fi = FastFileIndex.build(from: loadedFiles)
+            let fmIdx = FastSharedIndex.build(from: loadedMac)
+            Self.saveBinaryIndexToDisk(
+                to: bCache,
+                timestamp: Date().timeIntervalSince1970,
+                macRoots: [],
+                folderIndex: ff,
+                sharedIndex: fs,
+                fileIndex: fi,
+                macIndex: fmIdx
+            )
+        }
 
-        let fastFolder = FastFolderIndex.build(from: loadedFolders)
-        let fastShared = FastSharedIndex.build(from: loadedShared)
-        let fastFile = FastFileIndex.build(from: loadedFiles)
-        let fastMac = FastSharedIndex.build(from: loadedMac)
+        // 1. Cold binary cache load timing (`alwaysMapped`, §5.2)
+        let memBefore = currentPhysicalMemoryFootprintMB()
+        let loadStart = ProcessInfo.processInfo.systemUptime
+        let loadedSnap = Self.loadBinaryIndexFromDisk(at: bCache)
+        let fastFolder = loadedSnap?.folderIndex ?? .empty
+        let fastShared = loadedSnap?.sharedIndex ?? .empty
+        let fastFile = loadedSnap?.fileIndex ?? .empty
+        let fastMac = loadedSnap?.macIndex ?? .empty
         let coldLoadMs = (ProcessInfo.processInfo.systemUptime - loadStart) * 1000.0
         let memAfterLoad = currentPhysicalMemoryFootprintMB()
 
-        print(String(format: "Cold JSON Cache Load + FastIndex Build : %.1f ms", coldLoadMs))
-        print("  Folders : \(fastFolder.records.count)")
-        print("  Shared  : \(fastShared.records.count)")
-        print("  Files   : \(fastFile.records.count)")
-        print("  Mac     : \(fastMac.records.count)")
+        print(String(format: "Cold Binary Index Load (drivebar_index_v1.bin) : %.2f ms", coldLoadMs))
+        print("  Folders : \(fastFolder.count) (\(fastFolder.blob.count / 1024) KB)")
+        print("  Shared  : \(fastShared.count) (\(fastShared.blob.count / 1024) KB)")
+        print("  Files   : \(fastFile.count) (\(fastFile.blob.count / 1024) KB)")
+        print("  Mac     : \(fastMac.count) (\(fastMac.blob.count / 1024) KB)")
         print(String(format: "  Memory  : %.1f MB (delta +%.1f MB)", memAfterLoad, max(0, memAfterLoad - memBefore)))
 
         // 2. Single-pass parallel index rebuild timing
@@ -4238,14 +5149,23 @@ final class GoogleDriveIndexService: ObservableObject {
         )
         let rebuiltFastFolder = FastFolderIndex.build(from: rebuiltFolders)
         let rebuiltFastFile = FastFileIndex.build(from: rebuiltFiles)
+        Self.saveBinaryIndexToDisk(
+            to: bCache,
+            timestamp: Date().timeIntervalSince1970,
+            macRoots: customMac,
+            folderIndex: rebuiltFastFolder.isEmpty ? fastFolder : rebuiltFastFolder,
+            sharedIndex: fastShared,
+            fileIndex: rebuiltFastFile.isEmpty ? fastFile : rebuiltFastFile,
+            macIndex: fastMac
+        )
         let rebuildSec = ProcessInfo.processInfo.systemUptime - rebuildStart
         let memAfterRebuild = currentPhysicalMemoryFootprintMB()
 
-        print(String(format: "Single-Pass Parallel Rebuild           : %.2f s (%d folders, %d files)", rebuildSec, rebuiltFastFolder.records.count, rebuiltFastFile.records.count))
-        print(String(format: "  Memory after rebuild                 : %.1f MB", memAfterRebuild))
+        print(String(format: "Single-Pass Parallel Rebuild + Binary Persist  : %.2f s (%d folders, %d files)", rebuildSec, rebuiltFastFolder.count, rebuiltFastFile.count))
+        print(String(format: "  Memory after rebuild                         : %.1f MB", memAfterRebuild))
 
-        let activeFastFolder = rebuiltFastFolder.records.isEmpty ? fastFolder : rebuiltFastFolder
-        let activeFastFile = rebuiltFastFile.records.isEmpty ? fastFile : rebuiltFastFile
+        let activeFastFolder = rebuiltFastFolder.isEmpty ? fastFolder : rebuiltFastFolder
+        let activeFastFile = rebuiltFastFile.isEmpty ? fastFile : rebuiltFastFile
 
         // 3. 20 sample queries benchmark
         let sampleQueries = [
@@ -4288,7 +5208,7 @@ final class GoogleDriveIndexService: ObservableObject {
         let p95Lat = sortedLat[min(sortedLat.count - 1, Int(Double(sortedLat.count) * 0.95))]
         let maxLat = sortedLat.last ?? 0.0
 
-        print(String(format: "20 Sample Queries (Folder+Shared+File) : min=%.2f ms, median=%.2f ms, p95=%.2f ms, max=%.2f ms", minLat, medianLat, p95Lat, maxLat))
+        print(String(format: "20 Sample Queries (Folder+Shared+File)         : min=%.2f ms, median=%.2f ms, p95=%.2f ms, max=%.2f ms", minLat, medianLat, p95Lat, maxLat))
         print("================================================")
     }
 }

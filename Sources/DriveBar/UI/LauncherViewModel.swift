@@ -939,7 +939,7 @@ final class LauncherViewModel: ObservableObject {
             let validDirs = configuredDirs.filter { FileManager.default.fileExists(atPath: $0) }
 
             if macQuery.isEmpty {
-                if !validDirs.isEmpty && drive.fastMacFolderIndex.records.isEmpty && !drive.isRebuildingMacFolders {
+                if !validDirs.isEmpty && drive.fastMacFolderIndex.isEmpty && !drive.isRebuildingMacFolders {
                     drive.rebuildMacFoldersCacheInBackground()
                 }
                 searchResults = drive.defaultCustomMacFolderResultItems(validDirs: validDirs)
@@ -948,7 +948,7 @@ final class LauncherViewModel: ObservableObject {
             }
 
             let tokens = macQuery.split(separator: " ").map(String.init).filter { !$0.isEmpty }
-            if !validDirs.isEmpty && drive.fastMacFolderIndex.records.isEmpty && !drive.isRebuildingMacFolders {
+            if !validDirs.isEmpty && drive.fastMacFolderIndex.isEmpty && !drive.isRebuildingMacFolders {
                 drive.rebuildMacFoldersCacheInBackground()
             }
 
@@ -956,7 +956,7 @@ final class LauncherViewModel: ObservableObject {
             let histSnap = drive.history
             let pinSet = Set(AppSettings.shared.pinnedPaths)
             let scopeNames = validDirs.map { ($0 as NSString).lastPathComponent }.joined(separator: ", ")
-            let isIndexingNow = drive.isRebuildingMacFolders && fastMac.records.isEmpty
+            let isIndexingNow = drive.isRebuildingMacFolders && fastMac.isEmpty
 
             Self.searchQueue.async {
                 let hits = GoogleDriveIndexService.evaluateMacFolderSearchHits(
@@ -1305,13 +1305,7 @@ final class LauncherViewModel: ObservableObject {
             }
 
             // Collect candidate files from file index
-            let allCandidatePaths = drive.fastFileIndex.records.map(\.entry.path)
-            var candidateURLs: [URL] = []
-            for p in allCandidatePaths {
-                if filterTerm.isEmpty || p.localizedCaseInsensitiveContains(filterTerm) {
-                    candidateURLs.append(URL(fileURLWithPath: p))
-                }
-            }
+            let candidateURLs = drive.fastFileIndex.candidateFileURLs(matchingFilter: filterTerm)
 
             let scanningBanner = SearchResultItem(
                 id: "dup_scanning_banner",
@@ -1614,17 +1608,15 @@ final class LauncherViewModel: ObservableObject {
                 let fileHits: [(entry: DriveFileEntry, historyCount: Int, isPinned: Bool)]
 
                 if deepTokens.hasFilters && deepTokens.rawTextQuery.isEmpty {
-                    var filteredRecords: [(entry: DriveFileEntry, historyCount: Int, isPinned: Bool)] = []
-                    for rec in fastFiles.records {
-                        let u = URL(fileURLWithPath: rec.entry.path)
-                        if DriveDeepSearchService.shared.matches(fileURL: u, ext: rec.entry.ext, tokens: deepTokens) {
-                            let hist = histSnap[rec.entry.path]?.count ?? 0
-                            let isP = pinSet.contains(rec.entry.path)
-                            filteredRecords.append((entry: rec.entry, historyCount: hist, isPinned: isP))
-                            if filteredRecords.count >= 45 { break }
-                        }
+                    let matchedEntries = fastFiles.filterEntries(maxCount: 45) { entry in
+                        let u = URL(fileURLWithPath: entry.path)
+                        return DriveDeepSearchService.shared.matches(fileURL: u, ext: entry.ext, tokens: deepTokens)
                     }
-                    fileHits = filteredRecords
+                    fileHits = matchedEntries.map { entry in
+                        let hist = histSnap[entry.path]?.count ?? 0
+                        let isP = pinSet.contains(entry.path)
+                        return (entry: entry, historyCount: hist, isPinned: isP)
+                    }
                 } else if shouldIncludeFiles {
                     let searchTokens = deepTokens.hasFilters ? deepTokens.rawTextQuery.split(separator: " ").map(String.init) : tokens
                     let rawHits = GoogleDriveIndexService.evaluateFileSearchHits(
