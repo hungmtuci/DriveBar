@@ -65,6 +65,8 @@ class SyncEngineTestCase(unittest.TestCase):
 
     def tearDown(self) -> None:
         sync_mod.TRASH_HANDLER = None
+        sync_mod.DATALESS_DETECTOR = None
+        sync_mod.MATERIALIZE_HANDLER = None
         self.tmp_root.cleanup()
 
     def _write_file(self, base: Path, rel: str, content: str, mtime: float | None = None) -> Path:
@@ -389,6 +391,176 @@ class SyncEngineTestCase(unittest.TestCase):
         self.assertFalse((self.local_dir / "Sheet.gsheet").exists())
         self.assertTrue((self.drive_dir / "Sheet.gsheet").exists())
         self.assertTrue((self.drive_dir / "Doc.gdoc").exists())
+
+    # ------------------------------------------------------------
+    # 10. Both changed, Drive dataless & materialization fails -> deferred, nothing overwritten, baseline unchanged
+    # ------------------------------------------------------------
+    def test_10_dataless_conflict_materialization_fails_defers_without_overwrite(self) -> None:
+        t0 = 1700008000.0
+        self._write_file(self.local_dir, "report.txt", "baseline v1", mtime=t0)
+        sync_mod.sync_single_pair(str(self.local_dir), str(self.drive_dir), pair_id="PAIR-DL-10")
+        base_before = sync_mod.load_pair_baseline("PAIR-DL-10")["files"]["report.txt"]
+
+        # Edit both sides (case A: local is newer than Drive; Drive file is dataless and cannot materialize)
+        self._write_file(self.local_dir, "report.txt", "local v2 newer", mtime=t0 + 90.0)
+        drive_file = self._write_file(self.drive_dir, "report.txt", "drive v2 online only", mtime=t0 + 40.0)
+
+        dataless_set = {os.path.abspath(str(drive_file))}
+        sync_mod.DATALESS_DETECTOR = lambda full_p, st, is_cloud: bool(is_cloud and os.path.abspath(full_p) in dataless_set)
+        sync_mod.MATERIALIZE_HANDLER = lambda full_p, timeout: False
+
+        rep1 = sync_mod.sync_single_pair(str(self.local_dir), str(self.drive_dir), pair_id="PAIR-DL-10")
+        self.assertTrue(rep1["ok"])
+        self.assertEqual(rep1["deferred"], ["report.txt"])
+        self.assertEqual(rep1["copiedToDrive"], 0)
+        self.assertEqual(rep1["copiedToLocal"], 0)
+        self.assertEqual(rep1["conflicts"], [])
+        # Neither side overwritten
+        self.assertEqual((self.local_dir / "report.txt").read_text(encoding="utf-8"), "local v2 newer")
+        self.assertEqual((self.drive_dir / "report.txt").read_text(encoding="utf-8"), "drive v2 online only")
+        # Baseline entry preserved unchanged
+        base_after_1 = sync_mod.load_pair_baseline("PAIR-DL-10")["files"]["report.txt"]
+        self.assertEqual(base_after_1, base_before)
+
+        # Case B: Drive is newer than local while both changed and materialization fails
+        self._write_file(self.drive_dir, "report.txt", "drive v3 newer online only", mtime=t0 + 150.0)
+        rep2 = sync_mod.sync_single_pair(str(self.local_dir), str(self.drive_dir), pair_id="PAIR-DL-10")
+        self.assertTrue(rep2["ok"])
+        self.assertEqual(rep2["deferred"], ["report.txt"])
+        self.assertEqual(rep2["copiedToDrive"], 0)
+        self.assertEqual(rep2["copiedToLocal"], 0)
+        self.assertEqual((self.local_dir / "report.txt").read_text(encoding="utf-8"), "local v2 newer")
+        self.assertEqual((self.drive_dir / "report.txt").read_text(encoding="utf-8"), "drive v3 newer online only")
+        base_after_2 = sync_mod.load_pair_baseline("PAIR-DL-10")["files"]["report.txt"]
+        self.assertEqual(base_after_2, base_before)
+
+    # ------------------------------------------------------------
+    # 11. Both changed, Drive dataless & materialization succeeds -> normal conflict copy, both preserved
+    # ------------------------------------------------------------
+    def test_11_dataless_conflict_materialization_succeeds_preserves_both_versions(self) -> None:
+        t0 = 1700009000.0
+        self._write_file(self.local_dir, "budget.txt", "baseline v1", mtime=t0)
+        sync_mod.sync_single_pair(str(self.local_dir), str(self.drive_dir), pair_id="PAIR-DL-11")
+
+        # Both changed: local is newer, Drive is older and initially dataless
+        self._write_file(self.local_dir, "budget.txt", "local v2 winner", mtime=t0 + 120.0)
+        drive_file = self._write_file(self.drive_dir, "budget.txt", "drive v2 loser", mtime=t0 + 60.0)
+
+        dataless_set = {os.path.abspath(str(drive_file))}
+        sync_mod.DATALESS_DETECTOR = lambda full_p, st, is_cloud: bool(is_cloud and os.path.abspath(full_p) in dataless_set)
+
+        def succeed_materialize(full_p: str, timeout: float) -> bool:
+            dataless_set.discard(os.path.abspath(full_p))
+            return True
+
+        sync_mod.MATERIALIZE_HANDLER = succeed_materialize
+
+        rep = sync_mod.sync_single_pair(str(self.local_dir), str(self.drive_dir), pair_id="PAIR-DL-11")
+        self.assertTrue(rep["ok"])
+        self.assertEqual(rep["deferred"], [])
+        self.assertEqual(len(rep["conflicts"]), 1)
+        conflict_rel = rep["conflicts"][0]
+
+        # Canonical path has winner ("local v2 winner") on both sides
+        self.assertEqual((self.local_dir / "budget.txt").read_text(encoding="utf-8"), "local v2 winner")
+        self.assertEqual((self.drive_dir / "budget.txt").read_text(encoding="utf-8"), "local v2 winner")
+        # Conflict copy has Drive's real content ("drive v2 loser") on both sides!
+        self.assertEqual((self.local_dir / conflict_rel).read_text(encoding="utf-8"), "drive v2 loser")
+        self.assertEqual((self.drive_dir / conflict_rel).read_text(encoding="utf-8"), "drive v2 loser")
+
+    # ------------------------------------------------------------
+    # 12. Drive-only change on dataless file -> deferred on failure (next run does NOT push local over Drive), copied down on success
+    # ------------------------------------------------------------
+    def test_12_dataless_drive_only_change_materializes_or_defers_safely(self) -> None:
+        t0 = 1700010000.0
+        self._write_file(self.local_dir, "notes.txt", "v1 initial", mtime=t0)
+        sync_mod.sync_single_pair(str(self.local_dir), str(self.drive_dir), pair_id="PAIR-DL-12")
+        base_before = sync_mod.load_pair_baseline("PAIR-DL-12")["files"]["notes.txt"]
+
+        # Remote edit arrives on Drive as online-only (dataless) file; local is untouched
+        drive_file = self._write_file(self.drive_dir, "notes.txt", "v2 remote cloud update", mtime=t0 + 80.0)
+        dataless_set = {os.path.abspath(str(drive_file))}
+        sync_mod.DATALESS_DETECTOR = lambda full_p, st, is_cloud: bool(is_cloud and os.path.abspath(full_p) in dataless_set)
+        sync_mod.MATERIALIZE_HANDLER = lambda full_p, timeout: False
+
+        # Run 1: materialization fails -> deferred, baseline unchanged
+        rep1 = sync_mod.sync_single_pair(str(self.local_dir), str(self.drive_dir), pair_id="PAIR-DL-12")
+        self.assertTrue(rep1["ok"])
+        self.assertEqual(rep1["deferred"], ["notes.txt"])
+        self.assertEqual(rep1["copiedToDrive"], 0)
+        self.assertEqual(rep1["copiedToLocal"], 0)
+        self.assertEqual(sync_mod.load_pair_baseline("PAIR-DL-12")["files"]["notes.txt"], base_before)
+
+        # Run 2 while still failing -> must NOT push local v1 over Drive v2!
+        rep2 = sync_mod.sync_single_pair(str(self.local_dir), str(self.drive_dir), pair_id="PAIR-DL-12")
+        self.assertTrue(rep2["ok"])
+        self.assertEqual(rep2["deferred"], ["notes.txt"])
+        self.assertEqual(rep2["copiedToDrive"], 0)
+        self.assertEqual((self.drive_dir / "notes.txt").read_text(encoding="utf-8"), "v2 remote cloud update")
+
+        # Run 3: materialization succeeds -> copied down to local!
+        def succeed_materialize(full_p: str, timeout: float) -> bool:
+            dataless_set.discard(os.path.abspath(full_p))
+            return True
+
+        sync_mod.MATERIALIZE_HANDLER = succeed_materialize
+        rep3 = sync_mod.sync_single_pair(str(self.local_dir), str(self.drive_dir), pair_id="PAIR-DL-12")
+        self.assertTrue(rep3["ok"])
+        self.assertEqual(rep3["deferred"], [])
+        self.assertEqual(rep3["copiedToLocal"], 1)
+        self.assertEqual(rep3["copiedToDrive"], 0)
+        self.assertEqual((self.local_dir / "notes.txt").read_text(encoding="utf-8"), "v2 remote cloud update")
+
+    # ------------------------------------------------------------
+    # 13. OAuth, sync_pairs, state, command, and result files enforce 0600 permissions
+    # ------------------------------------------------------------
+    def test_13_secret_and_state_files_enforced_0600_permissions(self) -> None:
+        import stat as stat_mod
+
+        oauth_path = self.cfg_dir / "gdrive_oauth.json"
+        # Simulate a legacy 0644 oauth file
+        oauth_path.write_text(json.dumps({"client_id": "test-client", "personal": {"storedInKeychain": True}}), encoding="utf-8")
+        os.chmod(oauth_path, 0o644)
+        self.assertEqual(stat_mod.S_IMODE(oauth_path.stat().st_mode), 0o644)
+
+        # enforce_secret_file_permissions tightens it to 0600
+        sync_mod.enforce_secret_file_permissions()
+        self.assertEqual(stat_mod.S_IMODE(oauth_path.stat().st_mode), 0o600)
+
+        # write_json_atomic with mode=0o600 writes 0600 directly
+        sync_mod.write_json_atomic(oauth_path, {"client_id": "test-client-2"}, indent=2, mode=0o600)
+        self.assertEqual(stat_mod.S_IMODE(oauth_path.stat().st_mode), 0o600)
+
+        # Syncing a pair and submitting a command produces 0600 on sync_pairs.json, state/*.json, commands/*.json, results/*.json
+        self._write_file(self.local_dir, "perm.txt", "secret check", mtime=1700011000.0)
+        cmd_id = sync_mod.submit_command_file(
+            op="add",
+            pair_id="PAIR-PERM-13",
+            payload={
+                "localPath": str(self.local_dir),
+                "driveTargetPath": str(self.drive_dir),
+                "syncMode": "two_way_mirror",
+                "syncImmediately": True,
+            },
+            command_id="CMD-PERM-13",
+        )
+        cmd_files = list((self.cfg_dir / "commands").glob("*.json"))
+        self.assertEqual(len(cmd_files), 1)
+        self.assertEqual(stat_mod.S_IMODE(cmd_files[0].stat().st_mode), 0o600)
+
+        sync_mod.process_pending_commands()
+
+        pairs_file = self.cfg_dir / "sync_pairs.json"
+        state_file = self.cfg_dir / "state" / "PAIR-PERM-13.json"
+        res_file = self.cfg_dir / "results" / f"{cmd_id}.json"
+
+        self.assertEqual(stat_mod.S_IMODE(pairs_file.stat().st_mode), 0o600)
+        self.assertEqual(stat_mod.S_IMODE(state_file.stat().st_mode), 0o600)
+        self.assertEqual(stat_mod.S_IMODE(res_file.stat().st_mode), 0o600)
+        # Also verify SHA-1 is persisted in baseline for small files (<= 64 MB)
+        st_data = json.loads(state_file.read_text(encoding="utf-8"))
+        self.assertIn("sha1", st_data["files"]["perm.txt"])
+
 
 
 if __name__ == "__main__":

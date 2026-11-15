@@ -157,13 +157,14 @@ struct SyncedFolderPair: Identifiable, Codable, Equatable, Sendable {
     var status: String?
     var pendingDeletionPlan: PendingDeletionPlan?
     var lastConflicts: [String]?
+    var deferredFiles: [String]?
 
     enum CodingKeys: String, CodingKey {
         case id, localPath, driveTargetPath, syncMode, isEnabled
         case createdAt, lastSyncedAt, lastSyncFileCount, lastSyncTotalBytes
         case lastError, knownRelativeFiles, shareAccessLevel, shareURLString
         case remoteSharedURL, remoteFolderID, remoteOwnerName, isRemoteLinkBroken
-        case status, pendingDeletionPlan, lastConflicts
+        case status, pendingDeletionPlan, lastConflicts, deferredFiles
     }
 
     init(
@@ -186,7 +187,8 @@ struct SyncedFolderPair: Identifiable, Codable, Equatable, Sendable {
         isRemoteLinkBroken: Bool? = nil,
         status: String? = "ok",
         pendingDeletionPlan: PendingDeletionPlan? = nil,
-        lastConflicts: [String]? = nil
+        lastConflicts: [String]? = nil,
+        deferredFiles: [String]? = nil
     ) {
         self.id = id
         self.localPath = localPath
@@ -208,6 +210,7 @@ struct SyncedFolderPair: Identifiable, Codable, Equatable, Sendable {
         self.status = status
         self.pendingDeletionPlan = pendingDeletionPlan
         self.lastConflicts = lastConflicts
+        self.deferredFiles = deferredFiles
     }
 
     init(from decoder: Decoder) throws {
@@ -238,6 +241,7 @@ struct SyncedFolderPair: Identifiable, Codable, Equatable, Sendable {
         self.status = try? c.decodeIfPresent(String.self, forKey: .status)
         self.pendingDeletionPlan = try? c.decodeIfPresent(PendingDeletionPlan.self, forKey: .pendingDeletionPlan)
         self.lastConflicts = try? c.decodeIfPresent([String].self, forKey: .lastConflicts)
+        self.deferredFiles = try? c.decodeIfPresent([String].self, forKey: .deferredFiles)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -262,6 +266,11 @@ struct SyncedFolderPair: Identifiable, Codable, Equatable, Sendable {
         try c.encodeIfPresent(status, forKey: .status)
         try c.encodeIfPresent(pendingDeletionPlan, forKey: .pendingDeletionPlan)
         try c.encodeIfPresent(lastConflicts, forKey: .lastConflicts)
+        try c.encodeIfPresent(deferredFiles, forKey: .deferredFiles)
+    }
+
+    var deferredCount: Int {
+        deferredFiles?.count ?? 0
     }
 
     var needsConfirmation: Bool {
@@ -313,7 +322,7 @@ final class LocalFolderDriveSyncService: ObservableObject {
     @Published private(set) var isGlobalSyncing: Bool = false
     @Published private(set) var syncAgentRunning: Bool = false
     @Published private(set) var syncAgentPID: Int32? = nil
-    @Published private(set) var syncAgentVersion: String = "2.0.0"
+    @Published private(set) var syncAgentVersion: String = "2.0.1"
     @Published private(set) var syncAgentLastError: String? = nil
     @Published var defaultDriveSyncSubfolder: String {
         didSet {
@@ -324,7 +333,7 @@ final class LocalFolderDriveSyncService: ObservableObject {
     nonisolated private static let pairsStorageKey = "drivebar.localFolderSyncPairs.v1"
     nonisolated private static let defaultSubfolderKey = "drivebar.defaultDriveSyncSubfolder.v1"
     nonisolated private static let finderSyncTagVI = "Đồng bộ GDrive"
-    nonisolated private static let expectedHelperVersion = "2.0.0"
+    nonisolated private static let expectedHelperVersion = "2.0.1"
     nonisolated private static let launchAgentLabel = "com.hunglx.DriveBar.syncd"
 
     private struct MappedPairEntry: Sendable {
@@ -659,10 +668,36 @@ final class LocalFolderDriveSyncService: ObservableObject {
         guard let srcPath = bundledHelperCandidatePaths().first(where: { fm.fileExists(atPath: $0) }) else {
             return false
         }
+        let srcDir = (srcPath as NSString).deletingLastPathComponent
         let srcVersion = extractHelperVersion(atPath: srcPath) ?? expectedHelperVersion
         let dstVersion = extractHelperVersion(atPath: dstPath)
+        let needUpgrade = forceCopy || !fm.fileExists(atPath: dstPath) || dstVersion != srcVersion
 
-        if forceCopy || !fm.fileExists(atPath: dstPath) || dstVersion != srcVersion {
+        for binName in ["drivebar_keychain_helper", "folder_badge_helper"] {
+            let srcBin = (srcDir as NSString).appendingPathComponent(binName)
+            let dstBin = (cfgDir as NSString).appendingPathComponent(binName)
+            let shouldCopyBin = binName == "drivebar_keychain_helper"
+                ? !fm.fileExists(atPath: dstBin)
+                : (needUpgrade || !fm.fileExists(atPath: dstBin))
+            if fm.fileExists(atPath: srcBin) && shouldCopyBin {
+                let tmpBin = dstBin + ".tmp.\(ProcessInfo.processInfo.processIdentifier)"
+                try? fm.removeItem(atPath: tmpBin)
+                do {
+                    try fm.copyItem(atPath: srcBin, toPath: tmpBin)
+                    try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tmpBin)
+                    if fm.fileExists(atPath: dstBin) {
+                        _ = try fm.replaceItemAt(URL(fileURLWithPath: dstBin), withItemAt: URL(fileURLWithPath: tmpBin))
+                    } else {
+                        try fm.moveItem(atPath: tmpBin, toPath: dstBin)
+                    }
+                    try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dstBin)
+                } catch {
+                    try? fm.removeItem(atPath: tmpBin)
+                }
+            }
+        }
+
+        if needUpgrade {
             let tmpPath = dstPath + ".tmp.\(ProcessInfo.processInfo.processIdentifier)"
             try? fm.removeItem(atPath: tmpPath)
             do {
@@ -831,7 +866,9 @@ final class LocalFolderDriveSyncService: ObservableObject {
         }
         do {
             try jsonData.write(to: URL(fileURLWithPath: tmpPath), options: .atomic)
+            try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tmpPath)
             try fm.moveItem(atPath: tmpPath, toPath: cmdPath)
+            try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: cmdPath)
         } catch {
             try? fm.removeItem(atPath: tmpPath)
             return nil
@@ -1524,6 +1561,7 @@ final class LocalFolderDriveSyncService: ObservableObject {
         let copiedToLocal: Int
         let trashedCount: Int
         let conflicts: [String]?
+        let deferred: [String]?
         let pendingDeletionPlan: PendingDeletionPlan?
         let totalFiles: Int
         let totalBytes: Int64
@@ -1618,6 +1656,7 @@ final class LocalFolderDriveSyncService: ObservableObject {
                 updated.status = rep.status ?? (rep.ok ? "ok" : "error")
                 updated.pendingDeletionPlan = rep.pendingDeletionPlan
                 updated.lastConflicts = rep.conflicts
+                updated.deferredFiles = rep.deferred
                 updated.isRemoteLinkBroken = rep.isBrokenLink ?? false
                 if rep.ok {
                     updated.lastSyncedAt = Date()
@@ -1675,6 +1714,7 @@ final class LocalFolderDriveSyncService: ObservableObject {
                     updated.status = resp.status ?? (resp.ok ? "ok" : "error")
                     updated.pendingDeletionPlan = resp.pendingDeletionPlan
                     updated.lastConflicts = resp.conflicts
+                    updated.deferredFiles = resp.deferred
                     if let owner = resp.ownerName, !owner.isEmpty {
                         updated.remoteOwnerName = owner
                     }

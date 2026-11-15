@@ -34,7 +34,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-HELPER_VERSION = "2.0.0"
+HELPER_VERSION = "2.0.1"
 
 FINDER_TAG_NAME = "Đồng bộ GDrive\n2"  # Green tag (2) in macOS Finder
 
@@ -54,9 +54,14 @@ CLOUD_STUB_EXTS: Set[str] = {
 
 SF_DATALESS = 0x40000000
 MAX_HASH_SIZE_BYTES = 64 * 1024 * 1024  # 64 MB
+DEFAULT_MATERIALIZE_MAX_BYTES = 512 * 1024 * 1024  # 512 MB
+DEFAULT_MATERIALIZE_TIMEOUT_SEC = 60.0
+DEFAULT_MATERIALIZE_BUDGET_SEC = 300.0
 
-# Injectable trash handler for unit tests
+# Injectable handlers for unit tests
 TRASH_HANDLER: Optional[Callable[[str], bool]] = None
+DATALESS_DETECTOR: Optional[Callable[[str, os.stat_result, bool], bool]] = None
+MATERIALIZE_HANDLER: Optional[Callable[[str, float], bool]] = None
 
 
 # ============================================================
@@ -134,20 +139,65 @@ LOGGER = setup_logger()
 # ============================================================
 # ATOMIC JSON & FILE LOCKING HELPERS
 # ============================================================
-def write_json_atomic(target_path: Path, payload: Any, indent: Optional[int] = 2) -> None:
+def write_json_atomic(target_path: Path, payload: Any, indent: Optional[int] = 2, mode: int = 0o644) -> None:
     target_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = target_path.parent / f".{target_path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+    fd: Optional[int] = None
     try:
-        text = json.dumps(payload, indent=indent, ensure_ascii=False)
-        tmp_path.write_text(text, encoding="utf-8")
+        data = json.dumps(payload, indent=indent, ensure_ascii=False).encode("utf-8")
+        fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+        os.fchmod(fd, mode)
+        view = memoryview(data)
+        total_written = 0
+        while total_written < len(view):
+            written = os.write(fd, view[total_written:])
+            if written <= 0:
+                raise OSError("short write in write_json_atomic")
+            total_written += written
+        os.fsync(fd)
+        os.close(fd)
+        fd = None
         os.replace(tmp_path, target_path)
+        os.chmod(target_path, mode)
     except Exception:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         if tmp_path.exists():
             try:
                 tmp_path.unlink()
             except OSError:
                 pass
         raise
+
+
+def enforce_secret_file_permissions() -> None:
+    cfg = get_config_dir()
+    if not cfg.exists():
+        return
+    targets: List[Path] = [
+        cfg / "gdrive_oauth.json",
+        cfg / "sync_pairs.json",
+    ]
+    for sub_name in ("state", "results", "commands"):
+        sub_dir = cfg / sub_name
+        if sub_dir.is_dir():
+            try:
+                for entry in sub_dir.iterdir():
+                    if entry.is_file() and entry.name.endswith(".json"):
+                        targets.append(entry)
+            except OSError:
+                pass
+    for p in targets:
+        if p.exists():
+            try:
+                cur_mode = stat.S_IMODE(p.stat().st_mode)
+                if cur_mode != 0o600:
+                    os.chmod(p, 0o600)
+            except OSError:
+                pass
 
 
 @contextmanager
@@ -243,7 +293,7 @@ def save_pair_baseline(
         "files": files_map,
         "dirs": sorted(set(dirs_list)),
     }
-    write_json_atomic(baseline_file_path(pair_id), payload, indent=None)
+    write_json_atomic(baseline_file_path(pair_id), payload, indent=None, mode=0o600)
 
 
 def remove_pair_baseline(pair_id: str) -> None:
@@ -268,6 +318,7 @@ def set_pair_running_flag(pair_id: str, running: bool) -> None:
                 st_file,
                 {"pairId": pair_id.upper(), "running": True, "pid": os.getpid(), "startedAt": time.time()},
                 indent=None,
+                mode=0o600,
             )
         else:
             if st_file.exists():
@@ -342,7 +393,7 @@ def _write_pairs_unlocked(pairs: List[Dict[str, Any]]) -> None:
         "updatedAt": time.time(),
         "pairs": cleaned,
     }
-    write_json_atomic(pairs_json_path(), payload, indent=2)
+    write_json_atomic(pairs_json_path(), payload, indent=2, mode=0o600)
 
 
 def load_shared_pairs() -> List[Dict[str, Any]]:
@@ -455,6 +506,61 @@ def is_ignored_name(name: str, is_dir: bool = False) -> bool:
     )
 
 
+def _is_path_dataless(full_path: str, st: os.stat_result, is_cloud: bool) -> bool:
+    if DATALESS_DETECTOR is not None:
+        return bool(DATALESS_DETECTOR(full_path, st, is_cloud))
+    return bool(is_cloud and hasattr(st, "st_flags") and (st.st_flags & SF_DATALESS))
+
+
+def materialize_dataless(
+    path: str,
+    timeout: float = DEFAULT_MATERIALIZE_TIMEOUT_SEC,
+    max_bytes: Optional[int] = None,
+) -> bool:
+    """
+    Requests materialization (download) of a FileProvider dataless file by reading it in chunks
+    with a per-file timeout and size cap, then re-lstat'ing to verify it is no longer dataless.
+    """
+    cap = (
+        max_bytes
+        if max_bytes is not None
+        else int(os.environ.get("DRIVEBAR_MATERIALIZE_MAX_BYTES", str(DEFAULT_MATERIALIZE_MAX_BYTES)))
+    )
+    try:
+        st_init = os.lstat(path)
+    except OSError:
+        return False
+
+    if st_init.st_size > cap:
+        LOGGER.warning("Skipping materialization of %s (%d bytes > cap %d)", path, st_init.st_size, cap)
+        return False
+
+    if MATERIALIZE_HANDLER is not None:
+        try:
+            ok = bool(MATERIALIZE_HANDLER(path, timeout))
+            if not ok:
+                return False
+            st_after = os.lstat(path)
+            return not _is_path_dataless(path, st_after, True)
+        except Exception:
+            return False
+
+    deadline = time.monotonic() + max(0.1, float(timeout))
+    try:
+        with open(path, "rb") as f:
+            while True:
+                if time.monotonic() > deadline:
+                    return False
+                chunk = f.read(262144)
+                if not chunk:
+                    break
+        st_after = os.lstat(path)
+        return not _is_path_dataless(path, st_after, True)
+    except Exception as exc:
+        LOGGER.warning("Failed to materialize dataless file %s: %s", path, exc)
+        return False
+
+
 def scan_tree(root_path: str, is_cloud: bool) -> Tuple[Set[str], Dict[str, Dict[str, Any]]]:
     dirs: Set[str] = set()
     files: Dict[str, Dict[str, Any]] = {}
@@ -503,7 +609,7 @@ def scan_tree(root_path: str, is_cloud: bool) -> Tuple[Set[str], Dict[str, Dict[
                     if ext in CLOUD_STUB_EXTS:
                         # Exclude Google Docs/Sheets/Slides cloud stubs from baseline & sync
                         continue
-                    is_dataless = bool(is_cloud and hasattr(st, "st_flags") and (st.st_flags & SF_DATALESS))
+                    is_dataless = _is_path_dataless(full_path, st, is_cloud)
                     files[rel_norm] = {
                         "mtime": float(st.st_mtime),
                         "size": int(st.st_size),
@@ -796,6 +902,41 @@ def _sync_single_pair_impl(
     plan_trash_drive: List[str] = []
     plan_conflicts: List[str] = []
     plan_unchanged: List[str] = []
+    deferred: List[str] = []
+    deferred_set: Set[str] = set()
+
+    materialize_budget = float(os.environ.get("DRIVEBAR_MATERIALIZE_BUDGET_SEC", str(DEFAULT_MATERIALIZE_BUDGET_SEC)))
+    per_file_timeout = float(os.environ.get("DRIVEBAR_MATERIALIZE_TIMEOUT_SEC", str(DEFAULT_MATERIALIZE_TIMEOUT_SEC)))
+
+    def _defer_file(rel_key: str) -> None:
+        if rel_key not in deferred_set:
+            deferred_set.add(rel_key)
+            deferred.append(rel_key)
+
+    def _ensure_drive_materialized(rel_key: str, d_full_path: str, dm_entry: Dict[str, Any]) -> bool:
+        nonlocal materialize_budget
+        if not dm_entry.get("is_dataless"):
+            return True
+        if materialize_budget <= 0.0:
+            return False
+        t0 = time.monotonic()
+        file_timeout = min(per_file_timeout, materialize_budget)
+        ok = materialize_dataless(d_full_path, timeout=file_timeout)
+        elapsed = max(0.0, time.monotonic() - t0)
+        materialize_budget = max(0.0, materialize_budget - elapsed)
+        if not ok:
+            return False
+        try:
+            st_after = os.lstat(d_full_path)
+            if _is_path_dataless(d_full_path, st_after, True):
+                return False
+            dm_entry["mtime"] = float(st_after.st_mtime)
+            dm_entry["size"] = int(st_after.st_size)
+            dm_entry["ino"] = int(st_after.st_ino)
+            dm_entry["is_dataless"] = False
+            return True
+        except OSError:
+            return False
 
     all_rel_files = sorted(set(l_files.keys()) | set(d_files.keys()) | set(base_files.keys()))
 
@@ -810,11 +951,22 @@ def _sync_single_pair_impl(
             if bm is not None:
                 # Migrated legacy entry with unknown size/mtime
                 if int(bm.get("size", -1)) < 0:
+                    if dm["is_dataless"] and not _ensure_drive_materialized(rel_f, d_full, dm):
+                        _defer_file(rel_f)
+                        continue
                     if _are_files_identical(l_full, lm, d_full, dm):
                         plan_unchanged.append(rel_f)
                     else:
                         plan_conflicts.append(rel_f)
                 else:
+                    b_size = int(bm.get("size", -1))
+                    b_mtime = float(bm.get("mtime", -1.0))
+                    d_meta_changed = (dm["size"] != b_size) or (abs(dm["mtime"] - b_mtime) > 2.0)
+                    if dm["is_dataless"] and d_meta_changed:
+                        if not _ensure_drive_materialized(rel_f, d_full, dm):
+                            _defer_file(rel_f)
+                            continue
+
                     l_chg = _is_file_changed_vs_baseline(l_full, lm, bm)
                     d_chg = _is_file_changed_vs_baseline(d_full, dm, bm)
                     if not l_chg and not d_chg:
@@ -822,17 +974,23 @@ def _sync_single_pair_impl(
                     elif l_chg and not d_chg:
                         plan_copy_l2d.append(rel_f)
                     elif d_chg and not l_chg:
-                        if not dm["is_dataless"]:
-                            plan_copy_d2l.append(rel_f)
-                        else:
-                            plan_unchanged.append(rel_f)
+                        if dm["is_dataless"] and not _ensure_drive_materialized(rel_f, d_full, dm):
+                            _defer_file(rel_f)
+                            continue
+                        plan_copy_d2l.append(rel_f)
                     else:
+                        if dm["is_dataless"] and not _ensure_drive_materialized(rel_f, d_full, dm):
+                            _defer_file(rel_f)
+                            continue
                         if _are_files_identical(l_full, lm, d_full, dm):
                             plan_unchanged.append(rel_f)
                         else:
                             plan_conflicts.append(rel_f)
             else:
-                # Not in baseline, exists on both sides
+                # Not in baseline, exists on both sides -> decision depends on Drive content
+                if dm["is_dataless"] and not _ensure_drive_materialized(rel_f, d_full, dm):
+                    _defer_file(rel_f)
+                    continue
                 if _are_files_identical(l_full, lm, d_full, dm):
                     plan_unchanged.append(rel_f)
                 else:
@@ -859,24 +1017,40 @@ def _sync_single_pair_impl(
         elif dm and not lm:
             if bm is not None:
                 if int(bm.get("size", -1)) < 0:
-                    # Never delete on initial legacy migration run
-                    if not dm["is_dataless"]:
-                        plan_copy_d2l.append(rel_f)
-                elif not _is_file_changed_vs_baseline(d_full, dm, bm):
-                    # Unchanged on Drive, missing locally -> deleted locally
-                    if resolution == "restore_from_other":
-                        if not dm["is_dataless"]:
-                            plan_copy_d2l.append(rel_f)
-                    else:
-                        plan_trash_drive.append(rel_f)
+                    # Never delete on initial legacy migration run -> copy d2l after materializing
+                    if dm["is_dataless"] and not _ensure_drive_materialized(rel_f, d_full, dm):
+                        _defer_file(rel_f)
+                        continue
+                    plan_copy_d2l.append(rel_f)
                 else:
-                    # Changed on Drive while deleted locally -> resurrect to local
-                    if not dm["is_dataless"]:
+                    b_size = int(bm.get("size", -1))
+                    b_mtime = float(bm.get("mtime", -1.0))
+                    d_meta_changed = (dm["size"] != b_size) or (abs(dm["mtime"] - b_mtime) > 2.0)
+                    if dm["is_dataless"] and d_meta_changed:
+                        if not _ensure_drive_materialized(rel_f, d_full, dm):
+                            _defer_file(rel_f)
+                            continue
+                    if not _is_file_changed_vs_baseline(d_full, dm, bm):
+                        # Unchanged on Drive, missing locally -> deleted locally
+                        if resolution == "restore_from_other":
+                            if dm["is_dataless"] and not _ensure_drive_materialized(rel_f, d_full, dm):
+                                _defer_file(rel_f)
+                                continue
+                            plan_copy_d2l.append(rel_f)
+                        else:
+                            plan_trash_drive.append(rel_f)
+                    else:
+                        # Changed on Drive while deleted locally -> resurrect to local
+                        if dm["is_dataless"] and not _ensure_drive_materialized(rel_f, d_full, dm):
+                            _defer_file(rel_f)
+                            continue
                         plan_copy_d2l.append(rel_f)
             else:
                 # New on Drive
-                if not dm["is_dataless"]:
-                    plan_copy_d2l.append(rel_f)
+                if dm["is_dataless"] and not _ensure_drive_materialized(rel_f, d_full, dm):
+                    _defer_file(rel_f)
+                    continue
+                plan_copy_d2l.append(rel_f)
 
     # 4. Mass-Deletion Ratio & Empty-Side Guard (§3.1)
     baseline_count = len(base_files)
@@ -911,6 +1085,7 @@ def _sync_single_pair_impl(
                 "copiedToLocal": 0,
                 "trashedCount": 0,
                 "conflicts": [],
+                "deferred": deferred,
                 "pendingDeletionPlan": plan_summary,
                 "totalFiles": len(l_files),
                 "totalBytes": sum(m["size"] for m in l_files.values()),
@@ -949,7 +1124,13 @@ def _sync_single_pair_impl(
     conflicts_created: List[str] = []
     new_base_files: Dict[str, Dict[str, Any]] = {}
 
-    def _record_baseline_entry(rel_key: str, size_val: int, mtime_val: float, local_full_path: str) -> None:
+    def _record_baseline_entry(
+        rel_key: str,
+        size_val: int,
+        mtime_val: float,
+        local_full_path: str,
+        existing_sha1: Optional[str] = None,
+    ) -> None:
         ino_val = 0
         try:
             ino_val = int(os.lstat(local_full_path).st_ino)
@@ -960,15 +1141,22 @@ def _sync_single_pair_impl(
             "mtime": float(mtime_val),
             "localIno": ino_val,
         }
+        sha1_val = existing_sha1
+        if not sha1_val and 0 <= int(size_val) <= MAX_HASH_SIZE_BYTES and os.path.exists(local_full_path):
+            sha1_val = compute_file_sha1(local_full_path)
+        if sha1_val:
+            entry["sha1"] = sha1_val
         new_base_files[rel_key] = entry
 
     for rel_f in plan_unchanged:
         lm = l_files.get(rel_f)
         dm = d_files.get(rel_f)
+        bm = base_files.get(rel_f)
         ref = lm or dm
         if ref:
             l_full = os.path.join(local_path, lm["real_rel"] if lm else rel_f)
-            _record_baseline_entry(rel_f, ref["size"], ref["mtime"], l_full)
+            cached_sha1 = bm.get("sha1") if (bm and int(bm.get("size", -1)) == ref["size"]) else None
+            _record_baseline_entry(rel_f, ref["size"], ref["mtime"], l_full, existing_sha1=cached_sha1)
 
     for rel_f in plan_copy_l2d:
         lm = l_files[rel_f]
@@ -982,6 +1170,9 @@ def _sync_single_pair_impl(
         dm = d_files[rel_f]
         d_full = os.path.join(drive_target_path, dm["real_rel"])
         l_full = os.path.join(local_path, rel_f)
+        if dm.get("is_dataless") and not _ensure_drive_materialized(rel_f, d_full, dm):
+            _defer_file(rel_f)
+            continue
         if copy_atomic(d_full, l_full, dm["mtime"]):
             copied_to_local += 1
             _record_baseline_entry(rel_f, dm["size"], dm["mtime"], l_full)
@@ -991,17 +1182,20 @@ def _sync_single_pair_impl(
         dm = d_files[rel_f]
         l_full = os.path.join(local_path, lm["real_rel"])
         d_full = os.path.join(drive_target_path, dm["real_rel"])
+        if dm.get("is_dataless") and not _ensure_drive_materialized(rel_f, d_full, dm):
+            _defer_file(rel_f)
+            continue
 
-        # Keep newer at original path; save older as conflict copy on both sides
+        # Keep newer at original path; ALWAYS save older as conflict copy on both sides before any overwrite
         if lm["mtime"] >= dm["mtime"]:
             winner_meta = lm
             loser_meta = dm
             conflict_rel = format_conflict_rel_path(rel_f, dm["mtime"])
             l_conf = os.path.join(local_path, conflict_rel)
             d_conf = os.path.join(drive_target_path, conflict_rel)
-            if not dm.get("is_dataless"):
-                copy_atomic(d_full, l_conf, dm["mtime"])
-                copy_atomic(d_full, d_conf, dm["mtime"])
+            if not (copy_atomic(d_full, l_conf, dm["mtime"]) and copy_atomic(d_full, d_conf, dm["mtime"])):
+                _defer_file(rel_f)
+                continue
             if copy_atomic(l_full, d_full, lm["mtime"]):
                 copied_to_drive += 1
         else:
@@ -1010,15 +1204,20 @@ def _sync_single_pair_impl(
             conflict_rel = format_conflict_rel_path(rel_f, lm["mtime"])
             l_conf = os.path.join(local_path, conflict_rel)
             d_conf = os.path.join(drive_target_path, conflict_rel)
-            copy_atomic(l_full, l_conf, lm["mtime"])
-            copy_atomic(l_full, d_conf, lm["mtime"])
-            if not dm.get("is_dataless"):
-                if copy_atomic(d_full, l_full, dm["mtime"]):
-                    copied_to_local += 1
+            if not (copy_atomic(l_full, l_conf, lm["mtime"]) and copy_atomic(l_full, d_conf, lm["mtime"])):
+                _defer_file(rel_f)
+                continue
+            if copy_atomic(d_full, l_full, dm["mtime"]):
+                copied_to_local += 1
 
         conflicts_created.append(conflict_rel)
         _record_baseline_entry(rel_f, winner_meta["size"], winner_meta["mtime"], os.path.join(local_path, rel_f))
         _record_baseline_entry(conflict_rel, loser_meta["size"], loser_meta["mtime"], os.path.join(local_path, conflict_rel))
+
+    # Preserve OLD baseline entry unchanged for any deferred files so next run re-evaluates accurately
+    for rel_f in deferred:
+        if rel_f in base_files:
+            new_base_files[rel_f] = dict(base_files[rel_f])
 
     for rel_f in plan_trash_local:
         lm = l_files[rel_f]
@@ -1033,7 +1232,7 @@ def _sync_single_pair_impl(
             trashed_count += 1
 
     # Clean up empty directories that were deleted on one side
-    active_ancestors = _ancestor_dirs_for_files(set(new_base_files.keys()))
+    active_ancestors = _ancestor_dirs_for_files(set(new_base_files.keys()) | set(deferred))
     for rel_dir in sorted(l_dirs | d_dirs, key=lambda x: x.count(os.sep), reverse=True):
         if rel_dir in surviving_dirs or rel_dir in active_ancestors:
             surviving_dirs.add(rel_dir)
@@ -1059,7 +1258,7 @@ def _sync_single_pair_impl(
     set_finder_tag(local_path, True)
 
     total_files = len(new_base_files)
-    total_bytes = sum(m["size"] for m in new_base_files.values())
+    total_bytes = sum(max(0, int(m.get("size", 0))) for m in new_base_files.values())
 
     return {
         "ok": True,
@@ -1068,6 +1267,7 @@ def _sync_single_pair_impl(
         "copiedToLocal": copied_to_local,
         "trashedCount": trashed_count,
         "conflicts": conflicts_created,
+        "deferred": deferred,
         "pendingDeletionPlan": None,
         "totalFiles": total_files,
         "totalBytes": total_bytes,
@@ -1529,6 +1729,7 @@ def _apply_sync_report_to_pair(pair: Dict[str, Any], rep: Dict[str, Any]) -> Non
     pair["status"] = rep.get("status") or ("ok" if rep.get("ok") else "error")
     pair["pendingDeletionPlan"] = rep.get("pendingDeletionPlan")
     pair["lastConflicts"] = rep.get("conflicts") or []
+    pair["deferredFiles"] = rep.get("deferred") or []
     pair["isRemoteLinkBroken"] = bool(rep.get("isBrokenLink", False))
     if rep.get("ownerName"):
         pair["remoteOwnerName"] = rep.get("ownerName")
@@ -1660,6 +1861,7 @@ def upsert_and_sync_pair(
         status_json_path(),
         {"completedAt": time.time(), "results": {pair_snapshot["id"]: rep}},
         indent=None,
+        mode=0o600,
     )
     rep["pair"] = pair_snapshot
     return rep
@@ -1753,6 +1955,7 @@ def upsert_and_sync_shared_url(
         status_json_path(),
         {"completedAt": time.time(), "results": {pair_snapshot["id"]: rep}},
         indent=None,
+        mode=0o600,
     )
     rep["pair"] = pair_snapshot
     return rep
@@ -1814,7 +2017,7 @@ def run_sync_all(force_remote: bool = False) -> Dict[str, Any]:
                     for k in (
                         "lastSyncedAt", "lastSyncFileCount", "lastSyncTotalBytes",
                         "lastError", "status", "pendingDeletionPlan", "lastConflicts",
-                        "isRemoteLinkBroken", "remoteOwnerName",
+                        "deferredFiles", "isRemoteLinkBroken", "remoteOwnerName",
                     ):
                         if k in up:
                             cp[k] = up[k]
@@ -1826,6 +2029,7 @@ def run_sync_all(force_remote: bool = False) -> Dict[str, Any]:
             status_json_path(),
             {"completedAt": time.time(), "results": results},
             indent=None,
+            mode=0o600,
         )
     return {"ok": True, "syncedCount": len(results), "results": results}
 
@@ -1852,7 +2056,7 @@ def submit_command_file(
         "payload": payload or {},
         "submittedAt": time.time(),
     }
-    write_json_atomic(cmd_path, body, indent=None)
+    write_json_atomic(cmd_path, body, indent=None, mode=0o600)
     return cmd_id
 
 
@@ -2003,6 +2207,7 @@ def execute_single_command(cmd: Dict[str, Any]) -> Dict[str, Any]:
                 status_json_path(),
                 {"completedAt": time.time(), "results": {target_snapshot["id"]: rep}},
                 indent=None,
+                mode=0o600,
             )
             return {
                 "ok": bool(rep.get("ok", False)),
@@ -2111,7 +2316,7 @@ def process_pending_commands() -> int:
         cmd_id = str(cmd_data.get("id") or cmd_file.stem.split("-", 1)[-1]).upper()
         cmd_data["id"] = cmd_id
         result = execute_single_command(cmd_data)
-        write_json_atomic(res_dir / f"{cmd_id}.json", result, indent=None)
+        write_json_atomic(res_dir / f"{cmd_id}.json", result, indent=None, mode=0o600)
         try:
             claimed_path.unlink()
         except OSError:
@@ -2148,6 +2353,7 @@ def run_daemon(
     results_dir_path().mkdir(parents=True, exist_ok=True)
     state_dir_path().mkdir(parents=True, exist_ok=True)
     pair_status_dir_path().mkdir(parents=True, exist_ok=True)
+    enforce_secret_file_permissions()
 
     pid_file = daemon_pid_path()
     if pid_file.exists():
@@ -2278,9 +2484,46 @@ def _is_test_isolated_config_dir() -> bool:
     return bool(os.environ.get("DRIVEBAR_SYNC_CONFIG_DIR", "").strip())
 
 
+def _keychain_helper_path() -> Optional[Path]:
+    candidates = [
+        get_config_dir() / "drivebar_keychain_helper",
+        Path(__file__).resolve().parent / "drivebar_keychain_helper",
+        Path("/Applications/DriveBar.app/Contents/Resources/drivebar_keychain_helper"),
+    ]
+    for cand in candidates:
+        if cand.exists() and os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+def _keychain_read_via_helper(account_name: str) -> Optional[Dict[str, Any]]:
+    helper = _keychain_helper_path()
+    if helper is None:
+        return None
+    try:
+        proc = subprocess.run(
+            [str(helper), "read", "--service", KEYCHAIN_SERVICE, "--account", account_name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=4,
+            check=False,
+        )
+        if proc.returncode == 0 and proc.stdout:
+            parsed = json.loads(proc.stdout.decode("utf-8", errors="replace").strip())
+            if isinstance(parsed, dict) and parsed:
+                return parsed
+    except Exception:
+        pass
+    return None
+
+
 def _keychain_read_json(account_name: str) -> Optional[Dict[str, Any]]:
     if _is_test_isolated_config_dir():
         return None
+    via_helper = _keychain_read_via_helper(account_name)
+    if via_helper is not None:
+        return via_helper
+    # Fallback for migrating legacy Keychain items written by `/usr/bin/security` (stdout only, no argv secret)
     try:
         raw = subprocess.check_output(
             ["/usr/bin/security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account_name, "-w"],
@@ -2290,7 +2533,16 @@ def _keychain_read_json(account_name: str) -> Optional[Dict[str, Any]]:
         ).strip()
         if raw:
             parsed = json.loads(raw)
-            if isinstance(parsed, dict):
+            if isinstance(parsed, dict) and parsed:
+                # Migrate: 1) write via stdin-based helper, 2) verify read-back, 3) delete legacy item only after success
+                if _keychain_write_json(account_name, parsed):
+                    subprocess.run(
+                        ["/usr/bin/security", "delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account_name],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=3,
+                        check=False,
+                    )
                 return parsed
     except Exception:
         pass
@@ -2298,20 +2550,28 @@ def _keychain_read_json(account_name: str) -> Optional[Dict[str, Any]]:
 
 
 def _keychain_write_json(account_name: str, payload: Dict[str, Any]) -> bool:
+    """
+    Writes secret JSON to macOS Keychain via `drivebar_keychain_helper` over stdin.
+    NEVER passes secrets on argv to `/usr/bin/security` or any subprocess.
+    """
     if _is_test_isolated_config_dir():
+        return False
+    helper = _keychain_helper_path()
+    if helper is None:
         return False
     try:
         serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         proc = subprocess.run(
-            ["/usr/bin/security", "add-generic-password", "-U", "-s", KEYCHAIN_SERVICE, "-a", account_name, "-w", serialized],
+            [str(helper), "write", "--service", KEYCHAIN_SERVICE, "--account", account_name],
+            input=serialized.encode("utf-8"),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            timeout=3,
+            timeout=4,
             check=False,
         )
         if proc.returncode != 0:
             return False
-        readback = _keychain_read_json(account_name)
+        readback = _keychain_read_via_helper(account_name)
         return isinstance(readback, dict) and bool(readback)
     except Exception:
         return False
@@ -2361,7 +2621,7 @@ def migrate_plaintext_oauth_to_keychain_if_needed(oauth_path: Path, cfg: Dict[st
             del cfg["client_secret"]
         cfg["keychainService"] = KEYCHAIN_SERVICE
         try:
-            write_json_atomic(oauth_path, cfg, indent=2)
+            write_json_atomic(oauth_path, cfg, indent=2, mode=0o600)
         except Exception:
             pass
     return cfg
@@ -2371,6 +2631,11 @@ def get_valid_oauth_token(account_type: str = "personal") -> Optional[str]:
     oauth_path = get_config_dir() / "gdrive_oauth.json"
     cfg: Dict[str, Any] = {}
     if oauth_path.exists():
+        try:
+            if stat.S_IMODE(oauth_path.stat().st_mode) != 0o600:
+                os.chmod(oauth_path, 0o600)
+        except OSError:
+            pass
         try:
             loaded = json.loads(oauth_path.read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
@@ -2430,7 +2695,7 @@ def get_valid_oauth_token(account_type: str = "personal") -> Optional[str]:
                     file_acc["access_token"] = new_tok
                     file_acc["expires_at"] = new_exp
                     cfg[account_type] = file_acc
-                    write_json_atomic(oauth_path, cfg, indent=2)
+                    write_json_atomic(oauth_path, cfg, indent=2, mode=0o600)
                 elif oauth_path.exists():
                     file_acc["expires_at"] = new_exp
                     file_acc["storedInKeychain"] = True
@@ -2438,7 +2703,7 @@ def get_valid_oauth_token(account_type: str = "personal") -> Optional[str]:
                     file_acc.pop("refresh_token", None)
                     cfg[account_type] = file_acc
                     cfg.pop("client_secret", None)
-                    write_json_atomic(oauth_path, cfg, indent=2)
+                    write_json_atomic(oauth_path, cfg, indent=2, mode=0o600)
                 return new_tok
     except Exception:
         pass

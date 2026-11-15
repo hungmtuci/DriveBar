@@ -13,13 +13,13 @@
 
 ---
 
-## ✨ Điểm mới trong v1.8.0–v2.0.0
+## ✨ Điểm mới trong v1.8.0–v2.0.1
 
-- **Kiến trúc Đồng bộ An toàn Dữ liệu 3 chiều & Chỉ mục Nhị phân `mmap` (`v2.0.0`):**
-  - **Bảo vệ chống xóa hàng loạt & Kiểm tra tình trạng Mount (`Mount Health & Mass-Deletion Guard`)**: Tự động chặn xóa khi ổ Google Drive chưa mount hoặc khi số tệp dự kiến xóa vượt ngưỡng an toàn (`>= 5` tệp & `> 20%` hoặc `>= 25` tệp), yêu cầu xác nhận trực tiếp trên giao diện Cài đặt.
-  - **Phát hiện xung đột 3 chiều (`3-Way Conflict Detection`)**: Đối chiếu trạng thái `Local` – `Drive` – `Baseline` (`~/.config/drivebar-sync/state/<pairId>.json`), tự động giữ bản mới hơn và lưu bản xung đột thành `<tên> (Conflict <máy> <YYYY-MM-DD HHMMSS>).<đuôi>` trên cả 2 phía, tuyệt đối không ghi đè mất dữ liệu.
-  - **Tiến trình `launchd` (`com.hunglx.DriveBar.syncd`) & Sự kiện `kqueue`**: Thay thế vòng lặp quét `3s` bằng cơ chế lắng nghe sự kiện `kqueue`/`FSEvents` (`~0% CPU` khi rỗi), lưu khóa OAuth an toàn trong **macOS Keychain** (`com.hunglx.DriveBar.gdrive`).
-  - **Bộ nhớ đệm chỉ mục nhị phân `drivebar_index_v1.bin` (`DBIX v1` memory-mapped)**: Nạp 340.000+ thư mục & tệp tin tức thời khi khởi động (`< 5 ms`), giảm >90% RAM và tìm kiếm trực tiếp trên con trỏ byte không cấp phát bộ nhớ phụ. Xem chi tiết tại [`docs/SYNC_ARCHITECTURE.md`](docs/SYNC_ARCHITECTURE.md).
+- **Kiến trúc Đồng bộ An toàn Dữ liệu 3 chiều & Chỉ mục Nhị phân `DBIX v1` (`v2.0.1`):**
+  - **Bảo vệ chống xóa hàng loạt & Kiểm tra tình trạng Mount (`Mount Health & Mass-Deletion Guard`)**: Tự động chặn xóa khi ổ Google Drive chưa mount, khi một phía quét được `0` tệp trong khi baseline có dữ liệu, hoặc khi số tệp dự kiến xóa vượt ngưỡng `max(DRIVEBAR_DELETE_MIN_COUNT=20, int(0.20 * baseline_count))`, yêu cầu xác nhận trực tiếp trên giao diện Cài đặt.
+  - **Phát hiện xung đột 3 chiều & Tải trước tệp `SF_DATALESS` (`3-Way Conflict Detection & Dataless Materialization`)**: Đối chiếu trạng thái `Local` – `Drive` – `Baseline` (`~/.config/drivebar-sync/state/<pairId>.json`, lưu `size`, `mtime`, `localIno`, và `sha1` cho tệp `<= 64 MB`). Với tệp *Online-Only* (`SF_DATALESS`), tự động tải nội dung thật (`materialize_dataless`) trước khi so sánh/sao chép; nếu chưa tải kịp thì đưa vào danh sách chờ (`deferred`) và giữ nguyên baseline cũ. Khi cả 2 phía cùng sửa, luôn tạo bản sao xung đột `<stem> (conflict <host> <yyyy-MM-dd HHmm>).<ext>` từ nội dung thật trên cả 2 phía trước khi ghi bản mới hơn.
+  - **Tiến trình `launchd` (`com.hunglx.DriveBar.syncd`) & Bảo mật Keychain qua `stdin`**: Lắng nghe sự kiện `kqueue`/`FSEvents`, đặt quyền `0600` cho mọi tệp cấu hình/trạng thái (`gdrive_oauth.json`, `sync_pairs.json`, `state/*.json`, `commands/*.json`, `results/*.json`), và đọc/ghi khóa OAuth vào **macOS Keychain** (`com.hunglx.DriveBar.gdrive`) qua helper biên dịch sẵn `drivebar_keychain_helper` dùng `stdin` (không bao giờ truyền secret trên `argv`).
+  - **Bộ nhớ đệm chỉ mục nhị phân `drivebar_index_v1.bin` (`DBIX v1`)**: Ánh xạ tệp nhị phân và tách các vùng bảng/chuỗi bằng `Data.subdata(in:)`, nạp 340.000+ thư mục & tệp tin khi khởi động trong `~15 ms`, giảm 86% RAM (`~150.7 MB` RSS so với `1.084,2 MB` khi giải mã JSON). Xem chi tiết tại [`docs/SYNC_ARCHITECTURE.md`](docs/SYNC_ARCHITECTURE.md).
 - **Đồng bộ 2 chiều Thư mục Ổ cứng Mac ↔ Google Drive từ Menu Chuột phải Finder (`Quick Actions` & `Services`):**
   - Giải quyết triệt để hạn chế của Google Drive for Desktop trên macOS (vốn từ chối thêm các thư mục con nằm trong `~/Documents` khi `~/Documents` đang bật iCloud Drive).
   - Bấm chuột phải vào bất kỳ thư mục sản phẩm nào trên ổ cứng Mac (ví dụ `~/Documents/antigravity/TuVanDichVu/Ho_so_San_pham_Nghiem_thu_CNYTCC_YTeSo`) → chọn **Quick Actions (Tác vụ nhanh)** hoặc **Services (Dịch vụ)**:

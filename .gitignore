@@ -69,3 +69,8 @@ token.json
 .vscode/
 *.swp
 # ==== end SPMPH policy ====
+!Resources/Templates/
+!Resources/Templates/blank.docx
+!Resources/Templates/blank.pptx
+!Resources/Templates/blank.xlsx
+

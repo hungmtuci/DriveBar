@@ -296,8 +296,21 @@ fi
 if [ -f "$PROJECT_DIR/Resources/folder_badge_helper.swift" ]; then
     cp "$PROJECT_DIR/Resources/folder_badge_helper.swift" "$STAGE_APP/Contents/Resources/folder_badge_helper.swift"
     cp "$PROJECT_DIR/Resources/folder_badge_helper.swift" "$HOME/.config/drivebar-sync/folder_badge_helper.swift"
-    swiftc -O "$HOME/.config/drivebar-sync/folder_badge_helper.swift" -o "$HOME/.config/drivebar-sync/folder_badge_helper" 2>/dev/null || true
+    swiftc -O "$PROJECT_DIR/Resources/folder_badge_helper.swift" -o "$STAGE_APP/Contents/Resources/folder_badge_helper" 2>/dev/null || true
+    chmod +x "$STAGE_APP/Contents/Resources/folder_badge_helper" 2>/dev/null || true
+    cp "$STAGE_APP/Contents/Resources/folder_badge_helper" "$HOME/.config/drivebar-sync/folder_badge_helper" 2>/dev/null || true
     chmod +x "$HOME/.config/drivebar-sync/folder_badge_helper" 2>/dev/null || true
+fi
+if [ -f "$PROJECT_DIR/Resources/drivebar_keychain_helper.swift" ]; then
+    cp "$PROJECT_DIR/Resources/drivebar_keychain_helper.swift" "$STAGE_APP/Contents/Resources/drivebar_keychain_helper.swift"
+    swiftc -O "$PROJECT_DIR/Resources/drivebar_keychain_helper.swift" -o "$STAGE_APP/Contents/Resources/drivebar_keychain_helper"
+    chmod +x "$STAGE_APP/Contents/Resources/drivebar_keychain_helper"
+    if [ ! -x "$HOME/.config/drivebar-sync/drivebar_keychain_helper" ] || ! cmp -s "$PROJECT_DIR/Resources/drivebar_keychain_helper.swift" "$HOME/.config/drivebar-sync/drivebar_keychain_helper.swift"; then
+        cp "$STAGE_APP/Contents/Resources/drivebar_keychain_helper" "$HOME/.config/drivebar-sync/drivebar_keychain_helper"
+        chmod +x "$HOME/.config/drivebar-sync/drivebar_keychain_helper"
+        codesign --force --sign - "$HOME/.config/drivebar-sync/drivebar_keychain_helper" 2>/dev/null || true
+        cp "$PROJECT_DIR/Resources/drivebar_keychain_helper.swift" "$HOME/.config/drivebar-sync/drivebar_keychain_helper.swift"
+    fi
 fi
 xattr -cr "$STAGE_APP" 2>/dev/null || true
 codesign --force --deep --sign - "$STAGE_APP"
@@ -368,9 +381,8 @@ if [ "$INSTALL_APP" -eq 1 ]; then
     xattr -cr "/Applications/$APP_NAME.app" 2>/dev/null || true
     /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/$APP_NAME.app" 2>/dev/null || true
     if [ -f "$HOME/.config/drivebar-sync/gdrive_folder_sync.py" ]; then
-        pkill -f "gdrive_folder_sync.py --daemon" 2>/dev/null || true
         rm -f "$HOME/.config/drivebar-sync/daemon.pid" 2>/dev/null || true
-        nohup /opt/homebrew/bin/python3.11 "$HOME/.config/drivebar-sync/gdrive_folder_sync.py" --daemon >/tmp/drivebar_sync_daemon.log 2>&1 &
+        launchctl kickstart -k "gui/$(id -u)/com.hunglx.DriveBar.syncd" 2>/dev/null || true
     fi
     open "/Applications/$APP_NAME.app"
 fi

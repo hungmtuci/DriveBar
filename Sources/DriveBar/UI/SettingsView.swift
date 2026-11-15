@@ -1647,6 +1647,20 @@ private struct GoogleDriveSettingsPane: View {
                                             .background(Color.orange.opacity(0.16), in: Capsule())
                                     }
 
+                                    if pair.deferredCount > 0 {
+                                        Text(
+                                            L(
+                                                "⏳ \(pair.deferredCount) tệp đang chờ tải từ Drive",
+                                                "⏳ \(pair.deferredCount) files waiting for Drive download"
+                                            )
+                                        )
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundStyle(.orange)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 1.5)
+                                        .background(Color.orange.opacity(0.14), in: Capsule())
+                                    }
+
                                     let byteStr = ByteCountFormatter.string(fromByteCount: pair.lastSyncTotalBytes, countStyle: .file)
                                     Text("\(pair.lastSyncFileCount) \(L("tệp", "files")) (\(byteStr))")
                                         .font(.system(size: 10.5))
