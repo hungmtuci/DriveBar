@@ -1596,6 +1596,15 @@ private struct GoogleDriveSettingsPane: View {
                                             .background(Color.red.opacity(0.14), in: Capsule())
                                     }
 
+                                    if pair.needsConfirmation {
+                                        Text(L("🛡️ Chờ xác nhận xóa hàng loạt", "🛡️ Needs Deletion Confirmation"))
+                                            .font(.system(size: 10, weight: .bold))
+                                            .foregroundStyle(.orange)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 1.5)
+                                            .background(Color.orange.opacity(0.16), in: Capsule())
+                                    }
+
                                     let byteStr = ByteCountFormatter.string(fromByteCount: pair.lastSyncTotalBytes, countStyle: .file)
                                     Text("\(pair.lastSyncFileCount) \(L("tệp", "files")) (\(byteStr))")
                                         .font(.system(size: 10.5))
@@ -1625,6 +1634,49 @@ private struct GoogleDriveSettingsPane: View {
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                                     .truncationMode(.middle)
+
+                                if pair.needsConfirmation {
+                                    let plan = pair.pendingDeletionPlan
+                                    let delCount = plan?.totalPlannedDeletes ?? 0
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text(
+                                            plan?.reason ?? L(
+                                                "Phát hiện yêu cầu xóa \(delCount) tệp vượt ngưỡng an toàn. Đã tạm dừng để bảo vệ dữ liệu.",
+                                                "Detected \(delCount) planned deletions exceeding safety threshold. Paused to protect files."
+                                            )
+                                        )
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(.orange)
+
+                                        HStack(spacing: 8) {
+                                            Button {
+                                                localSyncService.resolveMassDeletionConfirmation(id: pair.id, applyDeletions: false)
+                                            } label: {
+                                                Label(
+                                                    L("Khôi phục tệp từ phía còn lại", "Restore from other side"),
+                                                    systemImage: "arrow.uturn.backward.circle.fill"
+                                                )
+                                                .font(.system(size: 11, weight: .semibold))
+                                            }
+                                            .buttonStyle(.borderedProminent)
+                                            .tint(.blue)
+                                            .controlSize(.small)
+
+                                            Button {
+                                                localSyncService.resolveMassDeletionConfirmation(id: pair.id, applyDeletions: true)
+                                            } label: {
+                                                Label(
+                                                    L("Cho phép xóa (\(delCount) tệp)", "Apply deletions (\(delCount) files)"),
+                                                    systemImage: "trash.fill"
+                                                )
+                                                .font(.system(size: 11, weight: .medium))
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .controlSize(.small)
+                                        }
+                                    }
+                                    .padding(.top, 3)
+                                }
                             }
 
                             Spacer()

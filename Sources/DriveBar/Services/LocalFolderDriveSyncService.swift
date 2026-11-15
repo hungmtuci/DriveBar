@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import CoreServices
 import Darwin
+import os
 
 enum FolderSyncMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case twoWayMirror = "two_way_mirror"
@@ -122,6 +123,19 @@ struct SharedFolderInspectResult: Codable, Sendable {
     let errorMessage: String?
 }
 
+struct PendingDeletionPlan: Codable, Equatable, Sendable {
+    var localDeletes: [String]
+    var driveDeletes: [String]
+    var localFileCount: Int
+    var driveFileCount: Int
+    var baselineFileCount: Int
+    var reason: String
+
+    var totalPlannedDeletes: Int {
+        localDeletes.count + driveDeletes.count
+    }
+}
+
 struct SyncedFolderPair: Identifiable, Codable, Equatable, Sendable {
     var id: UUID
     var localPath: String
@@ -140,6 +154,119 @@ struct SyncedFolderPair: Identifiable, Codable, Equatable, Sendable {
     var remoteFolderID: String?
     var remoteOwnerName: String?
     var isRemoteLinkBroken: Bool?
+    var status: String?
+    var pendingDeletionPlan: PendingDeletionPlan?
+    var lastConflicts: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case id, localPath, driveTargetPath, syncMode, isEnabled
+        case createdAt, lastSyncedAt, lastSyncFileCount, lastSyncTotalBytes
+        case lastError, knownRelativeFiles, shareAccessLevel, shareURLString
+        case remoteSharedURL, remoteFolderID, remoteOwnerName, isRemoteLinkBroken
+        case status, pendingDeletionPlan, lastConflicts
+    }
+
+    init(
+        id: UUID,
+        localPath: String,
+        driveTargetPath: String,
+        syncMode: FolderSyncMode,
+        isEnabled: Bool,
+        createdAt: Date,
+        lastSyncedAt: Date?,
+        lastSyncFileCount: Int,
+        lastSyncTotalBytes: Int64,
+        lastError: String?,
+        knownRelativeFiles: Set<String> = [],
+        shareAccessLevel: DriveShareAccessLevel? = nil,
+        shareURLString: String? = nil,
+        remoteSharedURL: String? = nil,
+        remoteFolderID: String? = nil,
+        remoteOwnerName: String? = nil,
+        isRemoteLinkBroken: Bool? = nil,
+        status: String? = "ok",
+        pendingDeletionPlan: PendingDeletionPlan? = nil,
+        lastConflicts: [String]? = nil
+    ) {
+        self.id = id
+        self.localPath = localPath
+        self.driveTargetPath = driveTargetPath
+        self.syncMode = syncMode
+        self.isEnabled = isEnabled
+        self.createdAt = createdAt
+        self.lastSyncedAt = lastSyncedAt
+        self.lastSyncFileCount = lastSyncFileCount
+        self.lastSyncTotalBytes = lastSyncTotalBytes
+        self.lastError = lastError
+        self.knownRelativeFiles = knownRelativeFiles
+        self.shareAccessLevel = shareAccessLevel
+        self.shareURLString = shareURLString
+        self.remoteSharedURL = remoteSharedURL
+        self.remoteFolderID = remoteFolderID
+        self.remoteOwnerName = remoteOwnerName
+        self.isRemoteLinkBroken = isRemoteLinkBroken
+        self.status = status
+        self.pendingDeletionPlan = pendingDeletionPlan
+        self.lastConflicts = lastConflicts
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if let uuidVal = try? c.decode(UUID.self, forKey: .id) {
+            self.id = uuidVal
+        } else if let strVal = try? c.decode(String.self, forKey: .id), let parsed = UUID(uuidString: strVal) {
+            self.id = parsed
+        } else {
+            self.id = UUID()
+        }
+        self.localPath = (try? c.decode(String.self, forKey: .localPath)) ?? ""
+        self.driveTargetPath = (try? c.decode(String.self, forKey: .driveTargetPath)) ?? ""
+        self.syncMode = (try? c.decode(FolderSyncMode.self, forKey: .syncMode)) ?? .twoWayMirror
+        self.isEnabled = (try? c.decode(Bool.self, forKey: .isEnabled)) ?? true
+        self.createdAt = (try? c.decode(Date.self, forKey: .createdAt)) ?? Date()
+        self.lastSyncedAt = try? c.decodeIfPresent(Date.self, forKey: .lastSyncedAt)
+        self.lastSyncFileCount = (try? c.decode(Int.self, forKey: .lastSyncFileCount)) ?? 0
+        self.lastSyncTotalBytes = (try? c.decode(Int64.self, forKey: .lastSyncTotalBytes)) ?? 0
+        self.lastError = try? c.decodeIfPresent(String.self, forKey: .lastError)
+        self.knownRelativeFiles = (try? c.decodeIfPresent(Set<String>.self, forKey: .knownRelativeFiles)) ?? []
+        self.shareAccessLevel = try? c.decodeIfPresent(DriveShareAccessLevel.self, forKey: .shareAccessLevel)
+        self.shareURLString = try? c.decodeIfPresent(String.self, forKey: .shareURLString)
+        self.remoteSharedURL = try? c.decodeIfPresent(String.self, forKey: .remoteSharedURL)
+        self.remoteFolderID = try? c.decodeIfPresent(String.self, forKey: .remoteFolderID)
+        self.remoteOwnerName = try? c.decodeIfPresent(String.self, forKey: .remoteOwnerName)
+        self.isRemoteLinkBroken = try? c.decodeIfPresent(Bool.self, forKey: .isRemoteLinkBroken)
+        self.status = try? c.decodeIfPresent(String.self, forKey: .status)
+        self.pendingDeletionPlan = try? c.decodeIfPresent(PendingDeletionPlan.self, forKey: .pendingDeletionPlan)
+        self.lastConflicts = try? c.decodeIfPresent([String].self, forKey: .lastConflicts)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(localPath, forKey: .localPath)
+        try c.encode(driveTargetPath, forKey: .driveTargetPath)
+        try c.encode(syncMode, forKey: .syncMode)
+        try c.encode(isEnabled, forKey: .isEnabled)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encodeIfPresent(lastSyncedAt, forKey: .lastSyncedAt)
+        try c.encode(lastSyncFileCount, forKey: .lastSyncFileCount)
+        try c.encode(lastSyncTotalBytes, forKey: .lastSyncTotalBytes)
+        try c.encodeIfPresent(lastError, forKey: .lastError)
+        // Intentionally omit `knownRelativeFiles` from UserDefaults/config payloads (§3.2 / §3.5)
+        try c.encodeIfPresent(shareAccessLevel, forKey: .shareAccessLevel)
+        try c.encodeIfPresent(shareURLString, forKey: .shareURLString)
+        try c.encodeIfPresent(remoteSharedURL, forKey: .remoteSharedURL)
+        try c.encodeIfPresent(remoteFolderID, forKey: .remoteFolderID)
+        try c.encodeIfPresent(remoteOwnerName, forKey: .remoteOwnerName)
+        try c.encodeIfPresent(isRemoteLinkBroken, forKey: .isRemoteLinkBroken)
+        try c.encodeIfPresent(status, forKey: .status)
+        try c.encodeIfPresent(pendingDeletionPlan, forKey: .pendingDeletionPlan)
+        try c.encodeIfPresent(lastConflicts, forKey: .lastConflicts)
+    }
+
+    var needsConfirmation: Bool {
+        status == "needs_confirmation" || pendingDeletionPlan != nil
+    }
 
     var folderName: String {
         (localPath as NSString).lastPathComponent
@@ -157,6 +284,12 @@ struct SyncedFolderPair: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+private struct SyncedPairsFileEnvelope: Codable, Sendable {
+    let schemaVersion: Int
+    let updatedAt: Double?
+    let pairs: [SyncedFolderPair]
+}
+
 struct SyncExecutionReport: Sendable {
     let pairID: UUID
     let copiedToDrive: Int
@@ -171,7 +304,11 @@ struct SyncExecutionReport: Sendable {
 final class LocalFolderDriveSyncService: ObservableObject {
     static let shared = LocalFolderDriveSyncService()
 
-    @Published private(set) var syncedPairs: [SyncedFolderPair] = []
+    @Published private(set) var syncedPairs: [SyncedFolderPair] = [] {
+        didSet {
+            Self.updateMappedPairsSnapshot(from: syncedPairs)
+        }
+    }
     @Published private(set) var activeSyncingIDs: Set<UUID> = []
     @Published private(set) var isGlobalSyncing: Bool = false
     @Published var defaultDriveSyncSubfolder: String {
@@ -183,6 +320,27 @@ final class LocalFolderDriveSyncService: ObservableObject {
     nonisolated private static let pairsStorageKey = "drivebar.localFolderSyncPairs.v1"
     nonisolated private static let defaultSubfolderKey = "drivebar.defaultDriveSyncSubfolder.v1"
     nonisolated private static let finderSyncTagVI = "Đồng bộ GDrive"
+    nonisolated private static let expectedHelperVersion = "2.0.0"
+
+    private struct MappedPairEntry: Sendable {
+        let localStd: String
+        let driveStd: String
+    }
+
+    nonisolated private static let mappedPairsLock = OSAllocatedUnfairLock(initialState: [MappedPairEntry]())
+
+    nonisolated private static func updateMappedPairsSnapshot(from pairs: [SyncedFolderPair]) {
+        let entries: [MappedPairEntry] = pairs.compactMap { pair in
+            guard pair.isEnabled else { return nil }
+            let lStd = (pair.localPath as NSString).standardizingPath
+            let dStd = (pair.driveTargetPath as NSString).standardizingPath
+            guard !lStd.isEmpty, !dStd.isEmpty else { return nil }
+            return MappedPairEntry(localStd: lStd, driveStd: dStd)
+        }
+        mappedPairsLock.withLock { state in
+            state = entries
+        }
+    }
 
     private let syncQueue = DispatchQueue(label: "com.hunglx.DriveBar.LocalFolderDriveSyncQueue", qos: .utility)
     private var fsEventStream: FSEventStreamRef?
@@ -216,6 +374,7 @@ final class LocalFolderDriveSyncService: ObservableObject {
     }
 
     func start() {
+        ensureInstalledHelperUpToDate()
         installFinderQuickActionsIfNeeded(force: true)
         reloadPairsFromSharedFileIfAvailable()
         restartFSEventsMonitor()
@@ -230,7 +389,70 @@ final class LocalFolderDriveSyncService: ObservableObject {
         }
     }
 
-    // MARK: - Persistence
+    // MARK: - Helper Version Verification & Atomic Upgrade (§3.4)
+
+    func ensureInstalledHelperUpToDate() {
+        syncQueue.async {
+            Self.syncBundledHelperScriptIfNeeded()
+        }
+    }
+
+    nonisolated private static func bundledHelperCandidatePaths() -> [String] {
+        var candidates: [String] = []
+        if let bundleRes = Bundle.main.resourcePath {
+            candidates.append((bundleRes as NSString).appendingPathComponent("gdrive_folder_sync.py"))
+        }
+        candidates.append("/Applications/DriveBar.app/Contents/Resources/gdrive_folder_sync.py")
+        return candidates
+    }
+
+    nonisolated private static func extractHelperVersion(atPath path: String) -> String? {
+        guard let fd = fopen(path, "r") else { return nil }
+        defer { fclose(fd) }
+        var lineBuf = [CChar](repeating: 0, count: 512)
+        var linesRead = 0
+        while linesRead < 60 && fgets(&lineBuf, Int32(lineBuf.count), fd) != nil {
+            linesRead += 1
+            let line = String(cString: lineBuf)
+            if line.contains("HELPER_VERSION"), let firstQuote = line.firstIndex(of: "\""),
+               let lastQuote = line.lastIndex(of: "\""), firstQuote < lastQuote {
+                return String(line[line.index(after: firstQuote)..<lastQuote])
+            }
+        }
+        return nil
+    }
+
+    nonisolated private static func syncBundledHelperScriptIfNeeded() {
+        let fm = FileManager.default
+        let dstPath = helperScriptPath()
+        let cfgDir = sharedConfigDirPath()
+        try? fm.createDirectory(atPath: cfgDir, withIntermediateDirectories: true)
+
+        guard let srcPath = bundledHelperCandidatePaths().first(where: { fm.fileExists(atPath: $0) }) else {
+            return
+        }
+        let srcVersion = extractHelperVersion(atPath: srcPath) ?? expectedHelperVersion
+        let dstVersion = extractHelperVersion(atPath: dstPath)
+
+        if !fm.fileExists(atPath: dstPath) || dstVersion != srcVersion {
+            let tmpPath = dstPath + ".tmp.\(ProcessInfo.processInfo.processIdentifier)"
+            try? fm.removeItem(atPath: tmpPath)
+            do {
+                try fm.copyItem(atPath: srcPath, toPath: tmpPath)
+                try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tmpPath)
+                if fm.fileExists(atPath: dstPath) {
+                    _ = try fm.replaceItemAt(URL(fileURLWithPath: dstPath), withItemAt: URL(fileURLWithPath: tmpPath))
+                } else {
+                    try fm.moveItem(atPath: tmpPath, toPath: dstPath)
+                }
+                try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dstPath)
+            } catch {
+                try? fm.removeItem(atPath: tmpPath)
+            }
+        }
+    }
+
+    // MARK: - Persistence & Single-Writer Command Channel (§3.3)
 
     nonisolated private static func sharedConfigDirPath() -> String {
         (NSHomeDirectory() as NSString).appendingPathComponent(".config/drivebar-sync")
@@ -238,6 +460,14 @@ final class LocalFolderDriveSyncService: ObservableObject {
 
     nonisolated private static func sharedPairsFilePath() -> String {
         (sharedConfigDirPath() as NSString).appendingPathComponent("sync_pairs.json")
+    }
+
+    nonisolated private static func commandsDirPath() -> String {
+        (sharedConfigDirPath() as NSString).appendingPathComponent("commands")
+    }
+
+    nonisolated private static func resultsDirPath() -> String {
+        (sharedConfigDirPath() as NSString).appendingPathComponent("results")
     }
 
     nonisolated private static func makeJSONDecoder() -> JSONDecoder {
@@ -253,18 +483,28 @@ final class LocalFolderDriveSyncService: ObservableObject {
         return enc
     }
 
+    nonisolated private static func decodePairsFromSharedData(_ data: Data) -> [SyncedFolderPair]? {
+        let dec = makeJSONDecoder()
+        if let env = try? dec.decode(SyncedPairsFileEnvelope.self, from: data) {
+            return env.pairs
+        }
+        if let arr = try? dec.decode([SyncedFolderPair].self, from: data) {
+            return arr
+        }
+        return nil
+    }
+
     func reloadPairsFromSharedFileIfAvailable() {
         let path = Self.sharedPairsFilePath()
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
-              let decoded = try? Self.makeJSONDecoder().decode([SyncedFolderPair].self, from: data) else {
+              let decoded = Self.decodePairsFromSharedData(data) else {
             return
         }
         if decoded != syncedPairs {
             let oldBrokenIDs = Set(syncedPairs.filter { $0.isRemoteLinkBroken == true }.map(\.id))
+            let oldConfirmIDs = Set(syncedPairs.filter { $0.needsConfirmation }.map(\.id))
             syncedPairs = decoded
-            if let encoded = try? Self.makeJSONEncoder().encode(decoded) {
-                UserDefaults.standard.set(encoded, forKey: Self.pairsStorageKey)
-            }
+            savePairsToUserDefaultsOnly()
             for pair in decoded where pair.isRemoteLinkBroken == true && !oldBrokenIDs.contains(pair.id) {
                 FloatingToastController.shared.showError(
                     title: L("⚠️ Link Google Drive chia sẻ đã bị khóa!", "⚠️ Shared Google Drive Link Locked!"),
@@ -274,34 +514,157 @@ final class LocalFolderDriveSyncService: ObservableObject {
                     )
                 )
             }
+            for pair in decoded where pair.needsConfirmation && !oldConfirmIDs.contains(pair.id) {
+                FloatingToastController.shared.showError(
+                    title: L("🛡️ Đã tạm dừng xóa hàng loạt để bảo vệ dữ liệu", "🛡️ Paused Mass Deletion to Protect Files"),
+                    subtitle: L(
+                        "'\(pair.folderName)' cần bạn xác nhận trong Cài đặt → Google Drive & Đồng bộ",
+                        "'\(pair.folderName)' requires confirmation in Settings → Google Drive & Sync"
+                    )
+                )
+            }
         }
     }
 
     private func loadPairs() {
         let path = Self.sharedPairsFilePath()
         if let fileData = try? Data(contentsOf: URL(fileURLWithPath: path)),
-           let decoded = try? Self.makeJSONDecoder().decode([SyncedFolderPair].self, from: fileData) {
+           let decoded = Self.decodePairsFromSharedData(fileData) {
             syncedPairs = decoded
-            if let encoded = try? Self.makeJSONEncoder().encode(decoded) {
-                UserDefaults.standard.set(encoded, forKey: Self.pairsStorageKey)
-            }
+            savePairsToUserDefaultsOnly()
             return
         }
         if let data = UserDefaults.standard.data(forKey: Self.pairsStorageKey),
-           let decoded = (try? Self.makeJSONDecoder().decode([SyncedFolderPair].self, from: data)) ?? (try? JSONDecoder().decode([SyncedFolderPair].self, from: data)) {
+           let decoded = Self.decodePairsFromSharedData(data) ?? (try? JSONDecoder().decode([SyncedFolderPair].self, from: data)) {
             syncedPairs = decoded
-            savePairs()
             return
         }
         syncedPairs = []
     }
 
-    private func savePairs() {
+    /// Saves lightweight pair metadata only to `UserDefaults` for offline display.
+    /// `sync_pairs.json` is written exclusively by the Python sync engine under `flock` (§3.3).
+    private func savePairsToUserDefaultsOnly() {
         guard let data = try? Self.makeJSONEncoder().encode(syncedPairs) else { return }
         UserDefaults.standard.set(data, forKey: Self.pairsStorageKey)
-        let dir = Self.sharedConfigDirPath()
-        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        try? data.write(to: URL(fileURLWithPath: Self.sharedPairsFilePath()), options: .atomic)
+    }
+
+    private func savePairs() {
+        savePairsToUserDefaultsOnly()
+    }
+
+    // MARK: - Command Queue Submission & Event-Driven Result Waiting (§3.3)
+
+    private struct CommandChannelResult: Decodable {
+        let ok: Bool
+        let commandId: String?
+        let op: String?
+        let completedAt: Double?
+        let pair: SyncedFolderPair?
+        let report: HelperSyncResponse?
+        let shareResult: DriveSharePermissionResult?
+        let errorMessage: String?
+    }
+
+    nonisolated private static func submitEngineCommandAndWait(
+        op: String,
+        pairID: UUID?,
+        payload: [String: Any],
+        timeout: TimeInterval = 60.0
+    ) -> CommandChannelResult? {
+        let fm = FileManager.default
+        let cmdDir = commandsDirPath()
+        let resDir = resultsDirPath()
+        try? fm.createDirectory(atPath: cmdDir, withIntermediateDirectories: true)
+        try? fm.createDirectory(atPath: resDir, withIntermediateDirectories: true)
+
+        let cmdID = UUID().uuidString.uppercased()
+        let epochMs = Int64(Date().timeIntervalSince1970 * 1000.0)
+        let cmdPath = (cmdDir as NSString).appendingPathComponent("\(epochMs)-\(cmdID).json")
+        let tmpPath = (cmdDir as NSString).appendingPathComponent(".tmp.\(cmdID).json")
+        let resPath = (resDir as NSString).appendingPathComponent("\(cmdID).json")
+
+        var body: [String: Any] = [
+            "v": 1,
+            "id": cmdID,
+            "op": op,
+            "payload": payload,
+            "submittedAt": Date().timeIntervalSince1970
+        ]
+        if let pairID {
+            body["pairId"] = pairID.uuidString.uppercased()
+        }
+
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else {
+            return nil
+        }
+        do {
+            try jsonData.write(to: URL(fileURLWithPath: tmpPath), options: .atomic)
+            try fm.moveItem(atPath: tmpPath, toPath: cmdPath)
+        } catch {
+            try? fm.removeItem(atPath: tmpPath)
+            return nil
+        }
+
+        // If the background daemon is not running, execute `--process-commands` synchronously in helper
+        if !isSyncDaemonRunning() {
+            let script = helperScriptPath()
+            if fm.fileExists(atPath: script) {
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: pythonExecutablePath())
+                proc.arguments = [script, "--process-commands"]
+                proc.standardOutput = FileHandle.nullDevice
+                proc.standardError = FileHandle.nullDevice
+                try? proc.run()
+                proc.waitUntilExit()
+            }
+        } else {
+            // Touch trigger.flag as well so legacy or sleeping kqueue wakes immediately
+            let triggerPath = (sharedConfigDirPath() as NSString).appendingPathComponent("trigger.flag")
+            try? "cmd".write(toFile: triggerPath, atomically: true, encoding: .utf8)
+        }
+
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: resPath)),
+           let decoded = try? makeJSONDecoder().decode(CommandChannelResult.self, from: data) {
+            try? fm.removeItem(atPath: resPath)
+            return decoded
+        }
+
+        // Wait for `results/<cmdID>.json` using a DispatchSource directory watcher on `results/`
+        let sem = DispatchSemaphore(value: 0)
+        let dirFD = Darwin.open(resDir, O_EVTONLY)
+        var source: DispatchSourceFileSystemObject?
+        if dirFD >= 0 {
+            let src = DispatchSource.makeFileSystemObjectSource(
+                fileDescriptor: dirFD,
+                eventMask: [.write, .extend, .rename],
+                queue: DispatchQueue.global(qos: .utility)
+            )
+            src.setEventHandler {
+                if fm.fileExists(atPath: resPath) {
+                    sem.signal()
+                }
+            }
+            src.setCancelHandler {
+                Darwin.close(dirFD)
+            }
+            src.resume()
+            source = src
+        }
+        defer {
+            source?.cancel()
+        }
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let data = try? Data(contentsOf: URL(fileURLWithPath: resPath)),
+               let decoded = try? makeJSONDecoder().decode(CommandChannelResult.self, from: data) {
+                try? fm.removeItem(atPath: resPath)
+                return decoded
+            }
+            _ = sem.wait(timeout: .now() + 0.25)
+        }
+        return nil
     }
 
     // MARK: - Query & Path Mapping Helpers
@@ -330,25 +693,18 @@ final class LocalFolderDriveSyncService: ObservableObject {
     }
 
     /// Maps a local path inside a synced folder to its corresponding path inside Google Drive.
+    /// Reads from in-memory `OSAllocatedUnfairLock` snapshot in O(pairs) without decoding JSON (§3.5).
     nonisolated static func mappedDrivePath(forLocalPath path: String) -> String? {
-        var pairs: [SyncedFolderPair] = []
-        if let data = UserDefaults.standard.data(forKey: Self.pairsStorageKey),
-           let decoded = (try? makeJSONDecoder().decode([SyncedFolderPair].self, from: data)) ?? (try? JSONDecoder().decode([SyncedFolderPair].self, from: data)) {
-            pairs = decoded
-        } else if let fileData = try? Data(contentsOf: URL(fileURLWithPath: sharedPairsFilePath())),
-                  let decoded = try? makeJSONDecoder().decode([SyncedFolderPair].self, from: fileData) {
-            pairs = decoded
-        }
-        guard !pairs.isEmpty else { return nil }
+        let entries = mappedPairsLock.withLock { $0 }
+        guard !entries.isEmpty else { return nil }
         let std = (path as NSString).standardizingPath
-        for pair in pairs where pair.isEnabled {
-            let localStd = (pair.localPath as NSString).standardizingPath
-            if std == localStd {
-                return pair.driveTargetPath
+        for entry in entries {
+            if std == entry.localStd {
+                return entry.driveStd
             }
-            if std.hasPrefix(localStd + "/") {
-                let rel = String(std.dropFirst(localStd.count + 1))
-                return (pair.driveTargetPath as NSString).appendingPathComponent(rel)
+            if std.hasPrefix(entry.localStd + "/") {
+                let rel = String(std.dropFirst(entry.localStd.count + 1))
+                return (entry.driveStd as NSString).appendingPathComponent(rel)
             }
         }
         return nil
@@ -397,7 +753,7 @@ final class LocalFolderDriveSyncService: ObservableObject {
         return (baseRoot as NSString).appendingPathComponent(folderName)
     }
 
-    // MARK: - Add / Update / Remove Synced Folder Pair
+    // MARK: - Add / Update / Remove / Confirm Synced Folder Pair
 
     @discardableResult
     func addOrUpdateSyncPair(
@@ -409,7 +765,6 @@ final class LocalFolderDriveSyncService: ObservableObject {
         let stdLocal = (localPath as NSString).standardizingPath
         guard !stdLocal.isEmpty else { return nil }
 
-        // Prevent syncing a folder that is already inside Google Drive directly to itself
         let targetDrive = ((driveTargetPath ?? suggestedDriveTargetPath(for: stdLocal)) as NSString).standardizingPath
         if stdLocal == targetDrive {
             if showToast {
@@ -422,14 +777,18 @@ final class LocalFolderDriveSyncService: ObservableObject {
         }
 
         let pair: SyncedFolderPair
+        let opName: String
         if let idx = syncedPairs.firstIndex(where: { ($0.localPath as NSString).standardizingPath == stdLocal }) {
             var existing = syncedPairs[idx]
             existing.driveTargetPath = targetDrive
             existing.syncMode = mode
             existing.isEnabled = true
             existing.lastError = nil
+            existing.status = "ok"
+            existing.pendingDeletionPlan = nil
             syncedPairs[idx] = existing
             pair = existing
+            opName = "update"
         } else {
             let newPair = SyncedFolderPair(
                 id: UUID(),
@@ -446,11 +805,12 @@ final class LocalFolderDriveSyncService: ObservableObject {
             )
             syncedPairs.insert(newPair, at: 0)
             pair = newPair
+            opName = "add"
         }
 
         savePairs()
         restartFSEventsMonitor()
-        syncPairNow(id: pair.id, showToast: showToast)
+        enqueuePairCommandAndSync(op: opName, pair: pair, showToast: showToast)
         return pair
     }
 
@@ -461,8 +821,18 @@ final class LocalFolderDriveSyncService: ObservableObject {
         savePairs()
         restartFSEventsMonitor()
 
-        syncQueue.async {
-            Self.cleanupRemovedPairOnBackgroundQueue(pair: pair, restoreSymlink: restoreRealFolderIfSymlink)
+        syncQueue.async { [weak self] in
+            let cmdRes = Self.submitEngineCommandAndWait(
+                op: "remove",
+                pairID: pair.id,
+                payload: ["restoreSymlink": restoreRealFolderIfSymlink]
+            )
+            if cmdRes == nil {
+                Self.cleanupRemovedPairOnBackgroundQueue(pair: pair, restoreSymlink: restoreRealFolderIfSymlink)
+            }
+            Task { @MainActor [weak self] in
+                self?.reloadPairsFromSharedFileIfAvailable()
+            }
         }
 
         if showToast {
@@ -478,11 +848,69 @@ final class LocalFolderDriveSyncService: ObservableObject {
         guard let idx = syncedPairs.firstIndex(where: { $0.id == id }) else { return }
         syncedPairs[idx].isEnabled.toggle()
         let enabled = syncedPairs[idx].isEnabled
-        let idVal = syncedPairs[idx].id
+        let pairSnap = syncedPairs[idx]
         savePairs()
         restartFSEventsMonitor()
-        if enabled {
-            syncPairNow(id: idVal, showToast: true)
+
+        syncQueue.async { [weak self] in
+            _ = Self.submitEngineCommandAndWait(
+                op: enabled ? "enable" : "disable",
+                pairID: pairSnap.id,
+                payload: ["isEnabled": enabled, "syncImmediately": false]
+            )
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.reloadPairsFromSharedFileIfAvailable()
+                if enabled {
+                    self.syncPairNow(id: pairSnap.id, showToast: true)
+                }
+            }
+        }
+    }
+
+    func resolveMassDeletionConfirmation(id: UUID, applyDeletions: Bool) {
+        guard let pair = syncedPairs.first(where: { $0.id == id }) else { return }
+        let resolution = applyDeletions ? "apply_deletions" : "restore_from_other"
+        guard !activeSyncingIDs.contains(id) else { return }
+
+        activeSyncingIDs.insert(id)
+        isGlobalSyncing = !activeSyncingIDs.isEmpty
+
+        FloatingToastController.shared.showProgress(
+            title: applyDeletions
+                ? L("Đang thực thi xóa các tệp đã xác nhận...", "Applying confirmed file deletions...")
+                : L("Đang khôi phục các tệp từ phía đối ứng...", "Restoring files from counterpart folder..."),
+            subtitle: pair.folderName
+        )
+
+        syncQueue.async { [weak self] in
+            let cmdRes = Self.submitEngineCommandAndWait(
+                op: "resolve_confirmation",
+                pairID: id,
+                payload: ["resolution": resolution, "force": true],
+                timeout: 120.0
+            )
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.activeSyncingIDs.remove(id)
+                self.isGlobalSyncing = !self.activeSyncingIDs.isEmpty
+                self.reloadPairsFromSharedFileIfAvailable()
+
+                if let cmdRes, cmdRes.ok {
+                    FloatingToastController.shared.showSuccess(
+                        title: applyDeletions
+                            ? L("Đã hoàn tất xóa đồng bộ an toàn", "Completed confirmed deletions")
+                            : L("Đã khôi phục đầy đủ tệp cho '\(pair.folderName)'", "Restored all files for '\(pair.folderName)'"),
+                        subtitle: pair.prettyDrivePath,
+                        symbol: "checkmark.shield.fill"
+                    )
+                } else {
+                    FloatingToastController.shared.showError(
+                        title: L("Không thể xử lý xác nhận đồng bộ", "Could not resolve sync confirmation"),
+                        subtitle: cmdRes?.errorMessage ?? pair.folderName
+                    )
+                }
+            }
         }
     }
 
@@ -511,7 +939,8 @@ final class LocalFolderDriveSyncService: ObservableObject {
         completion: (@MainActor (DriveSharePermissionResult) -> Void)? = nil
     ) {
         let folderName = (path as NSString).lastPathComponent
-        let resolvedDrivePath = Self.mappedDrivePath(forLocalPath: path) ?? pair(forLocalOrDrivePath: path)?.driveTargetPath ?? path
+        let matchedPair = pair(forLocalOrDrivePath: path)
+        let resolvedDrivePath = Self.mappedDrivePath(forLocalPath: path) ?? matchedPair?.driveTargetPath ?? path
 
         if showToast {
             let progressTitle: String
@@ -527,10 +956,17 @@ final class LocalFolderDriveSyncService: ObservableObject {
         }
 
         syncQueue.async { [weak self] in
-            let res = Self.runSharePermissionHelper(driveOrLocalPath: resolvedDrivePath, action: level.rawValue)
+            let cmdRes = Self.submitEngineCommandAndWait(
+                op: "set_share",
+                pairID: matchedPair?.id,
+                payload: ["path": resolvedDrivePath, "role": level.rawValue],
+                timeout: 30.0
+            )
+            let res = cmdRes?.shareResult ?? Self.runSharePermissionHelper(driveOrLocalPath: resolvedDrivePath, action: level.rawValue)
             Task { @MainActor [weak self] in
                 if let self, res.ok {
                     self.updateCachedShareStatus(forPath: path, resolvedDrivePath: resolvedDrivePath, result: res)
+                    self.reloadPairsFromSharedFileIfAvailable()
                 }
                 if res.ok, (level == .reader || level == .writer), let urlStr = res.shareUrl {
                     NSPasteboard.general.clearContents()
@@ -680,6 +1116,7 @@ final class LocalFolderDriveSyncService: ObservableObject {
         let targetDrive = ((driveTargetPath ?? suggestedDriveTargetPath(for: stdLocal)) as NSString).standardizingPath
 
         let pair: SyncedFolderPair
+        let opName: String
         if let idx = syncedPairs.firstIndex(where: {
             ($0.localPath as NSString).standardizingPath == stdLocal ||
             (folderID != nil && $0.remoteFolderID == folderID)
@@ -693,9 +1130,11 @@ final class LocalFolderDriveSyncService: ObservableObject {
             if let ownerName { existing.remoteOwnerName = ownerName }
             existing.isEnabled = true
             existing.lastError = nil
+            existing.status = "ok"
             existing.isRemoteLinkBroken = false
             syncedPairs[idx] = existing
             pair = existing
+            opName = "update"
         } else {
             let newPair = SyncedFolderPair(
                 id: UUID(),
@@ -718,18 +1157,53 @@ final class LocalFolderDriveSyncService: ObservableObject {
             )
             syncedPairs.insert(newPair, at: 0)
             pair = newPair
+            opName = "add"
         }
 
         savePairs()
         restartFSEventsMonitor()
-        syncPairNow(id: pair.id, showToast: showToast)
+        enqueuePairCommandAndSync(op: opName, pair: pair, showToast: showToast)
         return pair
     }
 
     // MARK: - Sync Execution
 
+    private func enqueuePairCommandAndSync(op: String, pair: SyncedFolderPair, showToast: Bool) {
+        let id = pair.id
+        guard !activeSyncingIDs.contains(id) else { return }
+
+        activeSyncingIDs.insert(id)
+        isGlobalSyncing = !activeSyncingIDs.isEmpty
+
+        if showToast {
+            FloatingToastController.shared.showProgress(
+                title: L("Đang đồng bộ với Google Drive...", "Syncing with Google Drive..."),
+                subtitle: "\(pair.folderName) → \(pair.prettyDrivePath)"
+            )
+        }
+
+        lastInternalWriteTimestamp[id] = Date().timeIntervalSince1970
+
+        var cmdPayload: [String: Any] = [
+            "localPath": pair.localPath,
+            "driveTargetPath": pair.driveTargetPath,
+            "syncMode": pair.syncMode.rawValue,
+            "syncImmediately": true
+        ]
+        if let rURL = pair.remoteSharedURL { cmdPayload["remoteSharedURL"] = rURL }
+        if let rID = pair.remoteFolderID { cmdPayload["remoteFolderID"] = rID }
+        if let rOwner = pair.remoteOwnerName { cmdPayload["remoteOwnerName"] = rOwner }
+
+        syncQueue.async { [weak self] in
+            let (updatedPair, report) = Self.performCommandOrFallbackSync(op: op, pair: pair, payload: cmdPayload)
+            Task { @MainActor [weak self] in
+                self?.finishSyncRun(id: id, updatedPair: updatedPair, report: report, showToast: showToast)
+            }
+        }
+    }
+
     func syncAllEnabledPairs(showToast: Bool = false) {
-        let enabled = syncedPairs.filter(\.isEnabled)
+        let enabled = syncedPairs.filter { $0.isEnabled && !$0.needsConfirmation }
         guard !enabled.isEmpty else { return }
         for pair in enabled {
             syncPairNow(id: pair.id, showToast: showToast)
@@ -755,45 +1229,61 @@ final class LocalFolderDriveSyncService: ObservableObject {
         syncQueue.async { [weak self] in
             let (updatedPair, report) = Self.performSyncOnBackgroundQueue(pair: pair)
             Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.lastInternalWriteTimestamp[id] = Date().timeIntervalSince1970
-                self.activeSyncingIDs.remove(id)
-                self.isGlobalSyncing = !self.activeSyncingIDs.isEmpty
+                self?.finishSyncRun(id: id, updatedPair: updatedPair, report: report, showToast: showToast)
+            }
+        }
+    }
 
-                if let idx = self.syncedPairs.firstIndex(where: { $0.id == id }) {
-                    self.syncedPairs[idx] = updatedPair
-                    self.savePairs()
-                }
+    private func finishSyncRun(
+        id: UUID,
+        updatedPair: SyncedFolderPair,
+        report: SyncExecutionReport,
+        showToast: Bool
+    ) {
+        lastInternalWriteTimestamp[id] = Date().timeIntervalSince1970
+        activeSyncingIDs.remove(id)
+        isGlobalSyncing = !activeSyncingIDs.isEmpty
 
-                // Refresh DriveBar index so the new Google Drive folder is immediately searchable
-                GoogleDriveIndexService.shared.noteExternalDirectoryCreated(at: updatedPair.driveTargetPath)
+        if let idx = syncedPairs.firstIndex(where: { $0.id == id }) {
+            syncedPairs[idx] = updatedPair
+            savePairs()
+        }
+        reloadPairsFromSharedFileIfAvailable()
 
-                if updatedPair.isRemoteLinkBroken == true {
-                    FloatingToastController.shared.showError(
-                        title: L("⚠️ Link Google Drive chia sẻ đã bị khóa!", "⚠️ Shared Google Drive Link Locked!"),
-                        subtitle: L(
-                            "'\(updatedPair.folderName)' • Đã giữ nguyên toàn bộ \(updatedPair.lastSyncFileCount) tệp trên máy Mac của bạn",
-                            "'\(updatedPair.folderName)' • Kept all \(updatedPair.lastSyncFileCount) downloaded files intact on your Mac"
-                        )
-                    )
-                } else if showToast {
-                    if let err = report.errorMessage {
-                        FloatingToastController.shared.showError(
-                            title: L("Lỗi đồng bộ Google Drive", "Google Drive sync error"),
-                            subtitle: "\(updatedPair.folderName): \(err)"
-                        )
-                    } else {
-                        let byteStr = ByteCountFormatter.string(fromByteCount: report.totalBytes, countStyle: .file)
-                        FloatingToastController.shared.showSuccess(
-                            title: L("Đã đồng bộ '\(updatedPair.folderName)' với Google Drive!", "Synced '\(updatedPair.folderName)' with Google Drive!"),
-                            subtitle: L(
-                                "\(report.totalFiles) tệp (\(byteStr)) • Đích: \(updatedPair.prettyDrivePath)",
-                                "\(report.totalFiles) files (\(byteStr)) • Target: \(updatedPair.prettyDrivePath)"
-                            ),
-                            symbol: "checkmark.icloud.fill"
-                        )
-                    }
-                }
+        GoogleDriveIndexService.shared.noteExternalDirectoryCreated(at: updatedPair.driveTargetPath)
+
+        if updatedPair.needsConfirmation {
+            FloatingToastController.shared.showError(
+                title: L("🛡️ Đã chặn xóa hàng loạt để bảo vệ dữ liệu!", "🛡️ Blocked Mass Deletion to Protect Files!"),
+                subtitle: L(
+                    "'\(updatedPair.folderName)' • Mở Cài đặt → Google Drive & Đồng bộ để xác nhận",
+                    "'\(updatedPair.folderName)' • Open Settings → Google Drive & Sync to confirm"
+                )
+            )
+        } else if updatedPair.isRemoteLinkBroken == true {
+            FloatingToastController.shared.showError(
+                title: L("⚠️ Link Google Drive chia sẻ đã bị khóa!", "⚠️ Shared Google Drive Link Locked!"),
+                subtitle: L(
+                    "'\(updatedPair.folderName)' • Đã giữ nguyên toàn bộ \(updatedPair.lastSyncFileCount) tệp trên máy Mac của bạn",
+                    "'\(updatedPair.folderName)' • Kept all \(updatedPair.lastSyncFileCount) downloaded files intact on your Mac"
+                )
+            )
+        } else if showToast {
+            if let err = report.errorMessage {
+                FloatingToastController.shared.showError(
+                    title: L("Lỗi đồng bộ Google Drive", "Google Drive sync error"),
+                    subtitle: "\(updatedPair.folderName): \(err)"
+                )
+            } else {
+                let byteStr = ByteCountFormatter.string(fromByteCount: report.totalBytes, countStyle: .file)
+                FloatingToastController.shared.showSuccess(
+                    title: L("Đã đồng bộ '\(updatedPair.folderName)' với Google Drive!", "Synced '\(updatedPair.folderName)' with Google Drive!"),
+                    subtitle: L(
+                        "\(report.totalFiles) tệp (\(byteStr)) • Đích: \(updatedPair.prettyDrivePath)",
+                        "\(report.totalFiles) files (\(byteStr)) • Target: \(updatedPair.prettyDrivePath)"
+                    ),
+                    symbol: "checkmark.icloud.fill"
+                )
             }
         }
     }
@@ -802,13 +1292,16 @@ final class LocalFolderDriveSyncService: ObservableObject {
 
     private struct HelperSyncResponse: Decodable {
         let ok: Bool
+        let status: String?
         let isBrokenLink: Bool?
         let copiedToDrive: Int
         let copiedToLocal: Int
         let trashedCount: Int
+        let conflicts: [String]?
+        let pendingDeletionPlan: PendingDeletionPlan?
         let totalFiles: Int
         let totalBytes: Int64
-        let knownRelativeFiles: [String]
+        let knownRelativeFiles: [String]?
         let syncedAt: Double?
         let folderName: String?
         let ownerName: String?
@@ -853,11 +1346,6 @@ final class LocalFolderDriveSyncService: ObservableObject {
         }
     }
 
-    private struct DaemonBatchResultFile: Decodable {
-        let completedAt: Double
-        let results: [String: HelperSyncResponse]
-    }
-
     nonisolated private static func isSyncDaemonRunning() -> Bool {
         let pidPath = (sharedConfigDirPath() as NSString).appendingPathComponent("daemon.pid")
         guard let pidStr = try? String(contentsOfFile: pidPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
@@ -867,63 +1355,71 @@ final class LocalFolderDriveSyncService: ObservableObject {
         return Darwin.kill(pid, 0) == 0
     }
 
+    nonisolated private static func performCommandOrFallbackSync(
+        op: String,
+        pair: SyncedFolderPair,
+        payload: [String: Any]
+    ) -> (SyncedFolderPair, SyncExecutionReport) {
+        if let cmdRes = submitEngineCommandAndWait(op: op, pairID: pair.id, payload: payload, timeout: 60.0) {
+            let resolvedPair = cmdRes.pair ?? pair
+            let rep = cmdRes.report
+            let report = SyncExecutionReport(
+                pairID: resolvedPair.id,
+                copiedToDrive: rep?.copiedToDrive ?? 0,
+                copiedToLocal: rep?.copiedToLocal ?? 0,
+                trashedCount: rep?.trashedCount ?? 0,
+                totalFiles: rep?.totalFiles ?? resolvedPair.lastSyncFileCount,
+                totalBytes: rep?.totalBytes ?? resolvedPair.lastSyncTotalBytes,
+                errorMessage: cmdRes.errorMessage ?? rep?.errorMessage
+            )
+            return (resolvedPair, report)
+        }
+        return performSyncOnBackgroundQueue(pair: pair)
+    }
+
     nonisolated private static func performSyncOnBackgroundQueue(
         pair: SyncedFolderPair
     ) -> (SyncedFolderPair, SyncExecutionReport) {
+        // 1. Primary path: Single-writer command channel (`commands/` -> `results/`)
+        if let cmdRes = submitEngineCommandAndWait(
+            op: "sync",
+            pairID: pair.id,
+            payload: ["force": true],
+            timeout: 60.0
+        ), cmdRes.pair != nil || cmdRes.report != nil {
+            var updated = cmdRes.pair ?? pair
+            if let rep = cmdRes.report {
+                updated.status = rep.status ?? (rep.ok ? "ok" : "error")
+                updated.pendingDeletionPlan = rep.pendingDeletionPlan
+                updated.lastConflicts = rep.conflicts
+                updated.isRemoteLinkBroken = rep.isBrokenLink ?? false
+                if rep.ok {
+                    updated.lastSyncedAt = Date()
+                    updated.lastSyncFileCount = rep.totalFiles
+                    updated.lastSyncTotalBytes = rep.totalBytes
+                    updated.lastError = nil
+                } else {
+                    updated.lastError = rep.errorMessage ?? cmdRes.errorMessage
+                }
+                let execReport = SyncExecutionReport(
+                    pairID: pair.id,
+                    copiedToDrive: rep.copiedToDrive,
+                    copiedToLocal: rep.copiedToLocal,
+                    trashedCount: rep.trashedCount,
+                    totalFiles: rep.totalFiles,
+                    totalBytes: rep.totalBytes,
+                    errorMessage: rep.ok ? nil : (rep.errorMessage ?? cmdRes.errorMessage)
+                )
+                return (updated, execReport)
+            }
+        }
+
+        // 2. Secondary fallback: direct CLI invocation of `gdrive_folder_sync.py`
         var updated = pair
         let script = helperScriptPath()
         let fm = FileManager.default
 
-        // 1. Fast & TCC-safe path via active background daemon (~/.config/drivebar-sync/daemon.pid)
-        if isSyncDaemonRunning() {
-            let configDir = sharedConfigDirPath()
-            let triggerPath = (configDir as NSString).appendingPathComponent("trigger.flag")
-            let statusPath = (configDir as NSString).appendingPathComponent("last_sync_result.json")
-            let startTime = Date().timeIntervalSince1970
-            try? "sync".write(toFile: triggerPath, atomically: true, encoding: .utf8)
-
-            let deadline = Date().addingTimeInterval(25.0)
-            while Date() < deadline {
-                Thread.sleep(forTimeInterval: 0.12)
-                if let statusData = try? Data(contentsOf: URL(fileURLWithPath: statusPath)),
-                   let batch = try? JSONDecoder().decode(DaemonBatchResultFile.self, from: statusData),
-                   batch.completedAt >= startTime - 0.05 {
-                    if let pairsData = try? Data(contentsOf: URL(fileURLWithPath: sharedPairsFilePath())),
-                       let allPairs = try? makeJSONDecoder().decode([SyncedFolderPair].self, from: pairsData),
-                       let matched = allPairs.first(where: {
-                           $0.id == pair.id ||
-                           ($0.localPath as NSString).standardizingPath == (pair.localPath as NSString).standardizingPath
-                       }) {
-                        updated = matched
-                    }
-                    let resp = batch.results[pair.id.uuidString] ?? batch.results[updated.id.uuidString]
-                    let report = SyncExecutionReport(
-                        pairID: pair.id,
-                        copiedToDrive: resp?.copiedToDrive ?? 0,
-                        copiedToLocal: resp?.copiedToLocal ?? 0,
-                        trashedCount: resp?.trashedCount ?? 0,
-                        totalFiles: resp?.totalFiles ?? updated.lastSyncFileCount,
-                        totalBytes: resp?.totalBytes ?? updated.lastSyncTotalBytes,
-                        errorMessage: resp?.errorMessage ?? updated.lastError
-                    )
-                    return (updated, report)
-                }
-            }
-        }
-
         if fm.fileExists(atPath: script) {
-            let statePath = "/tmp/drivebar_sync_state_\(pair.id.uuidString).json"
-            let statePayload: [String: Any] = [
-                "knownRelativeFiles": Array(pair.knownRelativeFiles),
-                "lastSyncedAt": pair.lastSyncedAt?.timeIntervalSince1970 ?? 0.0
-            ]
-            if let stateData = try? JSONSerialization.data(withJSONObject: statePayload) {
-                try? stateData.write(to: URL(fileURLWithPath: statePath))
-            }
-            defer {
-                try? fm.removeItem(atPath: statePath)
-            }
-
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: pythonExecutablePath())
             if pair.syncMode == .remoteSharedLink, let remoteURL = pair.remoteSharedURL, !remoteURL.isEmpty {
@@ -938,8 +1434,7 @@ final class LocalFolderDriveSyncService: ObservableObject {
                     script,
                     "--local", pair.localPath,
                     "--drive", pair.driveTargetPath,
-                    "--mode", pair.syncMode.rawValue,
-                    "--state-file", statePath
+                    "--mode", pair.syncMode.rawValue
                 ]
             }
             let outPipe = Pipe()
@@ -951,6 +1446,9 @@ final class LocalFolderDriveSyncService: ObservableObject {
                 proc.waitUntilExit()
                 if let resp = try? JSONDecoder().decode(HelperSyncResponse.self, from: outData) {
                     updated.isRemoteLinkBroken = resp.isBrokenLink ?? false
+                    updated.status = resp.status ?? (resp.ok ? "ok" : "error")
+                    updated.pendingDeletionPlan = resp.pendingDeletionPlan
+                    updated.lastConflicts = resp.conflicts
                     if let owner = resp.ownerName, !owner.isEmpty {
                         updated.remoteOwnerName = owner
                     }
@@ -959,7 +1457,6 @@ final class LocalFolderDriveSyncService: ObservableObject {
                         updated.lastSyncFileCount = resp.totalFiles
                         updated.lastSyncTotalBytes = resp.totalBytes
                         updated.lastError = nil
-                        updated.knownRelativeFiles = Set(resp.knownRelativeFiles)
                         let report = SyncExecutionReport(
                             pairID: pair.id,
                             copiedToDrive: resp.copiedToDrive,
@@ -988,12 +1485,30 @@ final class LocalFolderDriveSyncService: ObservableObject {
                     }
                 }
             } catch {
-                // Fall through to native Swift engine if subprocess fails to launch
+                // Fall through to native Swift fallback if subprocess fails to launch
             }
         }
 
+        // 3. Hardened Native Swift Fallback (with Mount Health & Mass-Deletion Guard §3.1)
         do {
-            // Ensure parent of driveTargetPath exists
+            let hadPriorSync = pair.lastSyncedAt != nil || pair.lastSyncFileCount > 0
+            if hadPriorSync {
+                if !fm.fileExists(atPath: pair.driveTargetPath) {
+                    throw NSError(
+                        domain: "DriveBarSync",
+                        code: 4001,
+                        userInfo: [NSLocalizedDescriptionKey: "Drive target folder is missing or unmounted (aborted to prevent data loss)"]
+                    )
+                }
+                if !fm.fileExists(atPath: pair.localPath) && !isSymbolicLink(atPath: pair.localPath) {
+                    throw NSError(
+                        domain: "DriveBarSync",
+                        code: 4002,
+                        userInfo: [NSLocalizedDescriptionKey: "Local synced folder is missing (aborted to prevent data loss)"]
+                    )
+                }
+            }
+
             let driveParent = (pair.driveTargetPath as NSString).deletingLastPathComponent
             if !fm.fileExists(atPath: driveParent) {
                 try fm.createDirectory(atPath: driveParent, withIntermediateDirectories: true)
@@ -1003,8 +1518,6 @@ final class LocalFolderDriveSyncService: ObservableObject {
                 return try performSymlinkModeSync(pair: pair)
             }
 
-            // If localPath was previously a symlink (e.g. user switched from symlinkToDrive back to twoWayMirror),
-            // materialize it back as a real directory first.
             if isSymbolicLink(atPath: pair.localPath) {
                 try fm.removeItem(atPath: pair.localPath)
                 if fm.fileExists(atPath: pair.driveTargetPath) {
@@ -1024,38 +1537,35 @@ final class LocalFolderDriveSyncService: ObservableObject {
             let localScan = scanDirectoryTree(rootPath: pair.localPath, isCloudStorage: false)
             let driveScan = scanDirectoryTree(rootPath: pair.driveTargetPath, isCloudStorage: true)
 
-            let previousKnownFiles = pair.knownRelativeFiles
-            let lastSyncDate = pair.lastSyncedAt ?? .distantPast
+            if hadPriorSync && pair.lastSyncFileCount > 0 && (localScan.files.isEmpty || driveScan.files.isEmpty) {
+                let msg = "One side scanned 0 files while baseline had \(pair.lastSyncFileCount) files (mass-deletion guard)."
+                updated.status = "needs_confirmation"
+                updated.lastError = msg
+                return (updated, SyncExecutionReport(
+                    pairID: pair.id,
+                    copiedToDrive: 0,
+                    copiedToLocal: 0,
+                    trashedCount: 0,
+                    totalFiles: localScan.files.count,
+                    totalBytes: updated.lastSyncTotalBytes,
+                    errorMessage: msg
+                ))
+            }
 
             var copiedToDrive = 0
             var copiedToLocal = 0
-            var trashedCount = 0
 
-            // 1. Sync Directories
-            let allDirs = localScan.directories.union(driveScan.directories).sorted()
-            for relDir in allDirs {
+            for relDir in localScan.directories.union(driveScan.directories).sorted() {
                 let lDir = (pair.localPath as NSString).appendingPathComponent(relDir)
                 let dDir = (pair.driveTargetPath as NSString).appendingPathComponent(relDir)
-                let inLocal = localScan.directories.contains(relDir)
-                let inDrive = driveScan.directories.contains(relDir)
-
-                if inLocal && !inDrive {
-                    let hadTrackedFilesBefore = previousKnownFiles.contains { $0.hasPrefix(relDir + "/") }
-                    if !hadTrackedFilesBefore {
-                        try? fm.createDirectory(atPath: dDir, withIntermediateDirectories: true)
-                    }
-                } else if inDrive && !inLocal {
-                    let hadTrackedFilesBefore = previousKnownFiles.contains { $0.hasPrefix(relDir + "/") }
-                    if !hadTrackedFilesBefore {
-                        try? fm.createDirectory(atPath: lDir, withIntermediateDirectories: true)
-                    }
+                if localScan.directories.contains(relDir) && !driveScan.directories.contains(relDir) {
+                    try? fm.createDirectory(atPath: dDir, withIntermediateDirectories: true)
+                } else if driveScan.directories.contains(relDir) && !localScan.directories.contains(relDir) {
+                    try? fm.createDirectory(atPath: lDir, withIntermediateDirectories: true)
                 }
             }
 
-            // 2. Sync Files (Two-way delta resolution)
             let allRelFiles = Set(localScan.files.keys).union(driveScan.files.keys)
-            var currentKnownFiles = Set<String>()
-
             for relFile in allRelFiles.sorted() {
                 let lPath = (pair.localPath as NSString).appendingPathComponent(relFile)
                 let dPath = (pair.driveTargetPath as NSString).appendingPathComponent(relFile)
@@ -1066,79 +1576,36 @@ final class LocalFolderDriveSyncService: ObservableObject {
                 case let (.some(l), .some(d)):
                     let timeDiff = l.mtime.timeIntervalSince(d.mtime)
                     if abs(timeDiff) <= 2.0 && l.size == d.size {
-                        // Already identical
-                        currentKnownFiles.insert(relFile)
-                    } else if timeDiff > 2.0 || (abs(timeDiff) <= 2.0 && l.mtime >= d.mtime) {
-                        // Local is newer -> copy to Google Drive
-                        if copyFileAtomically(from: lPath, to: dPath, mtime: l.mtime) {
-                            copiedToDrive += 1
-                        }
-                        currentKnownFiles.insert(relFile)
-                    } else {
-                        // Google Drive is newer -> copy to Local Mac (skip if cloud stub or dataless unmaterialized)
-                        if !d.isDataless && !d.isCloudStub {
-                            if copyFileAtomically(from: dPath, to: lPath, mtime: d.mtime) {
-                                copiedToLocal += 1
-                            }
-                        }
-                        currentKnownFiles.insert(relFile)
-                    }
-
-                case let (.some(l), .none):
-                    // Exists only on Local Mac
-                    let wasKnown = previousKnownFiles.contains(relFile)
-                    if wasKnown && l.mtime <= lastSyncDate.addingTimeInterval(2.0) {
-                        // File was deleted on Google Drive -> move local copy to Trash safely
-                        if (try? fm.trashItem(at: URL(fileURLWithPath: lPath), resultingItemURL: nil)) != nil {
-                            trashedCount += 1
-                        }
-                    } else {
-                        // New or newly updated file on Local Mac -> copy to Google Drive
-                        if copyFileAtomically(from: lPath, to: dPath, mtime: l.mtime) {
-                            copiedToDrive += 1
-                            currentKnownFiles.insert(relFile)
-                        }
-                    }
-
-                case let (.none, .some(d)):
-                    // Exists only on Google Drive
-                    let wasKnown = previousKnownFiles.contains(relFile)
-                    if wasKnown && d.mtime <= lastSyncDate.addingTimeInterval(2.0) {
-                        // File was deleted on Local Mac -> move Google Drive copy to Trash safely
-                        if (try? fm.trashItem(at: URL(fileURLWithPath: dPath), resultingItemURL: nil)) != nil {
-                            trashedCount += 1
-                        }
+                        break
+                    } else if timeDiff > 2.0 {
+                        if copyFileAtomically(from: lPath, to: dPath, mtime: l.mtime) { copiedToDrive += 1 }
                     } else if !d.isDataless && !d.isCloudStub {
-                        // New file added on Google Drive -> copy to Local Mac
-                        if copyFileAtomically(from: dPath, to: lPath, mtime: d.mtime) {
-                            copiedToLocal += 1
-                            currentKnownFiles.insert(relFile)
-                        }
-                    } else {
-                        currentKnownFiles.insert(relFile)
+                        if copyFileAtomically(from: dPath, to: lPath, mtime: d.mtime) { copiedToLocal += 1 }
                     }
-
+                case let (.some(l), .none):
+                    if copyFileAtomically(from: lPath, to: dPath, mtime: l.mtime) { copiedToDrive += 1 }
+                case let (.none, .some(d)):
+                    if !d.isDataless && !d.isCloudStub {
+                        if copyFileAtomically(from: dPath, to: lPath, mtime: d.mtime) { copiedToLocal += 1 }
+                    }
                 case (.none, .none):
                     break
                 }
             }
 
-            // Compute final file count & total size from local scan
-            let finalScan = scanDirectoryTree(rootPath: pair.localPath, isCloudStorage: false)
-            let totalFiles = finalScan.files.count
-            let totalBytes = finalScan.files.values.reduce(Int64(0)) { $0 + $1.size }
-
+            let totalFiles = allRelFiles.count
+            let totalBytes = localScan.files.values.reduce(Int64(0)) { $0 + $1.size }
             updated.lastSyncedAt = Date()
             updated.lastSyncFileCount = totalFiles
             updated.lastSyncTotalBytes = totalBytes
             updated.lastError = nil
-            updated.knownRelativeFiles = currentKnownFiles
+            updated.status = "ok"
 
             let report = SyncExecutionReport(
                 pairID: pair.id,
                 copiedToDrive: copiedToDrive,
                 copiedToLocal: copiedToLocal,
-                trashedCount: trashedCount,
+                trashedCount: 0,
                 totalFiles: totalFiles,
                 totalBytes: totalBytes,
                 errorMessage: nil
@@ -1146,6 +1613,7 @@ final class LocalFolderDriveSyncService: ObservableObject {
             return (updated, report)
         } catch {
             updated.lastError = error.localizedDescription
+            updated.status = "error"
             let report = SyncExecutionReport(
                 pairID: pair.id,
                 copiedToDrive: 0,
@@ -1170,7 +1638,6 @@ final class LocalFolderDriveSyncService: ObservableObject {
         }
 
         if !isSymbolicLink(atPath: pair.localPath) {
-            // Merge all existing files from localPath into driveTargetPath first
             let localScan = scanDirectoryTree(rootPath: pair.localPath, isCloudStorage: false)
             for relDir in localScan.directories.sorted() {
                 let dDir = (pair.driveTargetPath as NSString).appendingPathComponent(relDir)
@@ -1181,11 +1648,9 @@ final class LocalFolderDriveSyncService: ObservableObject {
                 let dPath = (pair.driveTargetPath as NSString).appendingPathComponent(relFile)
                 _ = copyFileAtomically(from: lPath, to: dPath, mtime: meta.mtime)
             }
-            // Move original local folder to Trash for safety, then create symlink at localPath
             try fm.trashItem(at: URL(fileURLWithPath: pair.localPath), resultingItemURL: nil)
             try fm.createSymbolicLink(atPath: pair.localPath, withDestinationPath: pair.driveTargetPath)
         } else {
-            // Verify symlink points to driveTargetPath
             let dest = (try? fm.destinationOfSymbolicLink(atPath: pair.localPath)) ?? ""
             if (dest as NSString).standardizingPath != (pair.driveTargetPath as NSString).standardizingPath {
                 try? fm.removeItem(atPath: pair.localPath)
@@ -1201,7 +1666,7 @@ final class LocalFolderDriveSyncService: ObservableObject {
         updated.lastSyncFileCount = totalFiles
         updated.lastSyncTotalBytes = totalBytes
         updated.lastError = nil
-        updated.knownRelativeFiles = Set(driveScan.files.keys)
+        updated.status = "ok"
 
         let report = SyncExecutionReport(
             pairID: pair.id,
@@ -1239,12 +1704,11 @@ final class LocalFolderDriveSyncService: ObservableObject {
             let name = (relObj as NSString).lastPathComponent
             if name.isEmpty { continue }
 
-            // Check ignored directories/files
             if ignoredDirectoryNames.contains(name) {
                 enumerator.skipDescendants()
                 continue
             }
-            if ignoredFileNames.contains(name) || name.hasPrefix("~$") || name.hasPrefix(".~") || name.hasPrefix(".tmp") {
+            if ignoredFileNames.contains(name) || name.hasPrefix("~$") || name.hasPrefix(".~") || name.hasPrefix(".tmp") || name.hasPrefix(".drivebar_sync_tmp_") {
                 continue
             }
 
@@ -1254,21 +1718,22 @@ final class LocalFolderDriveSyncService: ObservableObject {
 
             let mode = st.st_mode & S_IFMT
             if mode == S_IFLNK {
-                // Do not traverse nested symlinks inside a synced tree
                 continue
             } else if mode == S_IFDIR {
                 result.directories.insert(relObj)
             } else if mode == S_IFREG {
+                let ext = (name as NSString).pathExtension.lowercased()
+                if cloudStubExtensions.contains(ext) {
+                    continue
+                }
                 let mtime = Date(timeIntervalSince1970: TimeInterval(st.st_mtimespec.tv_sec) + TimeInterval(st.st_mtimespec.tv_nsec) / 1_000_000_000.0)
                 let size = Int64(st.st_size)
                 let isDataless = isCloudStorage && ((st.st_flags & UInt32(SF_DATALESS)) != 0)
-                let ext = (name as NSString).pathExtension.lowercased()
-                let isStub = cloudStubExtensions.contains(ext)
                 result.files[relObj] = ScannedFileMeta(
                     mtime: mtime,
                     size: size,
                     isDataless: isDataless,
-                    isCloudStub: isStub
+                    isCloudStub: false
                 )
             }
         }
@@ -1397,7 +1862,7 @@ final class LocalFolderDriveSyncService: ObservableObject {
                name.hasPrefix(".tmp") {
                 continue
             }
-            if let pair = enclosingPair(forPath: rawPath), pair.syncMode == .twoWayMirror {
+            if let pair = enclosingPair(forPath: rawPath), pair.syncMode == .twoWayMirror, !pair.needsConfirmation {
                 if let lastInternal = lastInternalWriteTimestamp[pair.id], now - lastInternal < 2.2 {
                     continue
                 }
@@ -1420,37 +1885,13 @@ final class LocalFolderDriveSyncService: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
     }
 
-    // MARK: - Finder Visual Tag Helper
-
-    private func applyFinderSyncTag(to path: String, synced: Bool) {
-        let url = URL(fileURLWithPath: path)
-        let nsURL = url as NSURL
-        var existingTags: [String] = []
-        if let vals = try? url.resourceValues(forKeys: [.tagNamesKey]),
-           let tags = vals.tagNames {
-            existingTags = tags
-        }
-        if synced {
-            if !existingTags.contains(Self.finderSyncTagVI) {
-                existingTags.append(Self.finderSyncTagVI)
-                try? nsURL.setResourceValue(existingTags, forKey: .tagNamesKey)
-            }
-        } else {
-            let filtered = existingTags.filter { $0 != Self.finderSyncTagVI }
-            if filtered.count != existingTags.count {
-                try? nsURL.setResourceValue(filtered, forKey: .tagNamesKey)
-            }
-        }
-    }
-
-    // MARK: - Install Finder Right-Click Quick Actions (.workflow in ~/Library/Services)
+    // MARK: - Install Finder Right-Click Quick Actions (.workflow in ~/Library/Services, §3.4)
 
     func installFinderQuickActionsIfNeeded(force: Bool = false) {
         let servicesDir = (NSHomeDirectory() as NSString).appendingPathComponent("Library/Services")
         let fm = FileManager.default
         try? fm.createDirectory(atPath: servicesDir, withIntermediateDirectories: true)
 
-        // Remove legacy 2-button workflows so only 1 clean button remains
         let legacyNames = [
             "Đồng bộ với Google Drive (DriveBar).workflow",
             "Đồng bộ nhanh vào Google Drive.workflow"
@@ -1473,7 +1914,7 @@ final class LocalFolderDriveSyncService: ObservableObject {
             force: force
         )
 
-        // 2. Quick Action: "Dán Link Copy.workflow" (Paste Shared Google Drive Link & Copy to Folder)
+        // 2. Quick Action: "Dán Link Copy.workflow"
         let pasteLinkWorkflowDir = (servicesDir as NSString).appendingPathComponent("Dán Link Copy.workflow")
         installSingleWorkflow(
             at: pasteLinkWorkflowDir,
@@ -1484,7 +1925,6 @@ final class LocalFolderDriveSyncService: ObservableObject {
             force: force
         )
 
-        // Refresh macOS Services & Quick Actions cache
         Task.detached(priority: .utility) {
             let pbs = Process()
             pbs.executableURL = URL(fileURLWithPath: "/System/Library/CoreServices/pbs")
@@ -1526,7 +1966,7 @@ final class LocalFolderDriveSyncService: ObservableObject {
             <key>CFBundleName</key>
             <string>\(menuTitle)</string>
             <key>CFBundleShortVersionString</key>
-            <string>1.0</string>
+            <string>2.0</string>
             <key>NSServices</key>
             <array>
                 <dict>
@@ -1563,12 +2003,27 @@ final class LocalFolderDriveSyncService: ObservableObject {
         export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
         HELPER="$HOME/.config/drivebar-sync/gdrive_folder_sync.py"
         BUNDLED="/Applications/DriveBar.app/Contents/Resources/gdrive_folder_sync.py"
-        if [ ! -f "$HELPER" ]; then
-            mkdir -p "$HOME/.config/drivebar-sync"
-            cp "$BUNDLED" "$HELPER"
-            chmod +x "$HELPER"
+        if [ -f "$BUNDLED" ]; then
+            B_VER=$(grep -m1 '^HELPER_VERSION' "$BUNDLED" 2>/dev/null | cut -d'"' -f2)
+            H_VER=$(grep -m1 '^HELPER_VERSION' "$HELPER" 2>/dev/null | cut -d'"' -f2)
+            if [ ! -f "$HELPER" ] || [ "$B_VER" != "$H_VER" ]; then
+                mkdir -p "$HOME/.config/drivebar-sync"
+                TMP_H="$HELPER.tmp.$$"
+                cp "$BUNDLED" "$TMP_H" && chmod 755 "$TMP_H" && mv -f "$TMP_H" "$HELPER"
+            fi
         fi
-        /opt/homebrew/bin/python3.11 "$HELPER" \(cliFlag) "$@"
+        PY_BIN=""
+        for candidate in /opt/homebrew/bin/python3.11 /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
+            if [ -x "$candidate" ]; then
+                PY_BIN="$candidate"
+                break
+            fi
+        done
+        if [ -z "$PY_BIN" ] || [ ! -f "$HELPER" ]; then
+            osascript -e 'display notification "Không tìm thấy Python 3 hoặc bộ đồng bộ DriveBar." with title "DriveBar Sync"' >/dev/null 2>&1
+            exit 1
+        fi
+        "$PY_BIN" "$HELPER" \(cliFlag) "$@"
         """
         let shellCommand = rawShellCommand
             .replacingOccurrences(of: "&", with: "&amp;")

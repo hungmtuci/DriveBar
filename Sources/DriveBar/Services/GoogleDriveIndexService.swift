@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import CoreServices
 import Darwin
+import os
 
 struct DriveAccountMount: Identifiable, Equatable, Sendable {
     var id: String { email }
@@ -105,13 +106,16 @@ struct FastFileRecord: Sendable {
 
 struct FastFileIndex: Sendable {
     let records: [FastFileRecord]
+    let pathSet: Set<String>
 
-    static let empty = FastFileIndex(records: [])
+    static let empty = FastFileIndex(records: [], pathSet: [])
 
     nonisolated static func build(from entries: [DriveFileEntry]) -> FastFileIndex {
         var recs: [FastFileRecord] = []
         recs.reserveCapacity(entries.count)
+        var paths = Set<String>(minimumCapacity: entries.count)
         for e in entries {
+            paths.insert(e.path)
             recs.append(FastFileRecord(
                 entry: e,
                 cleanNameBytes: Array(e.cleanName.utf8),
@@ -120,7 +124,7 @@ struct FastFileIndex: Sendable {
                 cleanParentBytes: Array(e.cleanParent.utf8)
             ))
         }
-        return FastFileIndex(records: recs)
+        return FastFileIndex(records: recs, pathSet: paths)
     }
 }
 
@@ -168,6 +172,9 @@ final class GoogleDriveIndexService: ObservableObject {
     private var pendingEventPaths = Set<String>()
     private var debounceTask: Task<Void, Never>?
     private var cachePersistTask: Task<Void, Never>?
+    private var sharedCachePersistTask: Task<Void, Never>?
+    private var macCachePersistTask: Task<Void, Never>?
+    nonisolated private static let fileWriteQueuesLock = OSAllocatedUnfairLock(initialState: [String: DispatchQueue]())
 
     private let homePath = FileManager.default.homeDirectoryForCurrentUser.path
     private var cacheDir: String { "\(homePath)/.config/alfred-scripts" }
@@ -641,10 +648,13 @@ final class GoogleDriveIndexService: ObservableObject {
     }
 
     private func scheduleSharedCachePersist() {
+        sharedCachePersistTask?.cancel()
         let itemsSnap = sharedEntries
         let rootSnap = accountRoot
         let targetPath = sharedCachePath
-        Task.detached(priority: .background) {
+        sharedCachePersistTask = Task.detached(priority: .background) {
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard !Task.isCancelled else { return }
             let payload = SharedCachePayload(
                 timestamp: Date().timeIntervalSince1970,
                 root: rootSnap,
@@ -655,12 +665,15 @@ final class GoogleDriveIndexService: ObservableObject {
     }
 
     private func scheduleMacFoldersCachePersist() {
+        macCachePersistTask?.cancel()
         let itemsSnap = macFolderEntries
         let rootsSnap = AppSettings.shared.customMacFolders.map {
             $0.hasSuffix("/") && $0.count > 1 ? String($0.dropLast()) : $0
         }
         let targetPath = macFoldersCachePath
-        Task.detached(priority: .background) {
+        macCachePersistTask = Task.detached(priority: .background) {
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard !Task.isCancelled else { return }
             let payload = MacFoldersCachePayload(
                 timestamp: Date().timeIntervalSince1970,
                 roots: rootsSnap,
@@ -684,7 +697,9 @@ final class GoogleDriveIndexService: ObservableObject {
             $0.hasSuffix("/") && $0.count > 1 ? String($0.dropLast()) : $0
         }
 
+        let cDir = cacheDir
         Task.detached(priority: .userInitiated) {
+            Self.cleanupStaleTempFiles(in: cDir)
             var loadedHistory = Self.readHistoryDisk(at: hPath)
             var loadedQueryHistory = Self.readQueryHistoryDisk(at: qPath)
             let nowSeed = Date().timeIntervalSince1970
@@ -1735,21 +1750,32 @@ final class GoogleDriveIndexService: ObservableObject {
         }
     }
 
-    private nonisolated static func writeCodableAtomic<T: Encodable>(_ value: T, to filePath: String) {
-        let fm = FileManager.default
-        let dir = (filePath as NSString).deletingLastPathComponent
-        try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        let tmp = "\(filePath).tmp.\(ProcessInfo.processInfo.processIdentifier)"
-        guard let data = try? JSONEncoder().encode(value) else { return }
-        do {
-            try data.write(to: URL(fileURLWithPath: tmp), options: .atomic)
-            if fm.fileExists(atPath: filePath) {
-                _ = try fm.replaceItemAt(URL(fileURLWithPath: filePath), withItemAt: URL(fileURLWithPath: tmp))
-            } else {
-                try fm.moveItem(atPath: tmp, toPath: filePath)
+    private nonisolated static func writeQueue(for filePath: String) -> DispatchQueue {
+        fileWriteQueuesLock.withLock { dict in
+            if let existing = dict[filePath] {
+                return existing
             }
-        } catch {
-            try? fm.removeItem(atPath: tmp)
+            let q = DispatchQueue(label: "com.hunglx.DriveBar.cachewrite.\(filePath.hashValue)", qos: .utility)
+            dict[filePath] = q
+            return q
+        }
+    }
+
+    private nonisolated static func cleanupStaleTempFiles(in dirPath: String) {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: dirPath) else { return }
+        for name in names where name.contains(".tmp.") {
+            try? fm.removeItem(atPath: "\(dirPath)/\(name)")
+        }
+    }
+
+    private nonisolated static func writeCodableAtomic<T: Encodable>(_ value: T, to filePath: String) {
+        guard let data = try? JSONEncoder().encode(value) else { return }
+        writeQueue(for: filePath).sync {
+            let fm = FileManager.default
+            let dir = (filePath as NSString).deletingLastPathComponent
+            try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            try? data.write(to: URL(fileURLWithPath: filePath), options: .atomic)
         }
     }
 
@@ -2021,7 +2047,7 @@ final class GoogleDriveIndexService: ObservableObject {
                     (fastMacFolderIndex.byPath[itemKey]?.isDir == true)
                 let isKnownSharedFile = (fastSharedIndex.byPath[itemKey]?.isDir == false) ||
                     (fastMacFolderIndex.byPath[itemKey]?.isDir == false)
-                let isKnownDriveFile = fastFileIndex.records.contains { $0.entry.path == itemKey }
+                let isKnownDriveFile = fastFileIndex.pathSet.contains(itemKey)
 
                 if !isKnownFolder && !isKnownSharedFile && !isKnownDriveFile {
                     if itemKey.contains("/Library/CloudStorage/") { continue }
